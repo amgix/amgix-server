@@ -42,11 +42,12 @@ jobs:
           context: .
           file: build/Dockerfile-api
           push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-api:${{ env.VERSION }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-api:latest
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-api:${{ env.VERSION }}
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
+
+      - name: Free disk
+        run: docker buildx prune -f && docker image prune -af
 
       - name: Build and push amgix-encoder (GPU)
         uses: docker/build-push-action@v6
@@ -54,13 +55,14 @@ jobs:
           context: .
           file: build/Dockerfile-encoder
           push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}-gpu
-            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:latest-gpu
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}-gpu
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
             AMGIX_BUILD_FE=GPU
             AMGIX_BUILD_ST=GPU
+
+      - name: Free disk
+        run: docker buildx prune -f && docker image prune -af
 
       - name: Build and push amgix-encoder (CPU)
         uses: docker/build-push-action@v6
@@ -68,13 +70,14 @@ jobs:
           context: .
           file: build/Dockerfile-encoder
           push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:latest
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
             AMGIX_BUILD_FE=CPU
             AMGIX_BUILD_ST=CPU
+
+      - name: Free disk
+        run: docker buildx prune -f && docker image prune -af
 
       - name: Build and push amgix-encoder (NoEmbed)
         uses: docker/build-push-action@v6
@@ -82,13 +85,14 @@ jobs:
           context: .
           file: build/Dockerfile-encoder
           push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}-noembed
-            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:latest-noembed
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}-noembed
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
             AMGIX_BUILD_FE=
             AMGIX_BUILD_ST=
+
+      - name: Free disk
+        run: docker buildx prune -f && docker image prune -af
 
       - name: Build and push amgix-one (CPU)
         uses: docker/build-push-action@v6
@@ -96,12 +100,13 @@ jobs:
           context: .
           file: build/one/Dockerfile-one
           push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.VERSION }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:latest
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.VERSION }}
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
             AMGIX_BUILD_ST=CPU
+
+      - name: Free disk
+        run: docker buildx prune -f && docker image prune -af
 
       - name: Build and push amgix-one (GPU)
         uses: docker/build-push-action@v6
@@ -109,12 +114,13 @@ jobs:
           context: .
           file: build/one/Dockerfile-one
           push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.VERSION }}-gpu
-            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:latest-gpu
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.VERSION }}-gpu
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
             AMGIX_BUILD_ST=GPU
+
+      - name: Free disk
+        run: docker buildx prune -f && docker image prune -af
 
       - name: Build and push amgix-one (NoEmbed)
         uses: docker/build-push-action@v6
@@ -122,9 +128,7 @@ jobs:
           context: .
           file: build/one/Dockerfile-one
           push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.VERSION }}-noembed
-            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:latest-noembed
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.VERSION }}-noembed
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
             AMGIX_BUILD_ST=
