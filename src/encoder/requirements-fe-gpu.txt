@@ -1,0 +1,4 @@
+onnxruntime-gpu[cuda,cudnn]==1.22.0
+fastembed-gpu==0.7.3
+nvidia-ml-py==13.580.82
+

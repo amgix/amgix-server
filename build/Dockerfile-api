@@ -1,0 +1,38 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Install curl for health checks
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+COPY src/api/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+ARG AMGIX_VERSION=${AMGIX_VERSION}
+ENV AMGIX_VERSION=${AMGIX_VERSION}
+
+COPY src /app/src
+
+COPY build/run-api.sh /app/run-api.sh
+RUN chmod +x /app/run-api.sh
+
+# Create a non-root user for security
+RUN useradd -m -s /bin/bash appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8234
+
+# Health check to ensure the API server is running
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl --silent --fail --max-time 3 http://localhost:8234/v1/health/check || exit 1
+
+ENTRYPOINT ["/app/run-api.sh"]
+
+

@@ -1,0 +1,8 @@
+transformers>=4.44.0
+sentence-transformers>=2.2.0
+nvidia-ml-py==13.580.82
+
+--find-links https://download.pytorch.org/whl/torch_stable.html
+# --extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.6.0
+

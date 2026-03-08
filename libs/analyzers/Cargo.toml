@@ -1,0 +1,23 @@
+[package]
+name = "amgix-analyzers"
+version = "1.0.0"
+edition = "2024"
+
+[lib]
+name = "amgix_analyzers"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.27", features = ["extension-module"] }
+rustc-hash = "2.1"
+murmurhash3 = "0.0.5"
+rust-stemmers = "1.2"
+unicode-segmentation = "1.12"
+once_cell = "1.19"
+stopwords = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+

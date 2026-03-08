@@ -1,0 +1,95 @@
+version: "3.9"
+
+x-api-image: &api-image
+  build:
+    context: .
+    dockerfile: build/Dockerfile-api
+    args:
+      AMGIX_VERSION: 1.0.0-dev
+  image: amgix-api:dev
+
+x-encoder-image: &encoder-image
+  build:
+    context: .
+    dockerfile: build/Dockerfile-encoder
+    args:
+      AMGIX_VERSION: 1.0.0-dev
+      AMGIX_BUILD_FE: GPU
+      AMGIX_BUILD_ST: GPU
+  image: amgix-encoder:dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg18-trixie
+    container_name: amgix-postgres
+    environment:
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: amgix
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql
+      - ./data/postgresql.conf:/etc/postgresql/postgresql.conf
+    command: postgres -c shared_preload_libraries=vector -c config_file=/etc/postgresql/postgresql.conf
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: amgix-rabbitmq
+    ports:
+      # - "5672:15672"
+      - "15672:15672"
+
+  api:
+    <<: *api-image
+    container_name: amgix-api
+    ports:
+      - "8234:8234"
+    depends_on:
+      - postgres
+      - rabbitmq
+    environment:
+      - AMGIX_DATABASE_URL=postgresql://postgres:password@amgix-postgres:5432/amgix
+      - AMGIX_AMQP_URL=amqp://guest:guest@amgix-rabbitmq/
+
+  encoder:
+    <<: *encoder-image
+    # container_name: amgix-encoder
+    depends_on:
+      - postgres
+      - rabbitmq
+    volumes:
+      - ./data/amgix-cache:/data/amgix/cache
+    environment:
+      - AMGIX_DATABASE_URL=postgresql://postgres:password@amgix-postgres:5432/amgix
+      - AMGIX_AMQP_URL=amqp://guest:guest@amgix-rabbitmq/
+      - AMGIX_SERVICE=encoder
+      - AMGIX_MODEL_FAMILY=none
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  rpc:
+    <<: *encoder-image
+    # container_name: amgix-rpc
+    depends_on:
+      - postgres
+      - rabbitmq
+    volumes:
+      - ./data/amgix-cache:/data/amgix/cache
+    environment:
+      - AMGIX_DATABASE_URL=postgresql://postgres:password@amgix-postgres:5432/amgix
+      - AMGIX_AMQP_URL=amqp://guest:guest@amgix-rabbitmq/
+      - AMGIX_SERVICE=rpc
+      - HF_TOKEN=${HF_TOKEN}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+

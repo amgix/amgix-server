@@ -1,0 +1,114 @@
+# Amgix-One: All-in-one container with API, Encoder, RabbitMQ, and Qdrant
+# CPU-only build with SentenceTransformers for broad model compatibility
+
+# Builder stage - build Rust analyzer wheel
+FROM python:3.12-slim AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust toolchain and maturin for building the Rust analyzer wheel
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN pip install --no-cache-dir maturin==1.9.6
+
+# Build amgix_analyzers wheel
+COPY libs/analyzers /app/libs/analyzers
+RUN cd /app/libs/analyzers \
+    && maturin build --release
+
+# Multi-stage build for smaller final image
+FROM python:3.12-slim
+
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y \
+    curl \
+    supervisor \
+    rabbitmq-server \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+ARG AMGIX_BUILD_ST=${AMGIX_BUILD_ST}
+ENV AMGIX_BUILD_ST=${AMGIX_BUILD_ST}
+    
+# Copy and install Python requirements
+COPY src/encoder/requirements-*.txt /app/
+COPY src/api/requirements.txt /app/
+RUN pip install --no-cache-dir --timeout=300 -r /app/requirements.txt
+
+RUN pip install --no-cache-dir --timeout=300 -r /app/requirements-common.txt
+RUN if [ "${AMGIX_BUILD_ST}" = "CPU" ]; then pip install --no-cache-dir --timeout=300 -r /app/requirements-st-cpu.txt; fi
+RUN if [ "${AMGIX_BUILD_ST}" = "GPU" ]; then pip install --no-cache-dir --timeout=300 -r /app/requirements-st-gpu.txt; fi
+
+# Install Rust analyzer wheel from builder stage
+COPY --from=builder /app/libs/analyzers/target/wheels/*.whl /tmp/
+RUN pip install --no-cache-dir /tmp/*.whl && rm /tmp/*.whl
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Install latest Qdrant binary
+ARG QDRANT_VERSION=v1.17.0
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "amd64" ]; then QDRANT_ARCH="x86_64"; else QDRANT_ARCH="$ARCH"; fi && \
+    curl -fsSL https://github.com/qdrant/qdrant/releases/download/${QDRANT_VERSION}/qdrant-${QDRANT_ARCH}-unknown-linux-musl.tar.gz -o /tmp/qdrant.tar.gz && \
+    tar -xzf /tmp/qdrant.tar.gz -C /usr/local/bin && \
+    rm /tmp/qdrant.tar.gz && \
+    chmod +x /usr/local/bin/qdrant
+
+
+# Copy application files
+COPY src /app/src
+COPY build/run-api.sh build/run-encoder.sh build/one/wait-for-deps.sh build/one/log-wrapper.sh build/one/entrypoint.sh /app/
+RUN chmod +x /app/run-api.sh /app/run-encoder.sh /app/wait-for-deps.sh /app/log-wrapper.sh /app/entrypoint.sh
+
+# Copy supervisord configuration and Qdrant config
+COPY build/one/supervisord-one.conf /etc/supervisor/conf.d/amgix-one.conf
+COPY build/one/config.yaml /app/config.yaml
+
+# Create data directories with correct permissions
+RUN mkdir -p /data/qdrant /data/rabbitmq && \
+    chmod 755 /data /data/qdrant /data/rabbitmq
+
+# Configure RabbitMQ for custom data directory and console logging
+RUN mkdir -p /etc/rabbitmq && \
+    echo "listeners.tcp.default = 5672" > /etc/rabbitmq/rabbitmq.conf && \
+    echo "loopback_users.guest = false" >> /etc/rabbitmq/rabbitmq.conf && \
+    echo "log.console = true" >> /etc/rabbitmq/rabbitmq.conf && \
+    echo "log.console.level = info" >> /etc/rabbitmq/rabbitmq.conf && \
+    echo "log.file = false" >> /etc/rabbitmq/rabbitmq.conf && \
+    chown -R rabbitmq:rabbitmq /data/rabbitmq
+    # echo "RABBITMQ_DATA_DIR=/data/rabbitmq" > /etc/rabbitmq/rabbitmq-env.conf && \
+    # echo "RABBITMQ_NODENAME=rabbit@localhost" > /etc/rabbitmq/rabbitmq-env.conf && \
+
+# Environment variables for internal connectivity
+ENV AMGIX_DATABASE_URL=qdrant://localhost:6334 \
+    AMGIX_AMQP_URL=amqp://guest:guest@localhost:5672/ \
+    AMGIX_MODEL_FAMILY=all \
+    RABBITMQ_NODENAME=rabbit@localhost \
+    RABBITMQ_MNESIA_BASE=/data/rabbitmq \
+    QDRANT__STORAGE__PATH=/data/qdrant \
+    QDRANT__SERVICE__HTTP_PORT=6333 \
+    QDRANT__SERVICE__GRPC_PORT=6334
+
+ARG AMGIX_VERSION=${AMGIX_VERSION}
+ENV AMGIX_VERSION=${AMGIX_VERSION}
+
+# Expose only API port (internal services not exposed)
+EXPOSE 8234
+
+# Volume for data persistence
+VOLUME ["/data"]
+
+# Health check for API
+HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
+    CMD curl --silent --fail --max-time 3 http://localhost:8234/v1/health/ready || exit 1
+
+# Start supervisord via entrypoint (runs as root, spawns children with user directives in conf)
+ENTRYPOINT ["/app/entrypoint.sh"]
+

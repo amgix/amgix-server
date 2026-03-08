@@ -1,0 +1,65 @@
+# Multi-stage build for smaller final image
+FROM python:3.12-slim AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Set Python aliases
+RUN ln -sf /usr/bin/python3 /usr/bin/python && \
+    ln -sf /usr/bin/pip3 /usr/bin/pip
+
+# Copy requirements file
+COPY src/encoder/requirements-*.txt /app/
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --timeout=300 -r /app/requirements-common.txt
+RUN pip install --no-cache-dir --timeout=300 -r /app/requirements-fe-gpu.txt
+
+# Final stage - minimal runtime image
+FROM nvidia/cuda:12.9.1-cudnn-runtime-ubuntu24.04
+
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y \
+    python3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# # Set Python aliases
+RUN ln -sf /usr/bin/python3 /usr/bin/python
+
+# Set working directory
+WORKDIR /app
+
+# Copy Python packages from builder stage
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/dist-packages
+# COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copy application files
+COPY src /app/src
+COPY build/run-encoder.sh /app/run-encoder.sh
+RUN chmod +x /app/run-encoder.sh
+
+# delete default ubuntu user and group
+RUN userdel -r ubuntu
+
+# Create a non-root user for security
+RUN useradd -m -s /bin/bash appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+ARG AMGIX_VERSION=${AMGIX_VERSION}
+ENV AMGIX_VERSION=${AMGIX_VERSION}
+
+VOLUME ["/data"]
+
+# Run the encoder service
+ENTRYPOINT ["/app/run-encoder.sh"]
+
+

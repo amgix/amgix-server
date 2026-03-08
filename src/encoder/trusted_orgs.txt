@@ -1,0 +1,15 @@
+huggingface
+microsoft
+google
+meta
+facebook
+stanford
+allenai
+salesforce
+naver
+intel
+nvidia
+ibm
+deepmind
+openai
+intfloat

@@ -1,0 +1,95 @@
+version: "3.9"
+
+x-api-image: &api-image
+  build:
+    context: .
+    dockerfile: build/Dockerfile-api
+    args:
+      AMGIX_VERSION: 1.0.0-dev
+  image: amgix-api:dev
+
+x-encoder-image: &encoder-image
+  build:
+    context: .
+    dockerfile: build/Dockerfile-encoder
+    args:
+      AMGIX_VERSION: 1.0.0-dev
+      AMGIX_BUILD_FE: GPU
+      AMGIX_BUILD_ST: GPU
+  image: amgix-encoder:dev
+
+services:
+  mariadb:
+    image: mariadb:11.8
+    container_name: amgix-mariadb
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: amgix
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./data/mariadb:/var/lib/mysql
+      - ./data/mariadb.cnf:/etc/mysql/mariadb.conf.d/99-mariadb.cnf
+    # command: --default-authentication-plugin=mysql_native_password
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: amgix-rabbitmq
+    ports:
+      # - "5672:15672"
+      - "15672:15672"
+
+  api:
+    <<: *api-image
+    container_name: amgix-api
+    ports:
+      - "8234:8234"
+    depends_on:
+      - mariadb
+      - rabbitmq
+    environment:
+      - AMGIX_DATABASE_URL=mariadb://root:password@amgix-mariadb:3306/amgix
+      - AMGIX_AMQP_URL=amqp://guest:guest@amgix-rabbitmq/
+
+  encoder:
+    <<: *encoder-image
+    # container_name: amgix-encoder
+    depends_on:
+      - mariadb
+      - rabbitmq
+    volumes:
+      - ./data/amgix-cache:/data/amgix/cache
+    environment:
+      - AMGIX_DATABASE_URL=mariadb://root:password@amgix-mariadb:3306/amgix
+      - AMGIX_AMQP_URL=amqp://guest:guest@amgix-rabbitmq/
+      - AMGIX_SERVICE=encoder
+      - AMGIX_MODEL_FAMILY=none
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  rpc:
+    <<: *encoder-image
+    # container_name: amgix-rpc
+    depends_on:
+      - mariadb
+      - rabbitmq
+    volumes:
+      - ./data/amgix-cache:/data/amgix/cache
+    environment:
+      - AMGIX_DATABASE_URL=mariadb://root:password@amgix-mariadb:3306/amgix
+      - AMGIX_AMQP_URL=amqp://guest:guest@amgix-rabbitmq/
+      - AMGIX_SERVICE=rpc
+      - HF_TOKEN=${HF_TOKEN}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+

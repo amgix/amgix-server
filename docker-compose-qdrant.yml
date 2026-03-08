@@ -1,0 +1,100 @@
+version: "3.9"
+
+x-api-image: &api-image
+  build:
+    context: .
+    dockerfile: build/Dockerfile-api
+    args:
+      AMGIX_VERSION: 1.0.0-dev
+  image: amgix-api:dev
+
+x-encoder-image: &encoder-image
+  build:
+    context: .
+    dockerfile: build/Dockerfile-encoder
+    args:
+      AMGIX_VERSION: 1.0.0-dev
+      AMGIX_BUILD_FE: GPU
+      AMGIX_BUILD_ST: GPU
+  image: amgix-encoder:dev
+
+services:
+
+  qdrant:
+    image: qdrant/qdrant:v1.17.0
+    container_name: amgix-qdrant
+    ports:
+      - "6333:6333"  # HTTP
+      - "6334:6334"  # gRPC
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: amgix-rabbitmq
+    ports:
+      # - "5672:15672"
+      - "15672:15672"
+
+  api:
+    <<: *api-image
+    container_name: amgix-api
+    ports:
+      - "8234:8234"
+    depends_on:
+      - qdrant
+      - rabbitmq
+    environment:
+      - AMGIX_DATABASE_URL=qdrant://amgix-qdrant:6334
+      - AMGIX_AMQP_URL=amqp://guest:guest@amgix-rabbitmq/
+      # - AMGIX_LOG_LEVEL=INFO  # Optional: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: INFO)
+
+  encoder:
+    <<: *encoder-image
+    # image: amgix-encoder:1.0.0-alpha.1-fe-gpu
+    # container_name: amgix-encoder
+    depends_on:
+      - qdrant
+      - rabbitmq
+    volumes:
+      - ./data/amgix-cache:/data/amgix/cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - AMGIX_DATABASE_URL=qdrant://amgix-qdrant:6334
+      - AMGIX_AMQP_URL=amqp://guest:guest@amgix-rabbitmq/
+      - AMGIX_SERVICE=encoder
+      # - AMGIX_LOG_LEVEL=INFO  # Optional: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: INFO)
+      - AMGIX_MODEL_FAMILY=none
+
+  rpc:
+    <<: *encoder-image
+    # image: amgix-encoder:1.0.0-alpha.1-fe-gpu
+    # container_name: amgix-rpc
+    depends_on:
+      - qdrant
+      - rabbitmq
+    volumes:
+      - ./data/amgix-cache:/data/amgix/cache
+    deploy:
+      resources:
+        # limits:
+        #   cpus: "1"
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - AMGIX_DATABASE_URL=qdrant://amgix-qdrant:6334
+      - AMGIX_AMQP_URL=amqp://guest:guest@amgix-rabbitmq/
+      - AMGIX_SERVICE=rpc
+      # - AMGIX_LOG_LEVEL=INFO  # Optional: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: INFO)
+      - HF_TOKEN=${HF_TOKEN}
+
+
