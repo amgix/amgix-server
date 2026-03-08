@@ -1,0 +1,131 @@
+# Build Amgix server images and push to Docker Hub.
+# Repo secrets required: DOCKERHUB_USERNAME, DOCKERHUB_TOKEN
+name: Build containers
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set version
+        run: |
+          if [ "${{ github.ref_type }}" != "tag" ] || [[ ! "${{ github.ref_name }}" =~ ^v ]]; then
+            echo "This workflow only runs on tags starting with v (e.g. v1.0.0). Ref: ${{ github.ref }}"
+            exit 1
+          fi
+          REF="${{ github.ref_name }}"
+          echo "VERSION=$REF" >> $GITHUB_ENV
+          echo "AMGIX_VERSION=${REF#v}" >> $GITHUB_ENV
+          echo "Image tag: $REF, build-arg AMGIX_VERSION=${REF#v}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push amgix-api
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/Dockerfile-api
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-api:${{ env.VERSION }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-api:latest
+          build-args: |
+            AMGIX_VERSION=${{ env.AMGIX_VERSION }}
+
+      - name: Build and push amgix-encoder (GPU)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/Dockerfile-encoder
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}-gpu
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:latest-gpu
+          build-args: |
+            AMGIX_VERSION=${{ env.AMGIX_VERSION }}
+            AMGIX_BUILD_FE=GPU
+            AMGIX_BUILD_ST=GPU
+
+      - name: Build and push amgix-encoder (CPU)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/Dockerfile-encoder
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:latest
+          build-args: |
+            AMGIX_VERSION=${{ env.AMGIX_VERSION }}
+            AMGIX_BUILD_FE=CPU
+            AMGIX_BUILD_ST=CPU
+
+      - name: Build and push amgix-encoder (NoEmbed)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/Dockerfile-encoder
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}-noembed
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:latest-noembed
+          build-args: |
+            AMGIX_VERSION=${{ env.AMGIX_VERSION }}
+            AMGIX_BUILD_FE=
+            AMGIX_BUILD_ST=
+
+      - name: Build and push amgix-one (CPU)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/one/Dockerfile-one
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.VERSION }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:latest
+          build-args: |
+            AMGIX_VERSION=${{ env.AMGIX_VERSION }}
+            AMGIX_BUILD_ST=CPU
+
+      - name: Build and push amgix-one (GPU)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/one/Dockerfile-one
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.VERSION }}-gpu
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:latest-gpu
+          build-args: |
+            AMGIX_VERSION=${{ env.AMGIX_VERSION }}
+            AMGIX_BUILD_ST=GPU
+
+      - name: Build and push amgix-one (NoEmbed)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/one/Dockerfile-one
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.VERSION }}-noembed
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:latest-noembed
+          build-args: |
+            AMGIX_VERSION=${{ env.AMGIX_VERSION }}
+            AMGIX_BUILD_ST=
