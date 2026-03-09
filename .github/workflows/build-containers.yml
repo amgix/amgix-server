@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest-m
+    runs-on: ubuntu-latest-custom
     permissions:
       contents: read
 
@@ -46,9 +46,6 @@ jobs:
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
 
-      - name: Free disk
-        run: docker buildx prune -f && docker image prune -af
-
       - name: Build and push amgix-encoder (GPU)
         uses: docker/build-push-action@v6
         with:
@@ -60,9 +57,6 @@ jobs:
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
             AMGIX_BUILD_FE=GPU
             AMGIX_BUILD_ST=GPU
-
-      - name: Free disk
-        run: docker buildx prune -f && docker image prune -af
 
       - name: Build and push amgix-encoder (CPU)
         uses: docker/build-push-action@v6
@@ -76,9 +70,6 @@ jobs:
             AMGIX_BUILD_FE=CPU
             AMGIX_BUILD_ST=CPU
 
-      - name: Free disk
-        run: docker buildx prune -f && docker image prune -af
-
       - name: Build and push amgix-encoder (NoEmbed)
         uses: docker/build-push-action@v6
         with:
@@ -91,9 +82,6 @@ jobs:
             AMGIX_BUILD_FE=
             AMGIX_BUILD_ST=
 
-      - name: Free disk
-        run: docker buildx prune -f && docker image prune -af
-
       - name: Build and push amgix-one (CPU)
         uses: docker/build-push-action@v6
         with:
@@ -105,9 +93,6 @@ jobs:
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
             AMGIX_BUILD_ST=CPU
 
-      - name: Free disk
-        run: docker buildx prune -f && docker image prune -af
-
       - name: Build and push amgix-one (GPU)
         uses: docker/build-push-action@v6
         with:
@@ -118,9 +103,6 @@ jobs:
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
             AMGIX_BUILD_ST=GPU
-
-      - name: Free disk
-        run: docker buildx prune -f && docker image prune -af
 
       - name: Build and push amgix-one (NoEmbed)
         uses: docker/build-push-action@v6
