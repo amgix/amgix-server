@@ -377,15 +377,31 @@ class EncoderService(EncoderBase):
             self.logger.error(f"Failed to process bulk documents: {str(e)}")
             
             new_try_count = queue_docs[0].try_count + 1
-            status = (
-                QueuedDocumentStatus.REQUEUED
-                if new_try_count < MAX_DB_RETRIES
-                else QueuedDocumentStatus.FAILED
-            )
+            
+            if isinstance(e, ValueError):
+                status = QueuedDocumentStatus.FAILED
+            elif isinstance(e, VectorizationException):
+                status = (
+                    QueuedDocumentStatus.REQUEUED
+                    if new_try_count < MAX_QUEUE_DELIVERY_ATTEMPTS
+                    else QueuedDocumentStatus.FAILED
+                )
+            else:
+                status = (
+                    QueuedDocumentStatus.REQUEUED
+                    if new_try_count < MAX_DB_RETRIES
+                    else QueuedDocumentStatus.FAILED
+                )
+                
             try:
                 await self.database.update_queue_status(queue_ids, status, new_try_count, str(e))
             except Exception as queue_error:
                 self.logger.error(f"Failed to update queue status: {str(queue_error)}")
+
+            if status == QueuedDocumentStatus.REQUEUED:
+                delay = min(2 * new_try_count + random.uniform(0.1, 1.5), _MAX_RETRY_SLEEP_SECONDS)
+                await asyncio.sleep(delay)
+                raise e
 
     async def update_collection_stats(
         self, 
