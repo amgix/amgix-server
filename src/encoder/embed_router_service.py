@@ -674,7 +674,7 @@ class EmbedRouterService(EncoderBase):
                     # try to send a probe to the leader (even if it's us)
                     await self.bunny_talk.talk(
                         routing_key=LEADER_QUEUE_NAME,
-                        probe=False,
+                        probe=True,
                         hostname=HOSTNAME,
                         metrics=dict(),
                         loaded_models=list(),
