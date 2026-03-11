@@ -8,6 +8,7 @@ from ..common import (
     MAX_MODEL_NAME_LENGTH, MAX_DOCUMENT_TAGS_COUNT, MAX_DOCUMENT_TAG_LENGTH,
     MAX_SEARCH_QUERY_LENGTH, DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT, MAX_TOP_K_VALUE,
     MAX_VECTOR_DIMENSIONS, DEFAULT_TOP_K, LANGUAGE_DETECTION_CONFIDENCE,
+    WMTR_WORD_WEIGHT_PERCENTAGE,
     MetadataValueTypeLiteral, MetadataFilterOpLiteral, MAX_METADATA_KEY_LENGTH
 )
 
@@ -88,6 +89,12 @@ class VectorConfig(BaseModel):
     )
     top_k: int = Field(
         default=DEFAULT_TOP_K, description="Number of top-scoring terms to keep for sparse vectors. Used by sparse_model, full_text, trigrams, whitespace, wmtr, and sparse_custom vectors. Ignored by dense vectors."
+    )
+    wmtr_word_weight: int = Field(
+        default=WMTR_WORD_WEIGHT_PERCENTAGE,
+        ge=0,
+        le=100,
+        description="Percentage of WMTR top_k allocated to word weights."
     )
     index_fields: List[DocumentFieldLiteral] = Field(
         default_factory=lambda: [DocumentField.CONTENT], 
@@ -366,6 +373,7 @@ def internal_to_user_config(internal_config: CollectionConfigInternal) -> Collec
             revision=vector.revision,
             dimensions=vector.dimensions,  # Include dimensions for all vectors
             top_k=vector.top_k,
+            wmtr_word_weight=vector.wmtr_word_weight,
             index_fields=vector.index_fields,
             language_default_code=vector.language_default_code,
             language_detect=vector.language_detect,

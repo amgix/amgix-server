@@ -8,7 +8,6 @@ import amgix_analyzers as aa
 
 from .vector_base import VectorBase
 from ..models.vector import VectorConfigInternal
-from ..common import WMTR_WORD_WEIGHT_PERCENTAGE
 
 
 class WMTRVector(VectorBase):
@@ -42,7 +41,7 @@ class WMTRVector(VectorBase):
             text=text,
             lang_code=lang_code,
             top_k_limit=config.top_k,
-            word_weight_percentage=WMTR_WORD_WEIGHT_PERCENTAGE,
+            word_weight_percentage=config.wmtr_word_weight,
             use_stopwords=True,
             avgdl=avgdl,
         )
