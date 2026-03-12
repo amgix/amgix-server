@@ -24,7 +24,7 @@ jobs:
         with:
           path-to-signatures: 'signatures/version1/cla.json'
           path-to-document: 'https://github.com/amgix/amgix-server/blob/main/CLA.md'
-          branch: 'main'
+          branch: 'cla-signatures'
           allowlist: 'dependabot[bot],dependabot-preview[bot],bot*'
           custom-notsigned-prcomment: 'Thank you for your contribution. Before we can merge, we need you to agree to our [Contributor License Agreement]($pathToCLADocument). Please read it and then comment on this PR with exactly: **I have read the CLA Document and I hereby sign the CLA**'
           custom-allsigned-prcomment: 'All contributors have signed the CLA. Thank you.'
