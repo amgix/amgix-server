@@ -1,3 +1,20 @@
 {
-   "signedContributors": []
+  "signedContributors": [
+    {
+      "name": "amgix-dev",
+      "id": 236220347,
+      "comment_id": 4043067191,
+      "created_at": "2026-03-12T00:24:35Z",
+      "repoId": 1176013957,
+      "pullRequestNo": 1
+    },
+    {
+      "name": "amgix-dev",
+      "id": 236220347,
+      "comment_id": 4043549617,
+      "created_at": "2026-03-12T02:53:26Z",
+      "repoId": 1176013957,
+      "pullRequestNo": 1
+    }
+  ]
 }
