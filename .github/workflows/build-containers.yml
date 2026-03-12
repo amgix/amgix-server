@@ -22,13 +22,13 @@ jobs:
 
             const requestedAt = new Date().toISOString();
 
-            const gist = await github.gists.get({ gist_id: gistId });
+            const gist = await github.rest.gists.get({ gist_id: gistId });
             const files = gist.data.files || {};
 
             const content = JSON.stringify({ requestedAt }, null, 2);
             files[fileName] = { content };
 
-            await github.gists.update({
+            await github.rest.gists.update({
               gist_id: gistId,
               files
             });
@@ -154,7 +154,7 @@ jobs:
             const fileName = 'job-request.json';
             const content = JSON.stringify({ requestedAt: null }, null, 2);
 
-            await github.gists.update({
+            await github.rest.gists.update({
               gist_id: gistId,
               files: { [fileName]: { content } }
             });
