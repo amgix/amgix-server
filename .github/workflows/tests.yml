@@ -111,6 +111,7 @@ jobs:
           python3 -m venv .venv
           . .venv/bin/activate
           pip install --upgrade pip
+          pip install -r src/api/requirements.txt
           pip install -r tests/requirements.txt
 
       - name: Create volume directories
