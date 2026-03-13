@@ -115,6 +115,7 @@ jobs:
         run: |
           mkdir -p data/qdrant data/amgix-cache data/postgres data/mariadb
           touch data/postgresql.conf data/mariadb.cnf
+          chmod -R a+rwx data
 
       - name: Start stack (backend=${{ matrix.backend }}, CPU)
         run: docker compose -f ${{ matrix.compose_file }} -f docker-compose.ci.yml up -d --build
