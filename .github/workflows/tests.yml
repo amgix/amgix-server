@@ -74,7 +74,7 @@ jobs:
     runs-on: ubuntu-x1
     container:
       image: docker:24
-      options: -v /var/run/docker.sock:/var/run/docker.sock
+      options: --network host -v /var/run/docker.sock:/var/run/docker.sock
     permissions:
       contents: read
     strategy:
