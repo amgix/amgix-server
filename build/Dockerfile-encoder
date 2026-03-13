@@ -51,7 +51,8 @@ RUN chmod +x /app/run-encoder.sh
 
 # Create a non-root user for security
 RUN useradd -m -s /bin/bash appuser && \
-    chown -R appuser:appuser /app
+    mkdir -p /data/amgix/cache && \
+    chown -R appuser:appuser /app /data
 USER appuser
 
 # Set environment variables
