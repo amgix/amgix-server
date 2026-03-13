@@ -11,6 +11,8 @@ services:
         AMGIX_VERSION: 1.0.0-dev
         AMGIX_BUILD_FE: CPU
         AMGIX_BUILD_ST: CPU
+    volumes:
+      - amgix-cache-ci:/data/amgix/cache
     deploy:
       resources:
         reservations:
@@ -24,7 +26,12 @@ services:
         AMGIX_VERSION: 1.0.0-dev
         AMGIX_BUILD_FE: CPU
         AMGIX_BUILD_ST: CPU
+    volumes:
+      - amgix-cache-ci:/data/amgix/cache
     deploy:
       resources:
         reservations:
           devices: !reset []
+
+volumes:
+  amgix-cache-ci:
