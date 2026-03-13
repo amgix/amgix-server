@@ -14,7 +14,7 @@ services:
     deploy:
       resources:
         reservations:
-          devices: []
+          devices: !reset []
 
   rpc:
     build:
@@ -27,4 +27,4 @@ services:
     deploy:
       resources:
         reservations:
-          devices: []
+          devices: !reset []
