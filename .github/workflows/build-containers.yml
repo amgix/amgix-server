@@ -18,22 +18,52 @@ jobs:
           github-token: ${{ secrets.GIST_TOKEN }}
           script: |
             const gistId = process.env.GIST_ID;
-            const fileName = 'job-request.json';
+            const runId = process.env.GITHUB_RUN_ID;
+            const fileName = `run_${runId}.json`;
 
-            const requestedAt = new Date().toISOString();
+            const now = new Date();
+            const requestedAt = now.toISOString();
+            const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
             const gist = await github.rest.gists.get({ gist_id: gistId });
-            const files = gist.data.files || {};
+            const existingFiles = gist.data.files || {};
 
-            const content = JSON.stringify({ requestedAt }, null, 2);
-            files[fileName] = { content };
+            const files = {};
+
+            for (const [name, file] of Object.entries(existingFiles)) {
+              if (!name.startsWith('run_') || !name.endsWith('.json')) {
+                continue;
+              }
+              if (name === fileName) {
+                continue;
+              }
+              let ts = null;
+              try {
+                const parsed = JSON.parse(file.content || '{}');
+                if (parsed && typeof parsed.requestedAt === 'string') {
+                  const parsedDate = new Date(parsed.requestedAt);
+                  if (!Number.isNaN(parsedDate.getTime())) {
+                    ts = parsedDate;
+                  }
+                }
+              } catch {
+                // ignore parse errors and treat as stale
+              }
+              if (!ts || now - ts > ONE_DAY_MS) {
+                files[name] = null;
+              }
+            }
+
+            files[fileName] = {
+              content: JSON.stringify({ requestedAt }, null, 2)
+            };
 
             await github.rest.gists.update({
               gist_id: gistId,
               files
             });
 
-  build:
+  build-small:
     needs: signal-vm
     runs-on: ubuntu-x1
     permissions:
@@ -63,6 +93,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # Small images: api, encoder-noembed, one-noembed
       - name: Build and push amgix-api
         uses: docker/build-push-action@v6
         with:
@@ -72,30 +103,6 @@ jobs:
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-api:${{ env.VERSION }}
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
-
-      - name: Build and push amgix-encoder (GPU)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: build/Dockerfile-encoder
-          push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}-gpu
-          build-args: |
-            AMGIX_VERSION=${{ env.AMGIX_VERSION }}
-            AMGIX_BUILD_FE=GPU
-            AMGIX_BUILD_ST=GPU
-
-      - name: Build and push amgix-encoder (CPU)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: build/Dockerfile-encoder
-          push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}
-          build-args: |
-            AMGIX_VERSION=${{ env.AMGIX_VERSION }}
-            AMGIX_BUILD_FE=CPU
-            AMGIX_BUILD_ST=CPU
 
       - name: Build and push amgix-encoder (NoEmbed)
         uses: docker/build-push-action@v6
@@ -109,6 +116,131 @@ jobs:
             AMGIX_BUILD_FE=
             AMGIX_BUILD_ST=
 
+      - name: Build and push amgix-one (NoEmbed)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/one/Dockerfile-one
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.VERSION }}-noembed
+          build-args: |
+            AMGIX_VERSION=${{ env.AMGIX_VERSION }}
+            AMGIX_BUILD_ST=
+
+  build-encoder-gpu:
+    needs: build-small
+    runs-on: ubuntu-x1
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set version
+        run: |
+          if [ "${{ github.ref_type }}" != "tag" ] || [[ ! "${{ github.ref_name }}" =~ ^v ]]; then
+            echo "This workflow only runs on tags starting with v (e.g. v1.0.0). Ref: ${{ github.ref }}"
+            exit 1
+          fi
+          REF="${{ github.ref_name }}"
+          echo "VERSION=$REF" >> $GITHUB_ENV
+          echo "AMGIX_VERSION=${REF#v}" >> $GITHUB_ENV
+          echo "Image tag: $REF, build-arg AMGIX_VERSION=${REF#v}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push amgix-encoder (GPU)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/Dockerfile-encoder
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}-gpu
+          build-args: |
+            AMGIX_VERSION=${{ env.AMGIX_VERSION }}
+            AMGIX_BUILD_FE=GPU
+            AMGIX_BUILD_ST=GPU
+
+  build-encoder-cpu:
+    needs: build-encoder-gpu
+    runs-on: ubuntu-x1
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set version
+        run: |
+          if [ "${{ github.ref_type }}" != "tag" ] || [[ ! "${{ github.ref_name }}" =~ ^v ]]; then
+            echo "This workflow only runs on tags starting with v (e.g. v1.0.0). Ref: ${{ github.ref }}"
+            exit 1
+          fi
+          REF="${{ github.ref_name }}"
+          echo "VERSION=$REF" >> $GITHUB_ENV
+          echo "AMGIX_VERSION=${REF#v}" >> $GITHUB_ENV
+          echo "Image tag: $REF, build-arg AMGIX_VERSION=${REF#v}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push amgix-encoder (CPU)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/Dockerfile-encoder
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}
+          build-args: |
+            AMGIX_VERSION=${{ env.AMGIX_VERSION }}
+            AMGIX_BUILD_FE=CPU
+            AMGIX_BUILD_ST=CPU
+
+  build-one-cpu:
+    needs: build-encoder-cpu
+    runs-on: ubuntu-x1
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set version
+        run: |
+          if [ "${{ github.ref_type }}" != "tag" ] || [[ ! "${{ github.ref_name }}" =~ ^v ]]; then
+            echo "This workflow only runs on tags starting with v (e.g. v1.0.0). Ref: ${{ github.ref }}"
+            exit 1
+          fi
+          REF="${{ github.ref_name }}"
+          echo "VERSION=$REF" >> $GITHUB_ENV
+          echo "AMGIX_VERSION=${REF#v}" >> $GITHUB_ENV
+          echo "Image tag: $REF, build-arg AMGIX_VERSION=${REF#v}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Build and push amgix-one (CPU)
         uses: docker/build-push-action@v6
         with:
@@ -119,6 +251,36 @@ jobs:
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
             AMGIX_BUILD_ST=CPU
+
+  build-one-gpu:
+    needs: build-one-cpu
+    runs-on: ubuntu-x1
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set version
+        run: |
+          if [ "${{ github.ref_type }}" != "tag" ] || [[ ! "${{ github.ref_name }}" =~ ^v ]]; then
+            echo "This workflow only runs on tags starting with v (e.g. v1.0.0). Ref: ${{ github.ref }}"
+            exit 1
+          fi
+          REF="${{ github.ref_name }}"
+          echo "VERSION=$REF" >> $GITHUB_ENV
+          echo "AMGIX_VERSION=${REF#v}" >> $GITHUB_ENV
+          echo "Image tag: $REF, build-arg AMGIX_VERSION=${REF#v}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push amgix-one (GPU)
         uses: docker/build-push-action@v6
@@ -131,19 +293,12 @@ jobs:
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
             AMGIX_BUILD_ST=GPU
 
-      - name: Build and push amgix-one (NoEmbed)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: build/one/Dockerfile-one
-          push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.VERSION }}-noembed
-          build-args: |
-            AMGIX_VERSION=${{ env.AMGIX_VERSION }}
-            AMGIX_BUILD_ST=
-
-      - name: Clear VM request flag
-        if: always()
+  clear-vm-request:
+    needs: build-one-gpu
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clear VM request for this run
         uses: actions/github-script@v7
         env:
           GIST_ID: ${{ secrets.GIST_ID }}
@@ -151,10 +306,10 @@ jobs:
           github-token: ${{ secrets.GIST_TOKEN }}
           script: |
             const gistId = process.env.GIST_ID;
-            const fileName = 'job-request.json';
-            const content = JSON.stringify({ requestedAt: null }, null, 2);
+            const runId = process.env.GITHUB_RUN_ID;
+            const fileName = `run_${runId}.json`;
 
             await github.rest.gists.update({
               gist_id: gistId,
-              files: { [fileName]: { content } }
+              files: { [fileName]: null }
             });
