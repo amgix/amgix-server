@@ -95,8 +95,8 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
     steps:
-      - name: Fix workspace permissions
-        run: sudo chown -R $USER:$USER ${{ github.workspace }}
+      - name: Fix workspace permissions via Docker
+        run: docker run --rm -v ${{ github.workspace }}:/work alpine chown -R $(id -u):$(id -g) /work || true
 
       - name: Checkout
         uses: actions/checkout@v4
