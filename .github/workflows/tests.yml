@@ -95,6 +95,9 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
     steps:
+      - name: Fix workspace permissions
+        run: sudo chown -R $USER:$USER ${{ github.workspace }}
+
       - name: Checkout
         uses: actions/checkout@v4
 
