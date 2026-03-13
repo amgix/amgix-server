@@ -1,0 +1,24 @@
+# Override for CI (no GPU): encoder and rpc use CPU build and no GPU reservation.
+# Use with: docker compose -f docker-compose-*.yml -f docker-compose.ci.yml up -d
+version: "3.9"
+
+services:
+  encoder:
+    build:
+      context: .
+      dockerfile: build/Dockerfile-encoder
+      args:
+        AMGIX_VERSION: 1.0.0-dev
+        AMGIX_BUILD_FE: CPU
+        AMGIX_BUILD_ST: CPU
+    deploy: {}
+
+  rpc:
+    build:
+      context: .
+      dockerfile: build/Dockerfile-encoder
+      args:
+        AMGIX_VERSION: 1.0.0-dev
+        AMGIX_BUILD_FE: CPU
+        AMGIX_BUILD_ST: CPU
+    deploy: {}

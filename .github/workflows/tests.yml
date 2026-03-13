@@ -1,0 +1,155 @@
+# Run pytest against the full stack (Docker Compose) for each backend.
+# Repo secrets required: GIST_ID, GIST_TOKEN (for VM lifecycle)
+#
+# To require this workflow to pass before merging PRs:
+#   Settings → Branches → Branch protection rule for main → Require status checks → add "Test".
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  signal-vm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Request VM for self-hosted runner
+        uses: actions/github-script@v7
+        env:
+          GIST_ID: ${{ secrets.GIST_ID }}
+        with:
+          github-token: ${{ secrets.GIST_TOKEN }}
+          script: |
+            const gistId = process.env.GIST_ID;
+            const runId = process.env.GITHUB_RUN_ID;
+            const fileName = `run_${runId}.json`;
+
+            const now = new Date();
+            const requestedAt = now.toISOString();
+            const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+            const gist = await github.rest.gists.get({ gist_id: gistId });
+            const existingFiles = gist.data.files || {};
+
+            const files = {};
+
+            for (const [name, file] of Object.entries(existingFiles)) {
+              if (!name.startsWith('run_') || !name.endsWith('.json')) {
+                continue;
+              }
+              if (name === fileName) {
+                continue;
+              }
+              let ts = null;
+              try {
+                const parsed = JSON.parse(file.content || '{}');
+                if (parsed && typeof parsed.requestedAt === 'string') {
+                  const parsedDate = new Date(parsed.requestedAt);
+                  if (!Number.isNaN(parsedDate.getTime())) {
+                    ts = parsedDate;
+                  }
+                }
+              } catch {
+                // ignore parse errors and treat as stale
+              }
+              if (!ts || now - ts > ONE_DAY_MS) {
+                files[name] = null;
+              }
+            }
+
+            files[fileName] = {
+              content: JSON.stringify({ requestedAt }, null, 2)
+            };
+
+            await github.rest.gists.update({
+              gist_id: gistId,
+              files
+            });
+
+  tests:
+    needs: signal-vm
+    runs-on: ubuntu-x1
+    container:
+      image: docker:24
+      options: -v /var/run/docker.sock:/var/run/docker.sock
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        backend:
+          - qdrant
+          - pgsql
+          - mariadb
+        include:
+          - backend: qdrant
+            compose_file: docker-compose-qdrant.yml
+          - backend: pgsql
+            compose_file: docker-compose-pgsql.yml
+          - backend: mariadb
+            compose_file: docker-compose-mariadb.yml
+
+    env:
+      BACKEND: ${{ matrix.backend }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Python and curl
+        run: apk add --no-cache python3 py3-pip curl
+
+      - name: Install test dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install -r tests/requirements.txt
+
+      - name: Create volume directories
+        run: |
+          mkdir -p data/qdrant data/amgix-cache data/postgres data/mariadb
+          touch data/postgresql.conf data/mariadb.cnf
+
+      - name: Start stack (backend=${{ matrix.backend }}, CPU)
+        run: docker compose -f ${{ matrix.compose_file }} -f docker-compose.ci.yml up -d --build
+
+      - name: Wait for API to be ready
+        run: |
+          timeout -t 300 sh -c '
+            until curl -fsS http://localhost:8234/v1/health/ready >/dev/null 2>&1; do
+              echo "Waiting for backend=${{ matrix.backend }}..."
+              sleep 5
+            done
+          '
+
+      - name: Run pytest (backend=${{ matrix.backend }})
+        run: pytest
+
+      - name: Stop stack
+        if: always()
+        run: docker compose -f ${{ matrix.compose_file }} -f docker-compose.ci.yml down --volumes
+
+  clear-vm-request:
+    needs: tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clear VM request for this run
+        uses: actions/github-script@v7
+        env:
+          GIST_ID: ${{ secrets.GIST_ID }}
+        with:
+          github-token: ${{ secrets.GIST_TOKEN }}
+          script: |
+            const gistId = process.env.GIST_ID;
+            const runId = process.env.GITHUB_RUN_ID;
+            const fileName = `run_${runId}.json`;
+
+            await github.rest.gists.update({
+              gist_id: gistId,
+              files: { [fileName]: null }
+            });
