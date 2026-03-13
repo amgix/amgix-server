@@ -11,7 +11,10 @@ services:
         AMGIX_VERSION: 1.0.0-dev
         AMGIX_BUILD_FE: CPU
         AMGIX_BUILD_ST: CPU
-    deploy: {}
+    deploy:
+      resources:
+        reservations:
+          devices: []
 
   rpc:
     build:
@@ -21,4 +24,7 @@ services:
         AMGIX_VERSION: 1.0.0-dev
         AMGIX_BUILD_FE: CPU
         AMGIX_BUILD_ST: CPU
-    deploy: {}
+    deploy:
+      resources:
+        reservations:
+          devices: []
