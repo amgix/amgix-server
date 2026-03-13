@@ -106,7 +106,9 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          python3 -m pip install --upgrade pip
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install --upgrade pip
           pip install -r tests/requirements.txt
 
       - name: Create volume directories
@@ -127,7 +129,7 @@ jobs:
           '
 
       - name: Run pytest (backend=${{ matrix.backend }})
-        run: pytest
+        run: . .venv/bin/activate && pytest
 
       - name: Stop stack
         if: always()
