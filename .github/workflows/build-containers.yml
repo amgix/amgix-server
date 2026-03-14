@@ -43,6 +43,9 @@ jobs:
       contents: read
 
     steps:
+      - name: Fix workspace permissions via Docker
+        run: docker run --rm -v ${{ github.workspace }}:/work alpine sh -c "chown -R $(id -u):$(id -g) /work || true"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -107,6 +110,9 @@ jobs:
       contents: read
 
     steps:
+      - name: Fix workspace permissions via Docker
+        run: docker run --rm -v ${{ github.workspace }}:/work alpine sh -c "chown -R $(id -u):$(id -g) /work || true"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -149,6 +155,9 @@ jobs:
       contents: read
 
     steps:
+      - name: Fix workspace permissions via Docker
+        run: docker run --rm -v ${{ github.workspace }}:/work alpine sh -c "chown -R $(id -u):$(id -g) /work || true"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -191,6 +200,9 @@ jobs:
       contents: read
 
     steps:
+      - name: Fix workspace permissions via Docker
+        run: docker run --rm -v ${{ github.workspace }}:/work alpine sh -c "chown -R $(id -u):$(id -g) /work || true"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -232,6 +244,9 @@ jobs:
       contents: read
 
     steps:
+      - name: Fix workspace permissions via Docker
+        run: docker run --rm -v ${{ github.workspace }}:/work alpine sh -c "chown -R $(id -u):$(id -g) /work || true"
+
       - name: Checkout
         uses: actions/checkout@v4
 
