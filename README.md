@@ -3,11 +3,9 @@
 > **Amgix** (pronounced `a-MAG-ix`) - short for Amalgam Index  
 > *amalgam: a mixture or blend of different elements*
 
----
+Amgix is a hybrid search engine for applications. It provides a production-ready system to ingest, embed, and search documents — combining keyword and semantic retrieval in a single stack.
 
-Amgix is an open-source hybrid search engine for applications.
-
-It combines keyword and semantic search in a single system, with built-in embedding pipelines, multi-vector ranking, and production-ready ingestion.
+Amgix is built to run anywhere — from a single container to a distributed stack — so you can add fast, relevant, modern search to any application without sacrificing search quality or operational simplicity.
 
 ---
 
