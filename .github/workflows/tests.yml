@@ -59,11 +59,11 @@ jobs:
           chmod -R a+rwx data
 
       - name: Build shared images (api, encoder)
-        run: docker compose -f docker-compose-qdrant.yml -f docker-compose.ci.yml build
+        run: docker compose --project-directory . -f compose/qdrant.yml -f compose/ci.yml build
 
       - name: "Test backend: Qdrant"
         run: |
-          CF="-f docker-compose-qdrant.yml -f docker-compose.ci.yml"
+          CF="--project-directory . -f compose/qdrant.yml -f compose/ci.yml"
           DB_SVC=qdrant
           docker compose $CF down --volumes 2>/dev/null || true
           docker compose $CF up -d
@@ -85,7 +85,7 @@ jobs:
       - name: "Test backend: PostgreSQL"
         if: always()
         run: |
-          CF="-f docker-compose-pgsql.yml -f docker-compose.ci.yml"
+          CF="--project-directory . -f compose/pgsql.yml -f compose/ci.yml"
           DB_SVC=postgres
           docker compose $CF down --volumes 2>/dev/null || true
           docker compose $CF up -d
@@ -107,7 +107,7 @@ jobs:
       - name: "Test backend: MariaDB"
         if: always()
         run: |
-          CF="-f docker-compose-mariadb.yml -f docker-compose.ci.yml"
+          CF="--project-directory . -f compose/mariadb.yml -f compose/ci.yml"
           DB_SVC=mariadb
           docker compose $CF down --volumes 2>/dev/null || true
           docker compose $CF up -d

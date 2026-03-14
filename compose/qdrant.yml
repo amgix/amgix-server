@@ -1,8 +1,6 @@
-version: "3.9"
-
 x-api-image: &api-image
   build:
-    context: .
+    context: ..
     dockerfile: build/Dockerfile-api
     args:
       AMGIX_VERSION: 1.0.0-dev
@@ -10,7 +8,7 @@ x-api-image: &api-image
 
 x-encoder-image: &encoder-image
   build:
-    context: .
+    context: ..
     dockerfile: build/Dockerfile-encoder
     args:
       AMGIX_VERSION: 1.0.0-dev
@@ -96,5 +94,4 @@ services:
       - AMGIX_SERVICE=rpc
       # - AMGIX_LOG_LEVEL=INFO  # Optional: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: INFO)
       - HF_TOKEN=${HF_TOKEN}
-
 
