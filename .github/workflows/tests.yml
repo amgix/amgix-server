@@ -118,7 +118,8 @@ jobs:
         run: |
           rm -rf data
           mkdir -p data/qdrant data/amgix-cache data/postgres data/mariadb
-          touch data/postgresql.conf data/mariadb.cnf
+          echo "listen_addresses = '*'" > data/postgresql.conf
+          touch data/mariadb.cnf
           chmod -R a+rwx data
 
       - name: Start stack (backend=${{ matrix.backend }}, CPU)
