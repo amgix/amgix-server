@@ -2,6 +2,8 @@
 
 set -e
 
+cd "$(dirname "$0")/.."
+
 AMGIX_VERSION="v1.0.0-beta1.1"
 
 # export BUILDKIT_PROGRESS=plain
