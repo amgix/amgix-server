@@ -17,7 +17,8 @@ jobs:
         with:
           github-token: ${{ secrets.GIST_TOKEN }}
           script: |
-            const gistId = process.env.GIST_ID;
+            const gistId = (process.env.GIST_ID || '').trim();
+            if (!gistId) throw new Error('GIST_ID secret is not set');
             const runId = process.env.GITHUB_RUN_ID;
             const fileName = `run_${runId}.json`;
 
@@ -58,10 +59,14 @@ jobs:
               content: JSON.stringify({ requestedAt }, null, 2)
             };
 
-            await github.rest.gists.update({
+            const updateResp = await github.rest.gists.update({
               gist_id: gistId,
               files
             });
+            const updatedFiles = updateResp.data.files || {};
+            if (!updatedFiles[fileName]) {
+              throw new Error(`Gist update succeeded but file ${fileName} is missing. Check GIST_ID and GIST_TOKEN (gist scope).`);
+            }
 
   build-small:
     needs: signal-vm
