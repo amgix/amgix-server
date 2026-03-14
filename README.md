@@ -11,10 +11,14 @@ Amgix is built to run anywhere — from a single container to a distributed stac
 
 ## How It Works
 
-**0. Run Amgix:**
+**0. Run Amgix One:**  
+Amgix One packs the API, encoder, RabbitMQ, and Qdrant into one container — the easiest way to try Amgix or run it with modest requirements.
+
 ```bash
-docker run -d -p 8234:8234 amgixio/amgix-one:1
+docker run -d -p 8234:8234 -v /path/on/host:/data amgixio/amgix-one:1
 ```
+This persists data and caches Hugging Face models under `/data`.
+
 Use the short tag `1` for the latest 1.x release, or a specific version from [Releases](https://github.com/amgixio/amgix-server/releases) (e.g. `amgixio/amgix-one:v1.0.0`). For GPU support use `amgixio/amgix-one:1-gpu` (requires NVIDIA Container Toolkit).
 
 **1. Define your collection:**
