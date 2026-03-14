@@ -15,7 +15,7 @@ Amgix is built to run anywhere — from a single container to a distributed stac
 ```bash
 docker run -d -p 8234:8234 amgixio/amgix-one:1
 ```
-Use the short tag `1` for the latest 1.x release, or a specific version from [Releases](https://github.com/amgixio/amgix-server/releases) (e.g. `amgixio/amgix-one:v1.0.0`).
+Use the short tag `1` for the latest 1.x release, or a specific version from [Releases](https://github.com/amgixio/amgix-server/releases) (e.g. `amgixio/amgix-one:v1.0.0`). For GPU support use `amgixio/amgix-one:1-gpu` (requires NVIDIA Container Toolkit).
 
 **1. Define your collection:**
 ```json
