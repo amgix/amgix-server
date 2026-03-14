@@ -18,66 +18,8 @@ concurrency:
 
 jobs:
   signal-vm:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Request VM for self-hosted runner
-        uses: actions/github-script@v7
-        env:
-          GIST_ID: ${{ secrets.GIST_ID }}
-        with:
-          github-token: ${{ secrets.GIST_TOKEN }}
-          script: |
-            const gistId = (process.env.GIST_ID || '').trim();
-            if (!gistId) throw new Error('GIST_ID secret is not set');
-            const runId = process.env.GITHUB_RUN_ID;
-            const fileName = `run_${runId}.json`;
-
-            const now = new Date();
-            const requestedAt = now.toISOString();
-            const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-
-            const gist = await github.rest.gists.get({ gist_id: gistId });
-            const existingFiles = gist.data.files || {};
-
-            const files = {};
-
-            for (const [name, file] of Object.entries(existingFiles)) {
-              if (!name.startsWith('run_') || !name.endsWith('.json')) {
-                continue;
-              }
-              if (name === fileName) {
-                continue;
-              }
-              let ts = null;
-              try {
-                const parsed = JSON.parse(file.content || '{}');
-                if (parsed && typeof parsed.requestedAt === 'string') {
-                  const parsedDate = new Date(parsed.requestedAt);
-                  if (!Number.isNaN(parsedDate.getTime())) {
-                    ts = parsedDate;
-                  }
-                }
-              } catch {
-                // ignore parse errors and treat as stale
-              }
-              if (!ts || now - ts > ONE_DAY_MS) {
-                files[name] = null;
-              }
-            }
-
-            files[fileName] = {
-              content: JSON.stringify({ requestedAt }, null, 2)
-            };
-
-            await github.rest.gists.update({
-              gist_id: gistId,
-              files
-            });
-            const refetch = await github.rest.gists.get({ gist_id: gistId });
-            const refetchFiles = refetch.data.files || {};
-            if (!refetchFiles[fileName]) {
-              throw new Error(`Gist update returned success but GET does not show ${fileName}. Check GIST_ID and GIST_TOKEN (gist scope).`);
-            }
+    uses: ./.github/workflows/signal-vm.yml
+    secrets: inherit
 
   tests:
     needs: signal-vm
@@ -164,20 +106,5 @@ jobs:
   clear-vm-request:
     needs: prune-disk
     if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clear VM request for this run
-        uses: actions/github-script@v7
-        env:
-          GIST_ID: ${{ secrets.GIST_ID }}
-        with:
-          github-token: ${{ secrets.GIST_TOKEN }}
-          script: |
-            const gistId = process.env.GIST_ID;
-            const runId = process.env.GITHUB_RUN_ID;
-            const fileName = `run_${runId}.json`;
-
-            await github.rest.gists.update({
-              gist_id: gistId,
-              files: { [fileName]: null }
-            });
+    uses: ./.github/workflows/clear-vm-request.yml
+    secrets: inherit
