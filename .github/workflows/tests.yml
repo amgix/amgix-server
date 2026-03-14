@@ -63,29 +63,68 @@ jobs:
 
       - name: "Test backend: Qdrant"
         run: |
-          docker compose -f docker-compose-qdrant.yml -f docker-compose.ci.yml down --volumes 2>/dev/null || true
-          docker compose -f docker-compose-qdrant.yml -f docker-compose.ci.yml up -d
-          timeout 300 bash -c 'while true; do CODE=$(curl -sS -o /tmp/ready.json -w "%{http_code}" http://localhost:8234/v1/health/ready); [ "$CODE" = "200" ] && break; echo "Waiting for Qdrant... HTTP $CODE $(cat /tmp/ready.json 2>/dev/null)"; sleep 5; done; echo "Ready: $(cat /tmp/ready.json)"'
+          CF="-f docker-compose-qdrant.yml -f docker-compose.ci.yml"
+          DB_SVC=qdrant
+          docker compose $CF down --volumes 2>/dev/null || true
+          docker compose $CF up -d
+          set +e
+          timeout 300 bash -c 'while true; do >/tmp/ready.json; CODE=$(curl -sS -o /tmp/ready.json -w "%{http_code}" http://localhost:8234/v1/health/ready); [ "$CODE" = "200" ] && break; BODY=$([ "$CODE" = "000" ] && echo "(connection failed)" || cat /tmp/ready.json 2>/dev/null); echo "Waiting for Qdrant... HTTP $CODE $BODY"; sleep 5; done; echo "Ready: $(cat /tmp/ready.json)"'
+          R=$?
+          if [ $R -eq 124 ] && [ -f /tmp/ready.json ]; then
+            FAILED=""
+            [ "$(jq -r '.database' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED $DB_SVC"
+            [ "$(jq -r '.rabbitmq' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED rabbitmq"
+            [ "$(jq -r '.encoder' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED encoder"
+            [ "$(jq -r '.rpc' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED rpc"
+            if [ -n "$FAILED" ]; then echo "::error::Timed out. Logs for failed probes:"; docker compose $CF logs --tail=200 $FAILED; fi
+          fi
+          [ $R -eq 0 ] || exit $R
           . .venv/bin/activate && BACKEND=qdrant pytest
-          docker compose -f docker-compose-qdrant.yml -f docker-compose.ci.yml down --volumes
+          docker compose $CF down --volumes
 
       - name: "Test backend: PostgreSQL"
         if: always()
         run: |
-          docker compose -f docker-compose-pgsql.yml -f docker-compose.ci.yml down --volumes 2>/dev/null || true
-          docker compose -f docker-compose-pgsql.yml -f docker-compose.ci.yml up -d
-          timeout 300 bash -c 'while true; do CODE=$(curl -sS -o /tmp/ready.json -w "%{http_code}" http://localhost:8234/v1/health/ready); [ "$CODE" = "200" ] && break; echo "Waiting for PostgreSQL... HTTP $CODE $(cat /tmp/ready.json 2>/dev/null)"; sleep 5; done; echo "Ready: $(cat /tmp/ready.json)"'
+          CF="-f docker-compose-pgsql.yml -f docker-compose.ci.yml"
+          DB_SVC=postgres
+          docker compose $CF down --volumes 2>/dev/null || true
+          docker compose $CF up -d
+          set +e
+          timeout 300 bash -c 'while true; do >/tmp/ready.json; CODE=$(curl -sS -o /tmp/ready.json -w "%{http_code}" http://localhost:8234/v1/health/ready); [ "$CODE" = "200" ] && break; BODY=$([ "$CODE" = "000" ] && echo "(connection failed)" || cat /tmp/ready.json 2>/dev/null); echo "Waiting for PostgreSQL... HTTP $CODE $BODY"; sleep 5; done; echo "Ready: $(cat /tmp/ready.json)"'
+          R=$?
+          if [ $R -eq 124 ] && [ -f /tmp/ready.json ]; then
+            FAILED=""
+            [ "$(jq -r '.database' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED $DB_SVC"
+            [ "$(jq -r '.rabbitmq' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED rabbitmq"
+            [ "$(jq -r '.encoder' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED encoder"
+            [ "$(jq -r '.rpc' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED rpc"
+            if [ -n "$FAILED" ]; then echo "::error::Timed out. Logs for failed probes:"; docker compose $CF logs --tail=200 $FAILED; fi
+          fi
+          [ $R -eq 0 ] || exit $R
           . .venv/bin/activate && BACKEND=pgsql pytest
-          docker compose -f docker-compose-pgsql.yml -f docker-compose.ci.yml down --volumes
+          docker compose $CF down --volumes
 
       - name: "Test backend: MariaDB"
         if: always()
         run: |
-          docker compose -f docker-compose-mariadb.yml -f docker-compose.ci.yml down --volumes 2>/dev/null || true
-          docker compose -f docker-compose-mariadb.yml -f docker-compose.ci.yml up -d
-          timeout 300 bash -c 'while true; do CODE=$(curl -sS -o /tmp/ready.json -w "%{http_code}" http://localhost:8234/v1/health/ready); [ "$CODE" = "200" ] && break; echo "Waiting for MariaDB... HTTP $CODE $(cat /tmp/ready.json 2>/dev/null)"; sleep 5; done; echo "Ready: $(cat /tmp/ready.json)"'
+          CF="-f docker-compose-mariadb.yml -f docker-compose.ci.yml"
+          DB_SVC=mariadb
+          docker compose $CF down --volumes 2>/dev/null || true
+          docker compose $CF up -d
+          set +e
+          timeout 300 bash -c 'while true; do >/tmp/ready.json; CODE=$(curl -sS -o /tmp/ready.json -w "%{http_code}" http://localhost:8234/v1/health/ready); [ "$CODE" = "200" ] && break; BODY=$([ "$CODE" = "000" ] && echo "(connection failed)" || cat /tmp/ready.json 2>/dev/null); echo "Waiting for MariaDB... HTTP $CODE $BODY"; sleep 5; done; echo "Ready: $(cat /tmp/ready.json)"'
+          R=$?
+          if [ $R -eq 124 ] && [ -f /tmp/ready.json ]; then
+            FAILED=""
+            [ "$(jq -r '.database' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED $DB_SVC"
+            [ "$(jq -r '.rabbitmq' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED rabbitmq"
+            [ "$(jq -r '.encoder' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED encoder"
+            [ "$(jq -r '.rpc' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED rpc"
+            if [ -n "$FAILED" ]; then echo "::error::Timed out. Logs for failed probes:"; docker compose $CF logs --tail=200 $FAILED; fi
+          fi
+          [ $R -eq 0 ] || exit $R
           . .venv/bin/activate && BACKEND=mariadb pytest
-          docker compose -f docker-compose-mariadb.yml -f docker-compose.ci.yml down --volumes
+          docker compose $CF down --volumes
 
   # prune-disk:
   #   needs: tests
