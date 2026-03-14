@@ -3,7 +3,7 @@
 #
 # To require this workflow to pass before merging PRs:
 #   Settings → Branches → Branch protection rule for main → Require status checks → add "Test".
-name: Test
+name: Run Tests
 
 on:
   push:
@@ -147,8 +147,18 @@ jobs:
         if: always()
         run: docker compose -f ${{ matrix.compose_file }} -f docker-compose.ci.yml down --volumes
 
-  clear-vm-request:
+  prune-disk:
     needs: tests
+    if: always()
+    runs-on: ubuntu-x1
+    steps:
+      - name: Remove amgix images and prune system
+        run: |
+          docker image ls -q --filter "reference=amgix*" | xargs -r docker rmi -f || true
+          docker system prune -f
+
+  clear-vm-request:
+    needs: prune-disk
     if: always()
     runs-on: ubuntu-latest
     steps:
