@@ -3,7 +3,7 @@
 services:
   encoder:
     build:
-      context: ..
+      context: .
       dockerfile: build/Dockerfile-encoder
       args:
         AMGIX_VERSION: 1.0.0-dev
@@ -18,7 +18,7 @@ services:
 
   rpc:
     build:
-      context: ..
+      context: .
       dockerfile: build/Dockerfile-encoder
       args:
         AMGIX_VERSION: 1.0.0-dev
