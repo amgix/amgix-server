@@ -65,13 +65,14 @@ jobs:
               content: JSON.stringify({ requestedAt }, null, 2)
             };
 
-            const updateResp = await github.rest.gists.update({
+            await github.rest.gists.update({
               gist_id: gistId,
               files
             });
-            const updatedFiles = updateResp.data.files || {};
-            if (!updatedFiles[fileName]) {
-              throw new Error(`Gist update succeeded but file ${fileName} is missing. Check GIST_ID and GIST_TOKEN (gist scope).`);
+            const refetch = await github.rest.gists.get({ gist_id: gistId });
+            const refetchFiles = refetch.data.files || {};
+            if (!refetchFiles[fileName]) {
+              throw new Error(`Gist update returned success but GET does not show ${fileName}. Check GIST_ID and GIST_TOKEN (gist scope).`);
             }
 
   tests:
