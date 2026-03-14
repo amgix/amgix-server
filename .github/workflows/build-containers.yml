@@ -56,9 +56,12 @@ jobs:
             exit 1
           fi
           REF="${{ github.ref_name }}"
+          VERSION_NO_V="${REF#v}"
           echo "VERSION=$REF" >> $GITHUB_ENV
-          echo "AMGIX_VERSION=${REF#v}" >> $GITHUB_ENV
-          echo "Image tag: $REF, build-arg AMGIX_VERSION=${REF#v}"
+          echo "AMGIX_VERSION=$VERSION_NO_V" >> $GITHUB_ENV
+          echo "SHORT_MAJOR=$(echo "$VERSION_NO_V" | cut -d. -f1)" >> $GITHUB_ENV
+          echo "SHORT_MINOR=$(echo "$VERSION_NO_V" | cut -d. -f1-2)" >> $GITHUB_ENV
+          echo "Image tag: $REF, build-arg AMGIX_VERSION=$VERSION_NO_V"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -76,7 +79,10 @@ jobs:
           context: .
           file: build/Dockerfile-api
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-api:${{ env.VERSION }}
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-api:${{ env.VERSION }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-api:${{ env.SHORT_MINOR }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-api:${{ env.SHORT_MAJOR }}
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
 
@@ -86,7 +92,10 @@ jobs:
           context: .
           file: build/Dockerfile-encoder
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}-noembed
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}-noembed
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.SHORT_MINOR }}-noembed
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.SHORT_MAJOR }}-noembed
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
             AMGIX_BUILD_FE=
@@ -98,7 +107,10 @@ jobs:
           context: .
           file: build/one/Dockerfile-one
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.VERSION }}-noembed
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.VERSION }}-noembed
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.SHORT_MINOR }}-noembed
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.SHORT_MAJOR }}-noembed
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
             AMGIX_BUILD_ST=
@@ -123,9 +135,12 @@ jobs:
             exit 1
           fi
           REF="${{ github.ref_name }}"
+          VERSION_NO_V="${REF#v}"
           echo "VERSION=$REF" >> $GITHUB_ENV
-          echo "AMGIX_VERSION=${REF#v}" >> $GITHUB_ENV
-          echo "Image tag: $REF, build-arg AMGIX_VERSION=${REF#v}"
+          echo "AMGIX_VERSION=$VERSION_NO_V" >> $GITHUB_ENV
+          echo "SHORT_MAJOR=$(echo "$VERSION_NO_V" | cut -d. -f1)" >> $GITHUB_ENV
+          echo "SHORT_MINOR=$(echo "$VERSION_NO_V" | cut -d. -f1-2)" >> $GITHUB_ENV
+          echo "Image tag: $REF, build-arg AMGIX_VERSION=$VERSION_NO_V"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -142,7 +157,10 @@ jobs:
           context: .
           file: build/Dockerfile-encoder
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}-gpu
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}-gpu
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.SHORT_MINOR }}-gpu
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.SHORT_MAJOR }}-gpu
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
             AMGIX_BUILD_FE=GPU
@@ -168,9 +186,12 @@ jobs:
             exit 1
           fi
           REF="${{ github.ref_name }}"
+          VERSION_NO_V="${REF#v}"
           echo "VERSION=$REF" >> $GITHUB_ENV
-          echo "AMGIX_VERSION=${REF#v}" >> $GITHUB_ENV
-          echo "Image tag: $REF, build-arg AMGIX_VERSION=${REF#v}"
+          echo "AMGIX_VERSION=$VERSION_NO_V" >> $GITHUB_ENV
+          echo "SHORT_MAJOR=$(echo "$VERSION_NO_V" | cut -d. -f1)" >> $GITHUB_ENV
+          echo "SHORT_MINOR=$(echo "$VERSION_NO_V" | cut -d. -f1-2)" >> $GITHUB_ENV
+          echo "Image tag: $REF, build-arg AMGIX_VERSION=$VERSION_NO_V"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -187,7 +208,10 @@ jobs:
           context: .
           file: build/Dockerfile-encoder
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.VERSION }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.SHORT_MINOR }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.SHORT_MAJOR }}
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
             AMGIX_BUILD_FE=CPU
@@ -213,9 +237,12 @@ jobs:
             exit 1
           fi
           REF="${{ github.ref_name }}"
+          VERSION_NO_V="${REF#v}"
           echo "VERSION=$REF" >> $GITHUB_ENV
-          echo "AMGIX_VERSION=${REF#v}" >> $GITHUB_ENV
-          echo "Image tag: $REF, build-arg AMGIX_VERSION=${REF#v}"
+          echo "AMGIX_VERSION=$VERSION_NO_V" >> $GITHUB_ENV
+          echo "SHORT_MAJOR=$(echo "$VERSION_NO_V" | cut -d. -f1)" >> $GITHUB_ENV
+          echo "SHORT_MINOR=$(echo "$VERSION_NO_V" | cut -d. -f1-2)" >> $GITHUB_ENV
+          echo "Image tag: $REF, build-arg AMGIX_VERSION=$VERSION_NO_V"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -232,7 +259,10 @@ jobs:
           context: .
           file: build/one/Dockerfile-one
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.VERSION }}
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.VERSION }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.SHORT_MINOR }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.SHORT_MAJOR }}
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
             AMGIX_BUILD_ST=CPU
@@ -257,9 +287,12 @@ jobs:
             exit 1
           fi
           REF="${{ github.ref_name }}"
+          VERSION_NO_V="${REF#v}"
           echo "VERSION=$REF" >> $GITHUB_ENV
-          echo "AMGIX_VERSION=${REF#v}" >> $GITHUB_ENV
-          echo "Image tag: $REF, build-arg AMGIX_VERSION=${REF#v}"
+          echo "AMGIX_VERSION=$VERSION_NO_V" >> $GITHUB_ENV
+          echo "SHORT_MAJOR=$(echo "$VERSION_NO_V" | cut -d. -f1)" >> $GITHUB_ENV
+          echo "SHORT_MINOR=$(echo "$VERSION_NO_V" | cut -d. -f1-2)" >> $GITHUB_ENV
+          echo "Image tag: $REF, build-arg AMGIX_VERSION=$VERSION_NO_V"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -276,10 +309,25 @@ jobs:
           context: .
           file: build/one/Dockerfile-one
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.VERSION }}-gpu
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.VERSION }}-gpu
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.SHORT_MINOR }}-gpu
+            ${{ secrets.DOCKERHUB_USERNAME }}/amgix-one:${{ env.SHORT_MAJOR }}-gpu
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
             AMGIX_BUILD_ST=GPU
+
+  create-release:
+    needs: build-one-gpu
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
 
   clear-vm-request:
     needs: build-one-gpu
