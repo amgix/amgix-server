@@ -26,24 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        backend:
-          - qdrant
-          - pgsql
-          - mariadb
-        include:
-          - backend: qdrant
-            compose_file: docker-compose-qdrant.yml
-          - backend: pgsql
-            compose_file: docker-compose-pgsql.yml
-          - backend: mariadb
-            compose_file: docker-compose-mariadb.yml
 
     env:
-      BACKEND: ${{ matrix.backend }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
     steps:
@@ -74,24 +58,34 @@ jobs:
           touch data/mariadb.cnf
           chmod -R a+rwx data
 
-      - name: Start stack (backend=${{ matrix.backend }}, CPU)
-        run: docker compose -f ${{ matrix.compose_file }} -f docker-compose.ci.yml up -d --build
+      - name: Build shared images (api, encoder)
+        run: docker compose -f docker-compose-qdrant.yml -f docker-compose.ci.yml build
 
-      - name: Wait for API to be ready
+      - name: Test backend: qdrant
         run: |
-          timeout 300 bash -c '
-            until curl -fsS http://localhost:8234/v1/health/ready >/dev/null 2>&1; do
-              echo "Waiting for backend=${{ matrix.backend }}..."
-              sleep 5
-            done
-          '
+          docker compose -f docker-compose-qdrant.yml -f docker-compose.ci.yml down --volumes 2>/dev/null || true
+          docker compose -f docker-compose-qdrant.yml -f docker-compose.ci.yml up -d
+          timeout 300 bash -c 'until curl -fsS http://localhost:8234/v1/health/ready >/dev/null 2>&1; do echo "Waiting for qdrant..."; sleep 5; done'
+          . .venv/bin/activate && BACKEND=qdrant pytest
+          docker compose -f docker-compose-qdrant.yml -f docker-compose.ci.yml down --volumes
 
-      - name: Run pytest (backend=${{ matrix.backend }})
-        run: . .venv/bin/activate && pytest
-
-      - name: Stop stack
+      - name: Test backend: pgsql
         if: always()
-        run: docker compose -f ${{ matrix.compose_file }} -f docker-compose.ci.yml down --volumes
+        run: |
+          docker compose -f docker-compose-pgsql.yml -f docker-compose.ci.yml down --volumes 2>/dev/null || true
+          docker compose -f docker-compose-pgsql.yml -f docker-compose.ci.yml up -d
+          timeout 300 bash -c 'until curl -fsS http://localhost:8234/v1/health/ready >/dev/null 2>&1; do echo "Waiting for pgsql..."; sleep 5; done'
+          . .venv/bin/activate && BACKEND=pgsql pytest
+          docker compose -f docker-compose-pgsql.yml -f docker-compose.ci.yml down --volumes
+
+      - name: Test backend: mariadb
+        if: always()
+        run: |
+          docker compose -f docker-compose-mariadb.yml -f docker-compose.ci.yml down --volumes 2>/dev/null || true
+          docker compose -f docker-compose-mariadb.yml -f docker-compose.ci.yml up -d
+          timeout 300 bash -c 'until curl -fsS http://localhost:8234/v1/health/ready >/dev/null 2>&1; do echo "Waiting for mariadb..."; sleep 5; done'
+          . .venv/bin/activate && BACKEND=mariadb pytest
+          docker compose -f docker-compose-mariadb.yml -f docker-compose.ci.yml down --volumes
 
   # prune-disk:
   #   needs: tests
