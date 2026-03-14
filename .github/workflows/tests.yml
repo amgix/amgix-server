@@ -61,7 +61,7 @@ jobs:
       - name: Build shared images (api, encoder)
         run: docker compose -f docker-compose-qdrant.yml -f docker-compose.ci.yml build
 
-      - name: Test backend: qdrant
+      - name: "Test backend: qdrant"
         run: |
           docker compose -f docker-compose-qdrant.yml -f docker-compose.ci.yml down --volumes 2>/dev/null || true
           docker compose -f docker-compose-qdrant.yml -f docker-compose.ci.yml up -d
@@ -69,7 +69,7 @@ jobs:
           . .venv/bin/activate && BACKEND=qdrant pytest
           docker compose -f docker-compose-qdrant.yml -f docker-compose.ci.yml down --volumes
 
-      - name: Test backend: pgsql
+      - name: "Test backend: pgsql"
         if: always()
         run: |
           docker compose -f docker-compose-pgsql.yml -f docker-compose.ci.yml down --volumes 2>/dev/null || true
@@ -78,7 +78,7 @@ jobs:
           . .venv/bin/activate && BACKEND=pgsql pytest
           docker compose -f docker-compose-pgsql.yml -f docker-compose.ci.yml down --volumes
 
-      - name: Test backend: mariadb
+      - name: "Test backend: mariadb"
         if: always()
         run: |
           docker compose -f docker-compose-mariadb.yml -f docker-compose.ci.yml down --volumes 2>/dev/null || true
