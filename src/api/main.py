@@ -180,7 +180,15 @@ async def health() -> OkResponse:
     return OkResponse(ok=True)
 
 
-@shared_router.get("/health/ready", operation_id="health_ready")
+@shared_router.get(
+    "/health/ready",
+    operation_id="health_ready",
+    responses={
+        200: {"description": "Fully ready", "model": ReadyResponse},
+        218: {"description": "Partial ready (some encoder/rpc probes not ready)", "model": ReadyResponse},
+        503: {"description": "Service Unavailable (infra down or all encoder types down)", "model": ReadyResponse},
+    },
+)
 async def readiness_check() -> ReadyResponse:
     """Check if service is ready to handle requests.
 
