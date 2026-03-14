@@ -45,6 +45,17 @@ CollectionName = Annotated[str, Path(...,
 class OkResponse(BaseModel):
     ok: bool
 
+# 218 = partial readiness (some encoder/rpc probes not ready); 200 = fully ready
+HTTP_STATUS_PARTIAL_READY = 218
+
+
+class ReadyResponse(BaseModel):
+    database: bool
+    rabbitmq: bool
+    encoder: bool
+    rpc: bool
+    ready: bool
+
 class VersionResponse(BaseModel):
     version: str
 
@@ -170,51 +181,58 @@ async def health() -> OkResponse:
 
 
 @shared_router.get("/health/ready", operation_id="health_ready")
-async def readiness_check() -> OkResponse:
+async def readiness_check() -> ReadyResponse:
     """Check if service is ready to handle requests.
-    
-    Verifies connectivity to required dependencies:
-    - Database (Qdrant/PostgreSQL/MariaDB)
-    - RabbitMQ message broker
-    
-    Returns:
-        An `OkResponse` object with ok=True if all dependencies are healthy.
-        
-    Raises:
-        HTTPException: 503 if any dependency is unavailable.
+
+    Runs four probes: database, rabbitmq, encoder (ping-encoder), rpc (ping-rpc).
+    Returns 200 if all pass (fully ready), 218 if some fail (partial ready).
+    Response body always includes all four probe results and a ready flag.
     """
-    checks = []
-    
-    # Check database connection
+    db_healthy = False
     try:
         db_healthy = await _database.is_connected()
-        checks.append(("database", db_healthy))
     except Exception as e:
         logger.error(f"Database health check failed: {e}")
-        checks.append(("database", False))
-    
-    # Check RabbitMQ connection using the existing publish channel
+
+    rabbitmq_healthy = False
     try:
         rabbitmq_healthy = (
-            not _bunny_talk.connection.is_closed 
+            not _bunny_talk.connection.is_closed
             and not _bunny_talk.publish_channel.is_closed
         )
-        checks.append(("rabbitmq", rabbitmq_healthy))
     except Exception as e:
         logger.error(f"RabbitMQ health check failed: {e}")
-        checks.append(("rabbitmq", False))
-    
-    # All checks must pass
-    all_healthy = all(healthy for _, healthy in checks)
-    
-    if not all_healthy:
-        failed = [name for name, healthy in checks if not healthy]
-        raise HTTPException(
-            status_code=503, 
-            detail=f"Service unavailable. Failed checks: {', '.join(failed)}"
-        )
-    
-    return OkResponse(ok=True)
+
+    encoder_healthy = False
+    if rabbitmq_healthy:
+        try:
+            await _bunny_talk.rpc("ping-encoder", timeout=1.0)
+            encoder_healthy = True
+        except Exception:
+            pass
+
+    rpc_healthy = False
+    if rabbitmq_healthy:
+        try:
+            await _bunny_talk.rpc("ping-rpc", timeout=1.0)
+            rpc_healthy = True
+        except Exception:
+            pass
+
+    ready = db_healthy and rabbitmq_healthy and encoder_healthy and rpc_healthy
+    body = ReadyResponse(
+        database=db_healthy,
+        rabbitmq=rabbitmq_healthy,
+        encoder=encoder_healthy,
+        rpc=rpc_healthy,
+        ready=ready,
+    )
+    # 503 if infra down (db/rabbit) or no encoder type at all; 218 if one encoder type up (partial); 200 if all up
+    if not db_healthy or not rabbitmq_healthy or (not encoder_healthy and not rpc_healthy):
+        return JSONResponse(status_code=503, content=body.model_dump())
+    if ready:
+        return JSONResponse(status_code=200, content=body.model_dump())
+    return JSONResponse(status_code=HTTP_STATUS_PARTIAL_READY, content=body.model_dump())
 
 
 # Collections

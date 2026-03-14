@@ -60,7 +60,14 @@ class EncoderService(EncoderBase):
             prefetch_count=1,
             single_active_consumer=True
         )
+        await self.bunny_talk.listen(
+            routing_key="ping-encoder",
+            handler=self.ping
+        )
         self.logger.info("Registered document_upsert handler for 'documents' and 'documents-bulk' queues")
+
+    async def ping(self) -> bool:
+        return True
 
     async def document_upsert(self, queue_id: str) -> None:
         try_count = 0  # Initialize try_count outside try/except
@@ -465,7 +472,14 @@ class RpcService(EncoderBase):
             handler=self.document_upsert_sync,
             prefetch_count=2
         )
+        await self.bunny_talk.listen(
+            routing_key="ping-rpc",
+            handler=self.ping
+        )
         self.logger.info("Registered RPC handlers (search, validate_models, document_sync)")
+
+    async def ping(self) -> bool:
+        return True
 
 
     async def search(self, collection_name: str, query: SearchQuery) -> List[SearchResult]:
