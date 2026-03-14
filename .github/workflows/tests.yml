@@ -17,13 +17,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  signal-vm:
-    uses: ./.github/workflows/signal-vm.yml
-    secrets: inherit
+  # signal-vm:
+  #   uses: ./.github/workflows/signal-vm.yml
+  #   secrets: inherit
 
   tests:
-    needs: signal-vm
-    runs-on: ubuntu-x1
+    # needs: signal-vm
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     strategy:
@@ -93,18 +93,18 @@ jobs:
         if: always()
         run: docker compose -f ${{ matrix.compose_file }} -f docker-compose.ci.yml down --volumes
 
-  prune-disk:
-    needs: tests
-    if: always()
-    runs-on: ubuntu-x1
-    steps:
-      - name: Remove amgix images and prune system
-        run: |
-          docker image ls -q --filter "reference=amgix*" | xargs -r docker rmi -f || true
-          docker system prune -f
+  # prune-disk:
+  #   needs: tests
+  #   if: always()
+  #   runs-on: ubuntu-x1
+  #   steps:
+  #     - name: Remove amgix images and prune system
+  #       run: |
+  #         docker image ls -q --filter "reference=amgix*" | xargs -r docker rmi -f || true
+  #         docker system prune -f
 
-  clear-vm-request:
-    needs: prune-disk
-    if: always()
-    uses: ./.github/workflows/clear-vm-request.yml
-    secrets: inherit
+  # clear-vm-request:
+  #   needs: prune-disk
+  #   if: always()
+  #   uses: ./.github/workflows/clear-vm-request.yml
+  #   secrets: inherit
