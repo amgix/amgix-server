@@ -65,7 +65,7 @@ jobs:
         run: |
           docker compose -f docker-compose-qdrant.yml -f docker-compose.ci.yml down --volumes 2>/dev/null || true
           docker compose -f docker-compose-qdrant.yml -f docker-compose.ci.yml up -d
-          timeout 300 bash -c 'until [ "$(curl -sS -o /dev/null -w "%{http_code}" http://localhost:8234/v1/health/ready)" = "200" ]; do echo "Waiting for Qdrant..."; sleep 5; done'
+          timeout 300 bash -c 'while true; do CODE=$(curl -sS -o /tmp/ready.json -w "%{http_code}" http://localhost:8234/v1/health/ready); [ "$CODE" = "200" ] && break; echo "Waiting for Qdrant... HTTP $CODE $(cat /tmp/ready.json 2>/dev/null)"; sleep 5; done; echo "Ready: $(cat /tmp/ready.json)"'
           . .venv/bin/activate && BACKEND=qdrant pytest
           docker compose -f docker-compose-qdrant.yml -f docker-compose.ci.yml down --volumes
 
@@ -74,7 +74,7 @@ jobs:
         run: |
           docker compose -f docker-compose-pgsql.yml -f docker-compose.ci.yml down --volumes 2>/dev/null || true
           docker compose -f docker-compose-pgsql.yml -f docker-compose.ci.yml up -d
-          timeout 300 bash -c 'until [ "$(curl -sS -o /dev/null -w "%{http_code}" http://localhost:8234/v1/health/ready)" = "200" ]; do echo "Waiting for PostgreSQL..."; sleep 5; done'
+          timeout 300 bash -c 'while true; do CODE=$(curl -sS -o /tmp/ready.json -w "%{http_code}" http://localhost:8234/v1/health/ready); [ "$CODE" = "200" ] && break; echo "Waiting for PostgreSQL... HTTP $CODE $(cat /tmp/ready.json 2>/dev/null)"; sleep 5; done; echo "Ready: $(cat /tmp/ready.json)"'
           . .venv/bin/activate && BACKEND=pgsql pytest
           docker compose -f docker-compose-pgsql.yml -f docker-compose.ci.yml down --volumes
 
@@ -83,7 +83,7 @@ jobs:
         run: |
           docker compose -f docker-compose-mariadb.yml -f docker-compose.ci.yml down --volumes 2>/dev/null || true
           docker compose -f docker-compose-mariadb.yml -f docker-compose.ci.yml up -d
-          timeout 300 bash -c 'until [ "$(curl -sS -o /dev/null -w "%{http_code}" http://localhost:8234/v1/health/ready)" = "200" ]; do echo "Waiting for MariaDB..."; sleep 5; done'
+          timeout 300 bash -c 'while true; do CODE=$(curl -sS -o /tmp/ready.json -w "%{http_code}" http://localhost:8234/v1/health/ready); [ "$CODE" = "200" ] && break; echo "Waiting for MariaDB... HTTP $CODE $(cat /tmp/ready.json 2>/dev/null)"; sleep 5; done; echo "Ready: $(cat /tmp/ready.json)"'
           . .venv/bin/activate && BACKEND=mariadb pytest
           docker compose -f docker-compose-mariadb.yml -f docker-compose.ci.yml down --volumes
 
