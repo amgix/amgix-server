@@ -3,9 +3,9 @@
 > **Amgix** (pronounced `a-MAG-ix`) - short for Amalgam Index  
 > *amalgam: a mixture or blend of different elements*
 
-Amgix is a hybrid search engine for applications. It provides a production-ready system to ingest, embed, and search documents — combining keyword and semantic retrieval in a single stack.
+Amgix is a hybrid search engine for applications. It provides a unified stack for ingestion, embedding, and search — combining keyword and semantic retrieval in an architecture that can scale from a single container to distributed services.
 
-Amgix is built to run anywhere — from a single container to a distributed stack — so you can add fast, relevant, modern search to any application without sacrificing search quality or operational simplicity.
+Amgix lets you add fast, relevant, modern search to your application without stitching together separate systems for indexing, embeddings, and retrieval.
 
 ---
 
@@ -19,7 +19,7 @@ docker run -d -p 8234:8234 -v /path/on/host:/data amgixio/amgix-one:1
 ```
 This persists data and caches Hugging Face models under `/data`.
 
-Use the short tag `1` for the latest 1.x release, or a specific version from [Releases](https://github.com/amgixio/amgix-server/releases) (e.g. `amgixio/amgix-one:v1.0.0`). For GPU support use `amgixio/amgix-one:1-gpu` (requires NVIDIA Container Toolkit).
+Use the short tag `1` for the latest 1.x release, or a specific version from [Releases](https://github.com/amgix/amgix-server/releases) (e.g. `amgixio/amgix-one:v1.0.0`). For GPU support use `amgixio/amgix-one:1-gpu` (requires NVIDIA Container Toolkit).
 
 **1. Define your collection:**
 ```json
@@ -34,12 +34,28 @@ POST /v1/collections/products
 
 **2. Upload your data:**
 ```json
-POST /v1/collections/products/documents
+POST /v1/collections/products/documents/bulk
 {
-  "id": "part-001",
-  "timestamp": "2026-01-01T00:00:00Z",
-  "name": "Pin 12LP'-x03/5-XL",
-  "content": "Precision pinch roller assembly for industrial use"
+  "documents": [
+    {
+      "id": "part-001",
+      "timestamp": "2026-03-15T00:00:00Z",
+      "name": "Roller 12LP'-x03/5-XL",
+      "content": "Precision pinch roller assembly for manufacturing."
+    },
+    {
+      "id": "part-002",
+      "timestamp": "2026-03-15T00:00:00Z",
+      "name": "Bearing 12LP'-y03/5-XL",
+      "content": "Deep groove ball bearing, double shielded."
+    },
+    {
+      "id": "part-003",
+      "timestamp": "2026-03-15T00:00:00Z",
+      "name": "Belt 12LP'-x03/8-MD",
+      "content": "Synchronous timing belt for power transmission."
+    }
+  ]
 }
 ```
 
@@ -47,11 +63,18 @@ POST /v1/collections/products/documents
 ```json
 POST /v1/collections/products/search
 {
-  "query": "pinch roller"
+  "query": "12lpy03"
 }
 ```
+*Amgix's built-in keyword tokenizer handles missing punctuation to correctly return the Bearing (`12LP'-y03/5-XL`).*
 
-That's it. Amgix handles vectorization, fusion, and ranking.
+```json
+POST /v1/collections/products/search
+{
+  "query": "motor energy transfer loop"
+}
+```
+*Even without keyword overlap, Amgix's semantic vector understands the concept and returns the Belt (`Synchronous timing belt for power transmission`).*
 
 ---
 
@@ -66,8 +89,15 @@ Because integrating modern search into applications is hard. You usually have to
 5. Tune relevance for real queries, filters, typos, and identifier-heavy data.
 6. Keep the whole thing in sync, reliable, and scalable.
 
-Amgix was built to make this easier. It combines ingestion pipelines, on-the-fly embeddings, hybrid retrieval, ranking, and search in one system that can scale with your needs.
+Amgix was built to solve these headaches. Instead of stitching together your own infrastructure, you get a single unified stack with:
+
+- **Built-in ingestion queues:** Async processing with automatic retries and deduplication.
+- **Adaptive model orchestration:** Models load and rebalance across nodes automatically based on demand.
+- **Server-side fusion:** One API call handles query vectorization, semantic search, keyword search (including our custom tokenizer for messy identifier data), and ranking.
+- **Backend Agnostic:** Run on Postgres, MariaDB, or Qdrant without changing your code.
 
 ---
 
-More documentation is coming soon...
+Visit [Documentation](https://docs.amgix.io/)
+
+Clients: [Typescript](https://github.com/amgix/amgix-client-typescript/), [Python](https://github.com/amgix/amgix-client-python/)
