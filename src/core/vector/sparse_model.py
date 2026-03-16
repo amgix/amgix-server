@@ -8,7 +8,7 @@ import re
 
 from .vector_base import VectorBase
 from ..models.vector import VectorConfigInternal
-from ..common import AMGIXCache, MODEL_CACHE_SIZE, MODEL_CACHE_TTL, DEFAULT_SPARSE_TOP_K, SPARSE_MODEL_BATCH_SIZE, HF_CACHE_DIR
+from ..common import AMGIXCache, MODEL_CACHE_SIZE, MODEL_CACHE_TTL, SPARSE_MODEL_BATCH_SIZE, HF_CACHE_DIR
 
 # Check safetensors enforcement setting once at module level
 REQUIRE_SAFETENSORS = os.getenv('AMGIX_SAFETENSORS', 'false').lower() == 'true'
@@ -24,7 +24,7 @@ class SparseModelVector(VectorBase):
     - Aggregate by taking max over positions
     - Apply ReLU and log1p to compress dynamic range
     - Exclude special token ids
-    - Keep top-K indices (K from config.top_k, defaults to DEFAULT_SPARSE_TOP_K)
+    - Keep top-K indices (K from config.top_k)
     - L2-normalize values for consistency with other sparse vectors
     """
 

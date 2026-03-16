@@ -59,8 +59,7 @@ WMTR_WORD_WEIGHT_PERCENTAGE = 90  # Percentage of top_k allocated to word weight
 # Numeric limits
 MAX_TOP_K_VALUE = 10000  # Maximum value for top_k parameter
 MAX_VECTOR_DIMENSIONS = 8192  # Maximum vector dimensions
-DEFAULT_TOP_K = 512  # Default top_k for sparse vectors
-DEFAULT_SPARSE_TOP_K = 2048  # Default top_k for sparse models
+DEFAULT_TOP_K = 128  # Default top_k for sparse vectors
 TOKEN_HASH_RANGE = 4294967291  # Large prime number close to 2^32 to reduce hash collisions
 
 # Batch processing
