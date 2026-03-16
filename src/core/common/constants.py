@@ -79,7 +79,6 @@ RPC_SERVICE_NAME = f"{APP_PREFIX}-rpc-service"
 CACHE_BASE_DIR = "/data/amgix/cache"
 HF_CACHE_DIR = f"{CACHE_BASE_DIR}/huggingface"
 CUDA_CACHE_DIR = f"{CACHE_BASE_DIR}/cuda"
-FASTEMBED_CACHE_DIR = f"{CACHE_BASE_DIR}/fastembed"
 
 # Document ID namespace for UUID5 generation
 DOC_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, APP_NAME)

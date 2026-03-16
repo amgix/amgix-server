@@ -8,8 +8,6 @@ from .whitespace import WhiteSpaceVector
 from .wmtr import WMTRVector
 from .dense_custom import CustomDenseVector
 from .sparse_custom import CustomSparseVector
-from .dense_fastembed import DenseFastEmbedVector
-from .sparse_fastembed import SparseFastEmbedVector
 
 __all__ = [
     "VectorBase", 
@@ -19,13 +17,7 @@ __all__ = [
     "SparseModelVector", 
     "CustomDenseVector", 
     "CustomSparseVector", 
-    "DenseFastEmbedVector", 
-    "SparseFastEmbedVector",
     "FullTextVector",
     "WhiteSpaceVector",
     "WMTRVector",
-    "CustomDenseVector",
-    "CustomSparseVector",
-    "DenseFastEmbedVector",
-    "SparseFastEmbedVector",
-    ]
+]

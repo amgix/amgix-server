@@ -20,29 +20,25 @@ class VectorType:
     DENSE_CUSTOM = "dense_custom"      # User-provided dense vectors
     SPARSE_CUSTOM = "sparse_custom"    # User-provided sparse vectors
     
-    # FastEmbed vector types
-    DENSE_FASTEMBED = "dense_fastembed"    # FastEmbed dense vectors
-    SPARSE_FASTEMBED = "sparse_fastembed"  # FastEmbed sparse vectors
-    
     @classmethod
     def all(cls) -> list[str]:
         """Return all available vector types."""
-        return [cls.DENSE_MODEL, cls.SPARSE_MODEL, cls.FULL_TEXT, cls.TRIGRAMS, cls.WHITESPACE, cls.WMTR, cls.KEYWORD, cls.DENSE_CUSTOM, cls.SPARSE_CUSTOM, cls.DENSE_FASTEMBED, cls.SPARSE_FASTEMBED]
+        return [cls.DENSE_MODEL, cls.SPARSE_MODEL, cls.FULL_TEXT, cls.TRIGRAMS, cls.WHITESPACE, cls.WMTR, cls.KEYWORD, cls.DENSE_CUSTOM, cls.SPARSE_CUSTOM]
     
     @classmethod
     def sparse_types(cls) -> list[str]:
         """Return all sparse vector types."""
-        return [cls.SPARSE_MODEL, cls.FULL_TEXT, cls.TRIGRAMS, cls.WHITESPACE, cls.WMTR, cls.KEYWORD, cls.SPARSE_CUSTOM, cls.SPARSE_FASTEMBED]
+        return [cls.SPARSE_MODEL, cls.FULL_TEXT, cls.TRIGRAMS, cls.WHITESPACE, cls.WMTR, cls.KEYWORD, cls.SPARSE_CUSTOM]
     
     @classmethod
     def dense_types(cls) -> list[str]:
         """Return all dense vector types."""
-        return [cls.DENSE_MODEL, cls.DENSE_CUSTOM, cls.DENSE_FASTEMBED]
+        return [cls.DENSE_MODEL, cls.DENSE_CUSTOM]
     
     @classmethod
     def transformer_based(cls) -> list[str]:
         """Return vector types that use transformer models."""
-        return [cls.DENSE_MODEL, cls.SPARSE_MODEL, cls.DENSE_FASTEMBED, cls.SPARSE_FASTEMBED]
+        return [cls.DENSE_MODEL, cls.SPARSE_MODEL]
     
     @classmethod
     def custom_tokenization(cls) -> list[str]:
@@ -71,8 +67,6 @@ VectorTypeLiteral = Literal[
     VectorType.KEYWORD,
     VectorType.DENSE_CUSTOM,
     VectorType.SPARSE_CUSTOM,
-    # VectorType.DENSE_FASTEMBED,
-    # VectorType.SPARSE_FASTEMBED
 ]
 
 # Dense vector distance metrics

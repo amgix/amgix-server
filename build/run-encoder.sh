@@ -29,25 +29,25 @@ else
   echo "NVIDIA GPU found"
 fi
 
-# Run the appropriate service based on the argument
-case "${AMGIX_SERVICE:-"all"}" in
-  "encoder")
-    echo "Starting EncoderService only..."
-    exec python -m src.encoder.encoder --service encoder
+# Run the appropriate service based on AMGIX_ENCODER_ROLE
+case "${AMGIX_ENCODER_ROLE:-"all"}" in
+  "index")
+    echo "Starting EncoderService only (index role)..."
+    exec python -m src.encoder.encoder --service index
     ;;
-  "rpc")
-    echo "Starting RpcService only..."
-    exec python -m src.encoder.encoder --service rpc
+  "query")
+    echo "Starting RpcService only (query role)..."
+    exec python -m src.encoder.encoder --service query
     ;;
   "all")
     echo "Starting both EncoderService and RpcService..."
     exec python -m src.encoder.encoder --service all
     ;;
   *)
-    echo "Usage: $0 [encoder|rpc|all]" >&2
-    echo "  encoder: Run only EncoderService (document upsert events)" >&2
-    echo "  rpc:     Run only RpcService (search and validation RPC calls)" >&2
-    echo "  (none):  Run both services (default behavior)" >&2
+    echo "Usage: AMGIX_ENCODER_ROLE=[index|query|all]" >&2
+    echo "  index: Run only EncoderService (document indexing)" >&2
+    echo "  query: Run only RpcService (search and validation)" >&2
+    echo "  all:   Run both services (default)" >&2
     exit 1
     ;;
 esac

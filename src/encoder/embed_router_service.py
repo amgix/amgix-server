@@ -1,6 +1,5 @@
 import ast
 import asyncio
-from enum import Enum
 from logging import Logger
 import math
 import os
@@ -14,7 +13,7 @@ from src.core.common.cache import AMGIXCache
 from src.core.common.constants import RPC_TIMEOUT_SECONDS
 from src.core.common.embed_router import EmbedRouter
 from src.core.models.vector import VectorConfigInternal
-from src.core.vector import VectorBase, TrigramsVector, FullTextVector, WhiteSpaceVector, WMTRVector, DenseModelVector, SparseModelVector, CustomDenseVector, CustomSparseVector, DenseFastEmbedVector, SparseFastEmbedVector
+from src.core.vector import VectorBase, TrigramsVector, FullTextVector, WhiteSpaceVector, WMTRVector, DenseModelVector, SparseModelVector, CustomDenseVector, CustomSparseVector
 from src.core.common.bunny_talk import BunnyTalk
 from src.core.database.base import DatabaseBase
 from src.core.common.enums import VectorType
@@ -51,7 +50,6 @@ HOSTNAME = os.getenv('HOSTNAME', 'unknown')
 NODE_QUEUE_PREFIX = "embed-node"
 NODE_QUEUE_NAME = f"{NODE_QUEUE_PREFIX}-{HOSTNAME}"
 OPEN_ST_QUEUE_NAME = "embed-st-open"
-OPEN_FE_QUEUE_NAME = "embed-fe-open"
 LEADER_QUEUE_NAME = "embed-leader"
 
 # Metrics aggregation windows in seconds
@@ -59,13 +57,10 @@ METRIC_WINDOWS = [5, 30, 60, 300]
 METRICS_LOOP_INTERVAL_SECONDS = 5
 TARGET_AVAILABLITY_PCT = 5 # percentage of total capacity
 
-class ModelFamily(Enum):
-    ALL = "all"
-    ST = "st"
-    FE = "fe"
-    NONE = "none"
+def _parse_load_models(value: str) -> bool:
+    return value.lower() in ("true", "1", "yes")
 
-AMGIX_MODEL_FAMILY = os.getenv("AMGIX_MODEL_FAMILY", "all")
+AMGIX_LOAD_MODELS = _parse_load_models(os.getenv("AMGIX_LOAD_MODELS", "true"))
 
 # Memory reserve configuration - parse once at module load
 def _parse_memory_limit(value: str) -> Optional[Tuple[float, bool]]:
@@ -136,8 +131,6 @@ class EmbedRouterService(EncoderBase):
             VectorType.SPARSE_MODEL: SparseModelVector,
             VectorType.DENSE_CUSTOM: CustomDenseVector,
             VectorType.SPARSE_CUSTOM: CustomSparseVector,
-            VectorType.DENSE_FASTEMBED: DenseFastEmbedVector,
-            VectorType.SPARSE_FASTEMBED: SparseFastEmbedVector,
         }
 
         self.local_models = {}
@@ -145,9 +138,8 @@ class EmbedRouterService(EncoderBase):
         self.leader: Tuple[RobustQueue, str] = None
         self.node: Tuple[RobustQueue, str] = None
         self.st_open: Tuple[RobustQueue, str] = None
-        self.fe_open: Tuple[RobustQueue, str] = None
 
-        self.model_family = ModelFamily(AMGIX_MODEL_FAMILY.lower())
+        self.load_models = AMGIX_LOAD_MODELS
 
         self._at_model_capacity(force_check=True)
 
@@ -201,7 +193,7 @@ class EmbedRouterService(EncoderBase):
         try:
             model_key = self._get_model_key(vector_config)
 
-            if vector_config.type in [VectorType.DENSE_MODEL, VectorType.DENSE_FASTEMBED, VectorType.SPARSE_MODEL, VectorType.SPARSE_FASTEMBED]:
+            if vector_config.type in [VectorType.DENSE_MODEL, VectorType.SPARSE_MODEL]:
 
                 self.bunny_talk.log_trace_context(f"Router: request for model {model_key} (hops: {hops})")
                 
@@ -253,7 +245,7 @@ class EmbedRouterService(EncoderBase):
                                         # no, either not supported model or at capacity, we need to route to other workers
                                         self.logger.debug(f"Router: Can't embed locally. Supported model family: {self.model_family}. Local models: {list(self.local_models.keys())}.")
 
-                                        open_queue_name = OPEN_ST_QUEUE_NAME if vector_config.type in [VectorType.DENSE_MODEL, VectorType.SPARSE_MODEL] else OPEN_FE_QUEUE_NAME
+                                        open_queue_name = OPEN_ST_QUEUE_NAME
                                         try:
                                             # try to send it to open queue
                                             self.logger.debug(f"Router: Routing to {open_queue_name}.")
@@ -386,8 +378,8 @@ class EmbedRouterService(EncoderBase):
     def _get_model_queue_name(self, vector_config: VectorConfigInternal) -> str:
         """Get the queue name for the model."""
 
-        model_family = 'st' if vector_config.type in [VectorType.DENSE_MODEL, VectorType.SPARSE_MODEL] else 'fe'
-        model_type = 'd' if vector_config.type in [VectorType.DENSE_MODEL, VectorType.DENSE_FASTEMBED] else 's'
+        model_family = 'st'
+        model_type = 'd' if vector_config.type == VectorType.DENSE_MODEL else 's'
 
         model_name = vector_config.model
 
@@ -400,7 +392,7 @@ class EmbedRouterService(EncoderBase):
         """Check if we can load another model based on memory reserves."""
 
         if force_check:
-            if self.model_family == ModelFamily.NONE:
+            if not self.load_models:
                 self.at_capacity = True
             else:
                 # Get current free memory (the only dynamic part)
@@ -417,11 +409,9 @@ class EmbedRouterService(EncoderBase):
         return self.at_capacity
 
     def _is_supported_model_family(self, vector_config: VectorConfigInternal) -> bool:
-        """Check if the model family is supported."""
+        """Check if this node can load the model type."""
 
-        return self.model_family == ModelFamily.ALL or \
-            (self.model_family == ModelFamily.ST and vector_config.type in [VectorType.DENSE_MODEL, VectorType.SPARSE_MODEL]) or \
-            (self.model_family == ModelFamily.FE and vector_config.type in [VectorType.DENSE_FASTEMBED, VectorType.SPARSE_FASTEMBED])
+        return self.load_models and vector_config.type in [VectorType.DENSE_MODEL, VectorType.SPARSE_MODEL]
 
     async def _own_the_model(self, 
                             vector_config: VectorConfigInternal,
@@ -503,7 +493,7 @@ class EmbedRouterService(EncoderBase):
         """Listen for requests on open queues."""
 
         if start_listening:
-            if self.model_family == ModelFamily.ST or self.model_family == ModelFamily.ALL:
+            if self.load_models:
                 if not self.st_open:
                     self.logger.debug(f"Router: Listening for requests on {OPEN_ST_QUEUE_NAME}.")
                     try:
@@ -516,20 +506,6 @@ class EmbedRouterService(EncoderBase):
                         self.logger.error(f"Router: Error listening on {OPEN_ST_QUEUE_NAME}: {e}")
                 else:
                     self.logger.debug(f"Router: Already listening for requests on {OPEN_ST_QUEUE_NAME}.")
-
-            if self.model_family == ModelFamily.FE or self.model_family == ModelFamily.ALL:
-                if not self.fe_open:
-                    self.logger.debug(f"Router: Listening for requests on {OPEN_FE_QUEUE_NAME}.")
-                    try:
-                        self.fe_open = await self.bunny_talk.listen(
-                            routing_key=OPEN_FE_QUEUE_NAME,
-                            handler=self.route,
-                            auto_delete=True
-                        )
-                    except Exception as e:
-                        self.logger.error(f"Router: Error listening on {OPEN_FE_QUEUE_NAME}: {e}")
-                else:
-                    self.logger.debug(f"Router: Already listening for requests on {OPEN_FE_QUEUE_NAME}.")
         else:
             if self.st_open:
                 # cancel the listener
@@ -542,19 +518,6 @@ class EmbedRouterService(EncoderBase):
 
                 # clear the queue info
                 self.st_open = None
-
-            if self.fe_open:
-                # cancel the listener
-                try:
-                    queue, consumer_tag = self.fe_open
-                    self.logger.debug(f"Router: Cancelling listener on {queue.name}.")
-                    await self.bunny_talk.cancel_listener(queue, consumer_tag)
-                except Exception as e:
-                    self.logger.error(f"Router: Error cancelling listener on {queue.name}: {e}")
-                    
-                # clear the queue info
-                self.fe_open = None
-
 
     async def _node_signal(self, load: bool, model_key: str) -> None:
         """Listen for node signals."""
@@ -623,7 +586,7 @@ class EmbedRouterService(EncoderBase):
                 hostname: str,  
                 metrics: Dict[str, Dict[str, Dict[str, Union[float, int]]]],
                 loaded_models: List[Tuple[str, float]],
-                model_family: ModelFamily,
+                load_models: bool,
                 at_capacity: bool
                 ) -> None:
         """Accumulate metrics from workers."""
@@ -639,13 +602,13 @@ class EmbedRouterService(EncoderBase):
                 (ast.literal_eval(model_key), load_timestamp)
                 for model_key, load_timestamp in loaded_models
             ],
-            'model_family': ModelFamily(model_family),
+            'load_models': bool(load_models),
             'capacity': 0 if at_capacity else 1 if len(loaded_models) > 0 else 2,
             'last_seen': time.time()
         }
         
         # Log summary of what we received
-        self.logger.debug(f"Router: Received metrics from {hostname} ({model_family}): metrics: {len(metrics)}, models: {len(loaded_models)}, capacity: {self._cluster_metrics[hostname]['capacity']}")
+        self.logger.debug(f"Router: Received metrics from {hostname} (load_models={load_models}): metrics: {len(metrics)}, models: {len(loaded_models)}, capacity: {self._cluster_metrics[hostname]['capacity']}")
         self.logger.debug(f"Router:     models: {[model_key for model_key, _ in loaded_models]}")
 
     def _cleanup_stale_metrics(self) -> None:
@@ -678,7 +641,7 @@ class EmbedRouterService(EncoderBase):
                         hostname=HOSTNAME,
                         metrics=dict(),
                         loaded_models=list(),
-                        model_family=self.model_family.value,
+                        load_models=self.load_models,
                         at_capacity=False,
                         start_trace=True
                     )
@@ -718,8 +681,8 @@ class EmbedRouterService(EncoderBase):
 
                 if self.leader:
                     # no need for round trip, just call our own handler
-                    await self._metrics_signal(False,HOSTNAME, processed_metrics, 
-                                    loaded_models, self.model_family.value, self._at_model_capacity())
+                    await self._metrics_signal(False, HOSTNAME, processed_metrics, 
+                                    loaded_models, self.load_models, self._at_model_capacity())
                 else:
                     # send it over the pipe
                     await self.bunny_talk.talk(
@@ -728,7 +691,7 @@ class EmbedRouterService(EncoderBase):
                         hostname=HOSTNAME,
                         metrics=processed_metrics,
                         loaded_models=loaded_models,
-                        model_family=self.model_family.value,
+                        load_models=self.load_models,
                         at_capacity=self._at_model_capacity(),
                         start_trace=True
                     )
@@ -759,28 +722,17 @@ class EmbedRouterService(EncoderBase):
         # Clean up stale metrics (older than 2x the metrics interval)
         self._cleanup_stale_metrics()
 
-        # find hosts that per model family
-        fe_host_count = 0
+        # find hosts that can load models
         st_host_count = 0
-        fe_available_count = 0
         st_available_count = 0
-        available_fe_hosts = dict()
         available_st_hosts = dict()
 
         for hostname, data in self._cluster_metrics.items():
-            if data['model_family'] in [ModelFamily.FE, ModelFamily.ALL]:
-                fe_host_count += 1
-                if data['capacity'] > 0:
-                    available_fe_hosts[hostname] = data['capacity']
-                    fe_available_count += 1
-            if data['model_family'] in [ModelFamily.ST, ModelFamily.ALL]:
+            if data.get('load_models', True):
                 st_host_count += 1
                 if data['capacity'] > 0:
                     available_st_hosts[hostname] = data['capacity']
                     st_available_count += 1
-
-        fe_reservations = max(1, math.floor(TARGET_AVAILABLITY_PCT * fe_host_count / 100))
-        fe_direction = fe_available_count - fe_reservations
 
         st_reservations = max(1, math.floor(TARGET_AVAILABLITY_PCT * st_host_count / 100))
         st_direction = st_available_count - st_reservations
@@ -801,7 +753,6 @@ class EmbedRouterService(EncoderBase):
                 'host_count': 0,
                 'weighted_rps': 0.0,
                 'proportion': 0.0,
-                'model_family': ModelFamily.FE if model_key[0] in [VectorType.DENSE_FASTEMBED, VectorType.SPARSE_FASTEMBED] else ModelFamily.ST
             }
 
             for host in self._cluster_metrics.keys():
@@ -817,14 +768,7 @@ class EmbedRouterService(EncoderBase):
                 models[model_key]['weighted_rps'] += weighted_rps
                 total_rps += weighted_rps
 
-        # Track best candidates for each family
-        best_add_fe = None
-        best_score_fe = -1
-        second_best_score_fe = -1
-        best_remove_fe = None
-        best_remove_score_fe = float('inf')
-        second_best_remove_score_fe = float('inf')
-        
+        # Track best candidates for ST family
         best_add_st = None
         best_score_st = -1
         second_best_score_st = -1
@@ -833,53 +777,27 @@ class EmbedRouterService(EncoderBase):
         second_best_remove_score_st = float('inf')
 
         for model_key, data in models.items():
-            # host_count = fe_host_count if data['model_family'] == ModelFamily.FE else st_host_count
             data['host_count'] = len(data['hosts'])
             data['proportion'] = data['weighted_rps'] / total_rps if total_rps > 0 else 0.0
             data['score'] = data['proportion'] / (data['host_count'] + 1)
 
-            # Compute how many additional hosts could actually load this model
-            # Hosts that do NOT already have this model
-            if data['model_family'] == ModelFamily.FE:
-                data['target_hosts'] = [(host, capacity) for host, capacity in available_fe_hosts.items() if host not in (h for h, _, _ in data['hosts'])]
-                
-                # Track best add candidate for FE
-                if (data['weighted_rps'] > 0 and data['target_hosts'] and data['score'] > best_score_fe):
-                    second_best_score_fe = best_score_fe
-                    best_score_fe = data['score']
-                    best_add_fe = (model_key, data)
-                elif (data['weighted_rps'] > 0 and data['target_hosts'] and data['score'] > second_best_score_fe):
-                    second_best_score_fe = data['score']
-                
-                # Track best remove candidate for FE
-                if (data['weighted_rps'] > 0 and data['host_count'] > 1):
-                    remove_score = data['proportion'] / data['host_count']
-                    if remove_score < best_remove_score_fe:
-                        second_best_remove_score_fe = best_remove_score_fe
-                        best_remove_score_fe = remove_score
-                        best_remove_fe = (model_key, data)
-                    elif remove_score < second_best_remove_score_fe:
-                        second_best_remove_score_fe = remove_score
-            else:
-                data['target_hosts'] = [(host, capacity) for host, capacity in available_st_hosts.items() if host not in (h for h, _, _ in data['hosts'])]
-                
-                # Track best add candidate for ST
-                if (data['weighted_rps'] > 0 and data['target_hosts'] and data['score'] > best_score_st):
-                    second_best_score_st = best_score_st
-                    best_score_st = data['score']
-                    best_add_st = (model_key, data)
-                elif (data['weighted_rps'] > 0 and data['target_hosts'] and data['score'] > second_best_score_st):
-                    second_best_score_st = data['score']
-                
-                # Track best remove candidate for ST
-                if (data['weighted_rps'] > 0 and data['host_count'] > 1):
-                    remove_score = data['proportion'] / data['host_count']
-                    if remove_score < best_remove_score_st:
-                        second_best_remove_score_st = best_remove_score_st
-                        best_remove_score_st = remove_score
-                        best_remove_st = (model_key, data)
-                    elif remove_score < second_best_remove_score_st:
-                        second_best_remove_score_st = remove_score
+            data['target_hosts'] = [(host, capacity) for host, capacity in available_st_hosts.items() if host not in (h for h, _, _ in data['hosts'])]
+
+            if (data['weighted_rps'] > 0 and data['target_hosts'] and data['score'] > best_score_st):
+                second_best_score_st = best_score_st
+                best_score_st = data['score']
+                best_add_st = (model_key, data)
+            elif (data['weighted_rps'] > 0 and data['target_hosts'] and data['score'] > second_best_score_st):
+                second_best_score_st = data['score']
+
+            if (data['weighted_rps'] > 0 and data['host_count'] > 1):
+                remove_score = data['proportion'] / data['host_count']
+                if remove_score < best_remove_score_st:
+                    second_best_remove_score_st = best_remove_score_st
+                    best_remove_score_st = remove_score
+                    best_remove_st = (model_key, data)
+                elif remove_score < second_best_remove_score_st:
+                    second_best_remove_score_st = remove_score
 
         # unload models that have no rps
         for model_key, data in [(k, v) for k, v in models.items() if v['weighted_rps'] == 0]:
@@ -897,7 +815,7 @@ class EmbedRouterService(EncoderBase):
         # load/uload model that have rps per family per direction.
         
         # Short-circuit demand-based rebalancing on very small clusters (<=2 capable hosts)
-        capable_hosts_count = sum(1 for _, d in self._cluster_metrics.items() if d['model_family'] != ModelFamily.NONE)
+        capable_hosts_count = sum(1 for _, d in self._cluster_metrics.items() if d.get('load_models', True))
         if capable_hosts_count < 3:
             self.logger.debug(f"Router: Skipping demand-based rebalancing: only {capable_hosts_count} capable host(s).")
             elapsed_ms = (time.monotonic_ns() - start_ns) / 1_000_000.0
@@ -905,36 +823,6 @@ class EmbedRouterService(EncoderBase):
             return
 
         # Swap step when family is full (direction == 0): move one slot from lowest p/h to highest p/(h+1)
-        if fe_direction == 0:
-            swap_add_fe = None
-            swap_add_score_fe = -1
-            swap_remove_fe = None
-            swap_remove_score_fe = float('inf')
-
-            for m_key, m_data in models.items():
-                if m_data['model_family'] != ModelFamily.FE or m_data['weighted_rps'] == 0:
-                    continue
-                if m_data['score'] > swap_add_score_fe:
-                    swap_add_score_fe = m_data['score']
-                    swap_add_fe = (m_key, m_data)
-                if m_data['host_count'] > 1:
-                    rm_score = (m_data['proportion'] / m_data['host_count'])
-                    if rm_score < swap_remove_score_fe:
-                        swap_remove_score_fe = rm_score
-                        swap_remove_fe = (m_key, m_data)
-
-            if swap_add_fe and swap_remove_fe and swap_add_fe[0] != swap_remove_fe[0]:
-                add_key, add_data = swap_add_fe
-                remove_key, remove_data = swap_remove_fe
-                add_hosts = set(h for h, _, _ in add_data['hosts'])
-                remove_host_tuple = next(((h, cap, ts) for h, cap, ts in remove_data['hosts'] if h not in add_hosts), None)
-                if remove_host_tuple:
-                    hostname, _, load_ts = remove_host_tuple
-                    current_time = time.time()
-                    if not load_ts or current_time - load_ts >= METRICS_LOOP_INTERVAL_SECONDS * 2:
-                        self.logger.debug(f"Router: FE swap: unloading {remove_key} from {hostname} to make room for {add_key}")
-                        await _send_signal(hostname, remove_key, False)
-
         if st_direction == 0:
             swap_add_st = None
             swap_add_score_st = -1
@@ -942,7 +830,7 @@ class EmbedRouterService(EncoderBase):
             swap_remove_score_st = float('inf')
 
             for m_key, m_data in models.items():
-                if m_data['model_family'] != ModelFamily.ST or m_data['weighted_rps'] == 0:
+                if m_data['weighted_rps'] == 0:
                     continue
                 if m_data['score'] > swap_add_score_st:
                     swap_add_score_st = m_data['score']
@@ -964,27 +852,6 @@ class EmbedRouterService(EncoderBase):
                     if not load_ts or current_time - load_ts >= METRICS_LOOP_INTERVAL_SECONDS * 2:
                         self.logger.debug(f"Router: ST swap: unloading {remove_key} from {hostname} to make room for {add_key}")
                         await _send_signal(hostname, remove_key, False)
-
-        # Handle FE family
-        if fe_direction > 0 and best_add_fe:
-            model_key, data = best_add_fe
-            # Pick best host (highest capacity)
-            hostname = max(data['target_hosts'], key=lambda x: x[1])[0]
-            self.logger.debug(f"Router: Adding {model_key} to {hostname} (score: {best_score_fe:.3f})")
-            await _send_signal(hostname, model_key, True)
-        elif fe_direction < 0 and best_remove_fe:
-            model_key, data = best_remove_fe
-            # Pick worst host (lowest capacity)
-            hostname = min(data['hosts'], key=lambda x: x[1])[0]
-            
-            # Dwell-time hysteresis: don't unload if recently loaded
-            current_time = time.time()
-            _, _, load_timestamp = next((h for h in data['hosts'] if h[0] == hostname), (None, None, None))
-            if load_timestamp and current_time - load_timestamp < METRICS_LOOP_INTERVAL_SECONDS * 2:
-                self.logger.debug(f"Router: Skipping removal of {model_key} from {hostname} (too recent: {int(current_time - load_timestamp)}s)")
-            else:
-                self.logger.debug(f"Router: Removing {model_key} from {hostname} (score: {best_remove_score_fe:.3f})")
-                await _send_signal(hostname, model_key, False)
 
         # Handle ST family
         if st_direction > 0 and best_add_st:

@@ -1,13 +1,12 @@
-# Override for CI (no GPU): encoder and rpc use CPU build and no GPU reservation.
-# Use with: docker compose --project-directory . -f compose/qdrant.yml -f compose/ci.yml up -d
+# Override for CI (no GPU): index and query use CPU build and no GPU reservation.
+# Use with: docker compose -f compose/qdrant.yml -f compose/ci.yml up -d
 services:
-  encoder:
+  index:
     build:
-      context: .
+      context: ..
       dockerfile: build/Dockerfile-encoder
       args:
         AMGIX_VERSION: 1.0.0-dev
-        AMGIX_BUILD_FE: CPU
         AMGIX_BUILD_ST: CPU
     volumes:
       - amgix-cache-ci:/data/amgix/cache
@@ -16,13 +15,12 @@ services:
         reservations:
           devices: !reset []
 
-  rpc:
+  query:
     build:
-      context: .
+      context: ..
       dockerfile: build/Dockerfile-encoder
       args:
         AMGIX_VERSION: 1.0.0-dev
-        AMGIX_BUILD_FE: CPU
         AMGIX_BUILD_ST: CPU
     volumes:
       - amgix-cache-ci:/data/amgix/cache

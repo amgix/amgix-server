@@ -41,7 +41,7 @@ class Vectorizer:
 
         for config in vector_configs:
             try:
-                if config.type in [VectorType.DENSE_MODEL, VectorType.DENSE_FASTEMBED]:
+                if config.type == VectorType.DENSE_MODEL:
                     texts: List[str] = []
                     for doc in documents:
                         for field in config.index_fields:
@@ -96,7 +96,7 @@ class Vectorizer:
                             ))
                             token_lengths_per_doc[doc_idx][field_vector_name] = token_length
 
-                else:  # All other sparse vector types (SPARSE_MODEL, SPARSE_FASTEMBED, TRIGRAMS, FULL_TEXT, WHITESPACE, WMTR)
+                else:  # All other sparse vector types (SPARSE_MODEL, TRIGRAMS, FULL_TEXT, WHITESPACE, WMTR)
                     texts: List[str] = []
                     avgdls: List[float] = []
                     is_custom = config.type in VectorType.custom_tokenization()
@@ -288,7 +288,7 @@ class Vectorizer:
         vector_data_list = []
         
         # Generate vector ONCE for this vector type, then reuse for all fields
-        if config.type in [VectorType.DENSE_MODEL, VectorType.DENSE_FASTEMBED]:
+        if config.type == VectorType.DENSE_MODEL:
             # Use query_model/query_revision if specified in config, otherwise use model/revision
             effective_config = config
             if config.query_model is not None:
@@ -342,10 +342,10 @@ class Vectorizer:
                 )
                 vector_data_list.append(vector_data)
                 
-        else:  # All other sparse vector types (SPARSE_MODEL, SPARSE_FASTEMBED, TRIGRAMS, FULL_TEXT, WHITESPACE, WMTR)
+        else:  # All other sparse vector types (SPARSE_MODEL, TRIGRAMS, FULL_TEXT, WHITESPACE, WMTR)
             # Use query_model/query_revision if specified in config, otherwise use model/revision
             effective_config = config
-            if config.type in [VectorType.SPARSE_MODEL, VectorType.SPARSE_FASTEMBED] and config.query_model is not None:
+            if config.type == VectorType.SPARSE_MODEL and config.query_model is not None:
                 dumped = config.model_dump()
                 dumped["model"] = config.query_model
                 dumped["revision"] = config.query_revision

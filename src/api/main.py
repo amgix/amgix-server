@@ -45,15 +45,15 @@ CollectionName = Annotated[str, Path(...,
 class OkResponse(BaseModel):
     ok: bool
 
-# 218 = partial readiness (some encoder/rpc probes not ready); 200 = fully ready
+# 218 = partial readiness (some index/query probes not ready); 200 = fully ready
 HTTP_STATUS_PARTIAL_READY = 218
 
 
 class ReadyResponse(BaseModel):
     database: bool
     rabbitmq: bool
-    encoder: bool
-    rpc: bool
+    index: bool
+    query: bool
     ready: bool
 
 class VersionResponse(BaseModel):
@@ -185,8 +185,8 @@ async def health() -> OkResponse:
     operation_id="health_ready",
     responses={
         200: {"description": "Fully ready", "model": ReadyResponse},
-        218: {"description": "Partial ready (some encoder/rpc probes not ready)", "model": ReadyResponse},
-        503: {"description": "Service Unavailable (infra down or all encoder types down)", "model": ReadyResponse},
+        218: {"description": "Partial ready (some index/query probes not ready)", "model": ReadyResponse},
+        503: {"description": "Service Unavailable (infra down or all encoder roles down)", "model": ReadyResponse},
     },
 )
 async def readiness_check() -> ReadyResponse:
@@ -211,32 +211,32 @@ async def readiness_check() -> ReadyResponse:
     except Exception as e:
         logger.error(f"RabbitMQ health check failed: {e}")
 
-    encoder_healthy = False
+    index_healthy = False
     if rabbitmq_healthy:
         try:
             await _bunny_talk.rpc("ping-encoder", timeout=1.0)
-            encoder_healthy = True
+            index_healthy = True
         except Exception:
             pass
 
-    rpc_healthy = False
+    query_healthy = False
     if rabbitmq_healthy:
         try:
             await _bunny_talk.rpc("ping-rpc", timeout=1.0)
-            rpc_healthy = True
+            query_healthy = True
         except Exception:
             pass
 
-    ready = db_healthy and rabbitmq_healthy and encoder_healthy and rpc_healthy
+    ready = db_healthy and rabbitmq_healthy and index_healthy and query_healthy
     body = ReadyResponse(
         database=db_healthy,
         rabbitmq=rabbitmq_healthy,
-        encoder=encoder_healthy,
-        rpc=rpc_healthy,
+        index=index_healthy,
+        query=query_healthy,
         ready=ready,
     )
-    # 503 if infra down (db/rabbit) or no encoder type at all; 218 if one encoder type up (partial); 200 if all up
-    if not db_healthy or not rabbitmq_healthy or (not encoder_healthy and not rpc_healthy):
+    # 503 if infra down (db/rabbit) or no encoder role at all; 218 if one encoder role up (partial); 200 if all up
+    if not db_healthy or not rabbitmq_healthy or (not index_healthy and not query_healthy):
         return JSONResponse(status_code=503, content=body.model_dump())
     if ready:
         return JSONResponse(status_code=200, content=body.model_dump())
@@ -293,7 +293,7 @@ async def create_collection(collection_name: CollectionName, config: CollectionC
     # Convert request models to full models with discovered dimensions
     full_vector_configs = []
     for vector_request in config.vectors:
-        if vector_request.type in [VectorType.DENSE_MODEL, VectorType.DENSE_FASTEMBED]:
+        if vector_request.type == VectorType.DENSE_MODEL:
             if not validation_response.results or vector_request.name not in validation_response.results:
                 raise HTTPException(status_code=400, detail=f"Model validation failed for {vector_request.name}")
             

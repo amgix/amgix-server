@@ -59,11 +59,11 @@ jobs:
           chmod -R a+rwx data
 
       - name: Build shared images (api, encoder)
-        run: docker compose --project-directory . -f compose/qdrant.yml -f compose/ci.yml build
+        run: docker compose -f compose/qdrant.yml -f compose/ci.yml build
 
       - name: "Test backend: Qdrant"
         run: |
-          CF="--project-directory . -f compose/qdrant.yml -f compose/ci.yml"
+          CF="-f compose/qdrant.yml -f compose/ci.yml"
           DB_SVC=qdrant
           docker compose $CF down --volumes 2>/dev/null || true
           docker compose $CF up -d
@@ -74,8 +74,8 @@ jobs:
             FAILED=""
             [ "$(jq -r '.database' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED $DB_SVC"
             [ "$(jq -r '.rabbitmq' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED rabbitmq"
-            [ "$(jq -r '.encoder' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED encoder"
-            [ "$(jq -r '.rpc' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED rpc"
+            [ "$(jq -r '.index' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED index"
+            [ "$(jq -r '.query' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED query"
             if [ -n "$FAILED" ]; then echo "::error::Timed out. Logs for failed probes:"; docker compose $CF logs --tail=200 $FAILED; fi
           fi
           [ $R -eq 0 ] || exit $R
@@ -85,7 +85,7 @@ jobs:
       - name: "Test backend: PostgreSQL"
         if: always()
         run: |
-          CF="--project-directory . -f compose/pgsql.yml -f compose/ci.yml"
+          CF="-f compose/pgsql.yml -f compose/ci.yml"
           DB_SVC=postgres
           docker compose $CF down --volumes 2>/dev/null || true
           docker compose $CF up -d
@@ -96,8 +96,8 @@ jobs:
             FAILED=""
             [ "$(jq -r '.database' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED $DB_SVC"
             [ "$(jq -r '.rabbitmq' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED rabbitmq"
-            [ "$(jq -r '.encoder' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED encoder"
-            [ "$(jq -r '.rpc' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED rpc"
+            [ "$(jq -r '.index' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED index"
+            [ "$(jq -r '.query' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED query"
             if [ -n "$FAILED" ]; then echo "::error::Timed out. Logs for failed probes:"; docker compose $CF logs --tail=200 $FAILED; fi
           fi
           [ $R -eq 0 ] || exit $R
@@ -107,7 +107,7 @@ jobs:
       - name: "Test backend: MariaDB"
         if: always()
         run: |
-          CF="--project-directory . -f compose/mariadb.yml -f compose/ci.yml"
+          CF="-f compose/mariadb.yml -f compose/ci.yml"
           DB_SVC=mariadb
           docker compose $CF down --volumes 2>/dev/null || true
           docker compose $CF up -d
@@ -118,8 +118,8 @@ jobs:
             FAILED=""
             [ "$(jq -r '.database' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED $DB_SVC"
             [ "$(jq -r '.rabbitmq' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED rabbitmq"
-            [ "$(jq -r '.encoder' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED encoder"
-            [ "$(jq -r '.rpc' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED rpc"
+            [ "$(jq -r '.index' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED index"
+            [ "$(jq -r '.query' /tmp/ready.json 2>/dev/null)" = "false" ] && FAILED="$FAILED query"
             if [ -n "$FAILED" ]; then echo "::error::Timed out. Logs for failed probes:"; docker compose $CF logs --tail=200 $FAILED; fi
           fi
           [ $R -eq 0 ] || exit $R

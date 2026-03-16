@@ -89,7 +89,7 @@ RUN mkdir -p /etc/rabbitmq && \
 # Environment variables for internal connectivity
 ENV AMGIX_DATABASE_URL=qdrant://localhost:6334 \
     AMGIX_AMQP_URL=amqp://guest:guest@localhost:5672/ \
-    AMGIX_MODEL_FAMILY=all \
+    AMGIX_LOAD_MODELS=true \
     RABBITMQ_NODENAME=rabbit@localhost \
     RABBITMQ_MNESIA_BASE=/data/rabbitmq \
     QDRANT__STORAGE__PATH=/data/qdrant \

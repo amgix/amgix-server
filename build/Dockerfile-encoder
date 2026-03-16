@@ -16,16 +16,12 @@ RUN pip install --no-cache-dir maturin==1.9.6
 # Copy requirements file
 COPY src/encoder/requirements-*.txt /app/
 
-ARG AMGIX_BUILD_FE=${AMGIX_BUILD_FE}
-ENV AMGIX_BUILD_FE=${AMGIX_BUILD_FE}
 ARG AMGIX_BUILD_ST=${AMGIX_BUILD_ST}
 ENV AMGIX_BUILD_ST=${AMGIX_BUILD_ST}
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --timeout=300 -r /app/requirements-common.txt
-# RUN if [ "${AMGIX_BUILD_FE}" = "CPU" ]; then pip install --no-cache-dir --timeout=300 -r /app/requirements-fe-cpu.txt; fi
 RUN if [ "${AMGIX_BUILD_ST}" = "CPU" ]; then pip install --no-cache-dir --timeout=300 -r /app/requirements-st-cpu.txt; fi
-# RUN if [ "${AMGIX_BUILD_FE}" = "GPU" ]; then pip install --no-cache-dir --timeout=300 -r /app/requirements-fe-gpu.txt; fi
 RUN if [ "${AMGIX_BUILD_ST}" = "GPU" ]; then pip install --no-cache-dir --timeout=300 -r /app/requirements-st-gpu.txt; fi
 
 # Build and install amgix_analyzers (Rust PyO3 extension)
@@ -61,8 +57,6 @@ ENV PYTHONDONTWRITEBYTECODE=1
 
 ARG AMGIX_VERSION=${AMGIX_VERSION}
 ENV AMGIX_VERSION=${AMGIX_VERSION}
-ARG AMGIX_BUILD_FE=${AMGIX_BUILD_FE}
-ENV AMGIX_BUILD_FE=${AMGIX_BUILD_FE}
 ARG AMGIX_BUILD_ST=${AMGIX_BUILD_ST}
 ENV AMGIX_BUILD_ST=${AMGIX_BUILD_ST}
 

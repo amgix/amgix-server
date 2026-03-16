@@ -11,7 +11,7 @@ from typing import List, Dict, Any
 
 from src.core.vector.vectorizer import Vectorizer
 from src.core.common.constants import APP_NAME, APP_PREFIX, RPC_TIMEOUT_SECONDS
-from src.core.common import CACHE_BASE_DIR, HF_CACHE_DIR, CUDA_CACHE_DIR, FASTEMBED_CACHE_DIR, get_user_collection_name
+from src.core.common import CACHE_BASE_DIR, HF_CACHE_DIR, CUDA_CACHE_DIR, get_user_collection_name
 
 from .encoder_base import EncoderBase, EncoderServiceRunner
 from .embed_router_service import EmbedRouterService
@@ -548,7 +548,7 @@ class RpcService(EncoderBase):
             
             results = {}
             for config in vector_configs:
-                if config.type in [VectorType.DENSE_MODEL, VectorType.DENSE_FASTEMBED]:
+                if config.type == VectorType.DENSE_MODEL:
                     # Find the dense vector for this config
                     dense_vector = None
                     for vector_data in query_with_vectors.vectors:
@@ -654,14 +654,13 @@ async def main():
     os.makedirs(CACHE_BASE_DIR, exist_ok=True)
     os.makedirs(HF_CACHE_DIR, exist_ok=True)
     os.makedirs(CUDA_CACHE_DIR, exist_ok=True)
-    os.makedirs(FASTEMBED_CACHE_DIR, exist_ok=True)
 
     parser = argparse.ArgumentParser(description=f"{APP_PREFIX} Service")
     parser.add_argument(
-        "--service", 
-        choices=["encoder", "rpc", "all"], 
+        "--service",
+        choices=["index", "query", "all"],
         default="all",
-        help="Service type to run: encoder (document processing), rpc (search/validation), or all (default)"
+        help="Encoder role: index (document ingestion), query (search/validation), or all (default)"
     )
     args = parser.parse_args()
 
@@ -670,10 +669,10 @@ async def main():
     # must be first in the list because other services depend on it
     service_classes.append(EmbedRouterService)
 
-    if args.service in ["encoder", "all"]:
+    if args.service in ["index", "all"]:
         service_classes.append(EncoderService)
 
-    if args.service in ["rpc", "all"]:
+    if args.service in ["query", "all"]:
         service_classes.append(RpcService)
 
     if "?" not in AMGIX_AMQP_URL:

@@ -236,13 +236,6 @@ class VectorConfig(BaseModel):
         return self
     
     @model_validator(mode='after')
-    def validate_fastembed_revision(self):
-        """Validate that FastEmbed vector types don't specify revision (not supported)."""
-        if self.type in [VectorType.DENSE_FASTEMBED, VectorType.SPARSE_FASTEMBED] and self.revision is not None:
-            raise ValueError(f"Revision is not supported for {self.type} vector type. FastEmbed does not support model revisions.")
-        return self
-    
-    @model_validator(mode='after')
     def validate_custom_vector_config(self):
         """Validate that custom vector types don't have unnecessary fields and have required fields."""
         if self.type in VectorType.custom_vectors():

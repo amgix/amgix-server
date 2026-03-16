@@ -1,6 +1,6 @@
 x-api-image: &api-image
   build:
-    context: .
+    context: ..
     dockerfile: build/Dockerfile-api
     args:
       AMGIX_VERSION: 1.0.0-dev
@@ -8,11 +8,10 @@ x-api-image: &api-image
 
 x-encoder-image: &encoder-image
   build:
-    context: .
+    context: ..
     dockerfile: build/Dockerfile-encoder
     args:
       AMGIX_VERSION: 1.0.0-dev
-      AMGIX_BUILD_FE: GPU
       AMGIX_BUILD_ST: GPU
   image: amgix-encoder:dev
 
@@ -49,19 +48,19 @@ services:
       - AMGIX_DATABASE_URL=mariadb://root:password@amgix-mariadb:3306/amgix
       - AMGIX_AMQP_URL=amqp://guest:guest@amgix-rabbitmq/
 
-  encoder:
+  index:
     <<: *encoder-image
     # container_name: amgix-encoder
     depends_on:
       - mariadb
       - rabbitmq
     volumes:
-      - ./data/amgix-cache:/data/amgix/cache
+      - ../data/amgix-cache:/data/amgix/cache
     environment:
       - AMGIX_DATABASE_URL=mariadb://root:password@amgix-mariadb:3306/amgix
       - AMGIX_AMQP_URL=amqp://guest:guest@amgix-rabbitmq/
-      - AMGIX_SERVICE=encoder
-      - AMGIX_MODEL_FAMILY=none
+      - AMGIX_ENCODER_ROLE=index
+      - AMGIX_LOAD_MODELS=false
     deploy:
       resources:
         reservations:
@@ -70,18 +69,18 @@ services:
               count: 1
               capabilities: [gpu]
 
-  rpc:
+  query:
     <<: *encoder-image
     # container_name: amgix-rpc
     depends_on:
       - mariadb
       - rabbitmq
     volumes:
-      - ./data/amgix-cache:/data/amgix/cache
+      - ../data/amgix-cache:/data/amgix/cache
     environment:
       - AMGIX_DATABASE_URL=mariadb://root:password@amgix-mariadb:3306/amgix
       - AMGIX_AMQP_URL=amqp://guest:guest@amgix-rabbitmq/
-      - AMGIX_SERVICE=rpc
+      - AMGIX_ENCODER_ROLE=query
       - HF_TOKEN=${HF_TOKEN}
     deploy:
       resources:

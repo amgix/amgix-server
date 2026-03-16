@@ -98,7 +98,6 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.SHORT_MAJOR }}-noembed
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
-            AMGIX_BUILD_FE=
             AMGIX_BUILD_ST=
 
       - name: Build and push amgix-one (NoEmbed)
@@ -163,7 +162,6 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.SHORT_MAJOR }}-gpu
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
-            AMGIX_BUILD_FE=GPU
             AMGIX_BUILD_ST=GPU
 
   build-encoder-cpu:
@@ -214,7 +212,6 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/amgix-encoder:${{ env.SHORT_MAJOR }}
           build-args: |
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
-            AMGIX_BUILD_FE=CPU
             AMGIX_BUILD_ST=CPU
 
   build-one-cpu:

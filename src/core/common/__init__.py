@@ -54,7 +54,6 @@ __all__ = [
     "CACHE_BASE_DIR",
     "HF_CACHE_DIR",
     "CUDA_CACHE_DIR",
-    "FASTEMBED_CACHE_DIR",
     "DOC_NAMESPACE",
     
     # Enums and Types

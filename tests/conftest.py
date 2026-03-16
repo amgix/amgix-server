@@ -167,14 +167,6 @@ class TestDataFactory:
                     index_fields=["name", "content"],
                     normalization=True
                 ))
-                
-                configs.append(VectorConfig(
-                    name="fastembed_dense",
-                    type=VectorType.DENSE_FASTEMBED,
-                    model="sentence-transformers/all-MiniLM-L6-v2",
-                    index_fields=["name", "content"],
-                    normalization=True
-                ))
         
         elif test_type == "sparse_only":
             # Sparse-only test - only sparse vectors
@@ -233,14 +225,6 @@ class TestDataFactory:
                     top_k=100,
                     index_fields=["name", "content"]
                 ))
-                
-                configs.append(VectorConfig(
-                    name="fastembed_sparse",
-                    type=VectorType.SPARSE_FASTEMBED,
-                    model="prithivida/Splade_PP_en_v1",
-                    top_k=100,
-                    index_fields=["name", "content"]
-                ))
         
         elif test_type == "dense_only":
             # Dense-only test - only dense vectors
@@ -248,14 +232,6 @@ class TestDataFactory:
                 configs.append(VectorConfig(
                     name="embeddings",
                     type=VectorType.DENSE_MODEL,
-                    model="sentence-transformers/all-MiniLM-L6-v2",
-                    index_fields=["name", "content"],
-                    normalization=True
-                ))
-                
-                configs.append(VectorConfig(
-                    name="fastembed_dense",
-                    type=VectorType.DENSE_FASTEMBED,
                     model="sentence-transformers/all-MiniLM-L6-v2",
                     index_fields=["name", "content"],
                     normalization=True
