@@ -68,7 +68,7 @@ jobs:
           docker compose $CF down --volumes 2>/dev/null || true
           docker compose $CF up -d
           set +e
-          timeout 300 bash -c 'while true; do >/tmp/ready.json; CODE=$(curl -sS -o /tmp/ready.json -w "%{http_code}" http://localhost:8234/v1/health/ready); [ "$CODE" = "200" ] && break; BODY=$([ "$CODE" = "000" ] && echo "(connection failed)" || cat /tmp/ready.json 2>/dev/null); echo "Waiting for Qdrant... HTTP $CODE $BODY"; sleep 5; done; echo "Ready: $(cat /tmp/ready.json)"'
+          timeout 60 bash -c 'while true; do >/tmp/ready.json; CODE=$(curl -sS -o /tmp/ready.json -w "%{http_code}" http://localhost:8234/v1/health/ready); [ "$CODE" = "200" ] && break; BODY=$([ "$CODE" = "000" ] && echo "(connection failed)" || cat /tmp/ready.json 2>/dev/null); echo "Waiting for Qdrant... HTTP $CODE $BODY"; sleep 5; done; echo "Ready: $(cat /tmp/ready.json)"'
           R=$?
           if [ $R -eq 124 ] && [ -f /tmp/ready.json ]; then
             FAILED=""
@@ -90,7 +90,7 @@ jobs:
           docker compose $CF down --volumes 2>/dev/null || true
           docker compose $CF up -d
           set +e
-          timeout 300 bash -c 'while true; do >/tmp/ready.json; CODE=$(curl -sS -o /tmp/ready.json -w "%{http_code}" http://localhost:8234/v1/health/ready); [ "$CODE" = "200" ] && break; BODY=$([ "$CODE" = "000" ] && echo "(connection failed)" || cat /tmp/ready.json 2>/dev/null); echo "Waiting for PostgreSQL... HTTP $CODE $BODY"; sleep 5; done; echo "Ready: $(cat /tmp/ready.json)"'
+          timeout 60 bash -c 'while true; do >/tmp/ready.json; CODE=$(curl -sS -o /tmp/ready.json -w "%{http_code}" http://localhost:8234/v1/health/ready); [ "$CODE" = "200" ] && break; BODY=$([ "$CODE" = "000" ] && echo "(connection failed)" || cat /tmp/ready.json 2>/dev/null); echo "Waiting for PostgreSQL... HTTP $CODE $BODY"; sleep 5; done; echo "Ready: $(cat /tmp/ready.json)"'
           R=$?
           if [ $R -eq 124 ] && [ -f /tmp/ready.json ]; then
             FAILED=""
@@ -112,7 +112,7 @@ jobs:
           docker compose $CF down --volumes 2>/dev/null || true
           docker compose $CF up -d
           set +e
-          timeout 300 bash -c 'while true; do >/tmp/ready.json; CODE=$(curl -sS -o /tmp/ready.json -w "%{http_code}" http://localhost:8234/v1/health/ready); [ "$CODE" = "200" ] && break; BODY=$([ "$CODE" = "000" ] && echo "(connection failed)" || cat /tmp/ready.json 2>/dev/null); echo "Waiting for MariaDB... HTTP $CODE $BODY"; sleep 5; done; echo "Ready: $(cat /tmp/ready.json)"'
+          timeout 60 bash -c 'while true; do >/tmp/ready.json; CODE=$(curl -sS -o /tmp/ready.json -w "%{http_code}" http://localhost:8234/v1/health/ready); [ "$CODE" = "200" ] && break; BODY=$([ "$CODE" = "000" ] && echo "(connection failed)" || cat /tmp/ready.json 2>/dev/null); echo "Waiting for MariaDB... HTTP $CODE $BODY"; sleep 5; done; echo "Ready: $(cat /tmp/ready.json)"'
           R=$?
           if [ $R -eq 124 ] && [ -f /tmp/ready.json ]; then
             FAILED=""
