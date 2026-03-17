@@ -59,7 +59,7 @@ indices, values = aa.tokenize_wmtr(
     lang_code="en",
     stopwords=["the", "a"],
     top_k_limit=100,
-    word_weight_percentage=90,
+    word_weight_percentage=80,
 )
 ```
 

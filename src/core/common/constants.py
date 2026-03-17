@@ -54,7 +54,7 @@ SPARSE_MODEL_BATCH_SIZE = 8
 # Validation thresholds
 LANGUAGE_DETECTION_CONFIDENCE = 0.9  # Minimum confidence for language detection
 DEFAULT_SEARCH_LIMIT = 10  # Default limit for search results
-WMTR_WORD_WEIGHT_PERCENTAGE = 90  # Percentage of top_k allocated to word weights
+WMTR_WORD_WEIGHT_PERCENTAGE = 80  # Percentage of top_k allocated to word weights
 
 # Numeric limits
 MAX_TOP_K_VALUE = 10000  # Maximum value for top_k parameter
