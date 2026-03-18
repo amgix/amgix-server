@@ -41,7 +41,7 @@ DEFAULT_DB_POOL_SIZE = 10  # Default database connection pool size
 
 # Timeouts and delays
 RPC_TIMEOUT_SECONDS = 60  # Timeout for RPC calls
-COLLECTION_INGEST_LOCK_TIMEOUT = 10  # Max wait to acquire collection-level ingest lock (SQL backends)
+COLLECTION_INGEST_LOCK_TIMEOUT = 15  # Max wait to acquire collection-level ingest lock (SQL backends)
 MAX_DATABASE_WAIT_SECONDS = 30  # Maximum wait time for database connections
 MAX_QUEUE_DELIVERY_ATTEMPTS = 4  # Maximum delivery attempts for queue messages (vectorization errors)
 MAX_DB_RETRIES = 200  # Maximum retries for database errors before giving up
