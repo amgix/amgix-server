@@ -19,7 +19,7 @@ from ..common import (
     MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH, UUID_LENGTH, MAX_DOCUMENT_TAG_LENGTH,
     MAX_FIELD_VECTOR_NAME_LENGTH, MAX_INTERNAL_COLLECTION_NAME_LENGTH,
     MAX_DOCUMENT_ID_LENGTH, QueuedDocumentStatus, MAX_STATUS_LENGTH, MAX_SEARCH_LIMIT,
-    get_user_collection_name, MetadataValueType, RPC_TIMEOUT_SECONDS
+    get_user_collection_name, MetadataValueType, COLLECTION_INGEST_LOCK_TIMEOUT
 )
 from ..common.lock_manager import LockClient
 
@@ -954,7 +954,7 @@ class SQLBase(DatabaseBase):
     async def add_documents(self, collection_name: str, documents_with_vectors: List[DocumentWithVectors], is_new: bool, store_content: bool, collection_config: CollectionConfigInternal, lock_client: LockClient) -> None:
         """Add documents with their vectors to the collection."""
         lock_name = f"collection-ingest-{self._string_to_uuid(collection_name)}"
-        async with lock_client.acquire(lock_name, timeout=RPC_TIMEOUT_SECONDS):
+        async with lock_client.acquire(lock_name, timeout=COLLECTION_INGEST_LOCK_TIMEOUT):
             await self._add_documents_impl(collection_name, documents_with_vectors, is_new, store_content, collection_config)
 
     async def _add_documents_impl(self, collection_name: str, documents_with_vectors: List[DocumentWithVectors], is_new: bool, store_content: bool, collection_config: CollectionConfigInternal) -> None:
