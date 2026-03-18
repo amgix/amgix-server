@@ -36,24 +36,24 @@ jobs:
     uses: ./.github/workflows/signal-vm.yml
     secrets: inherit
 
-  clean-docker:
-    needs: signal-vm
-    runs-on: ubuntu-x1
-    steps:
-      - name: Remove amgix containers
-        run: |
-          for id in $(docker ps -aq); do
-            img=$(docker inspect --format '{{.Config.Image}}' "$id" 2>/dev/null || true)
-            if [[ -n "$img" && "$img" == *amgix* ]]; then
-              docker rm -f "$id"
-            fi
-          done
-          
-      - name: Docker system prune
-        run: docker system prune -f
+  # clean-docker:
+  #   needs: signal-vm
+  #   runs-on: ubuntu-x1
+  #   steps:
+  #     - name: Remove amgix containers
+  #       run: |
+  #         for id in $(docker ps -aq); do
+  #           img=$(docker inspect --format '{{.Config.Image}}' "$id" 2>/dev/null || true)
+  #           if [[ -n "$img" && "$img" == *amgix* ]]; then
+  #             docker rm -f "$id"
+  #           fi
+  #         done
+
+  #     - name: Docker system prune
+  #       run: docker system prune -f
 
   build-small:
-    needs: clean-docker
+    needs: signal-vm
     runs-on: ubuntu-x1
     permissions:
       contents: read
