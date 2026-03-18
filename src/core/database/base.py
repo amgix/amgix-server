@@ -12,6 +12,7 @@ from ..common import (
     APP_PREFIX, DOC_NAMESPACE, DatabaseInfo, DatabaseFeatures, 
     MAX_DATABASE_WAIT_SECONDS
 )
+from ..common.lock_manager import LockClient
 
 
 class AmgixNotFound(Exception):
@@ -194,15 +195,16 @@ class DatabaseBase(ABC):
         pass
     
     @abstractmethod
-    async def add_documents(self, collection_name: str, documents_with_vectors: List[DocumentWithVectors], is_new: bool, store_content: bool, collection_config: CollectionConfigInternal) -> None:
+    async def add_documents(self, collection_name: str, documents_with_vectors: List[DocumentWithVectors], is_new: bool, store_content: bool, collection_config: CollectionConfigInternal, lock_client: LockClient) -> None:
         """
         Add or update documents in a collection.
-        
+
         Args:
             collection_name: Name of the collection to add the documents to
             documents_with_vectors: List of documents with pre-calculated vectors
             is_new: Whether the documents are known to be new (insert) or existing (update)
             store_content: Whether to store document content in the database
+            lock_client: Distributed lock client for serializing writes (SQL backends only)
         """
         pass
     

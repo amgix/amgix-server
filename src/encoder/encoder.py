@@ -167,7 +167,7 @@ class EncoderService(EncoderBase):
                     raise VectorizationException(f"Vectorization failed: {str(e)}") from e
                 
                 is_new = existing_document is None
-                await self.database.add_documents(collection_name, [doc_with_vectors], is_new=is_new, store_content=collection_config.store_content, collection_config=collection_config)
+                await self.database.add_documents(collection_name, [doc_with_vectors], is_new=is_new, store_content=collection_config.store_content, collection_config=collection_config, lock_client=self.lock_client)
                 
                 updates: Dict[str, Dict[str, int]] = {}
                 for field_vector_name, token_length in doc_with_vectors.token_lengths.items():
@@ -370,9 +370,9 @@ class EncoderService(EncoderBase):
                         existing_docs_list.append(docs_with_vectors[i])
 
                 if new_docs:
-                    await self.database.add_documents(collection_name, new_docs, is_new=True, store_content=collection_config.store_content, collection_config=collection_config)
+                    await self.database.add_documents(collection_name, new_docs, is_new=True, store_content=collection_config.store_content, collection_config=collection_config, lock_client=self.lock_client)
                 if existing_docs_list:
-                    await self.database.add_documents(collection_name, existing_docs_list, is_new=False, store_content=collection_config.store_content, collection_config=collection_config)
+                    await self.database.add_documents(collection_name, existing_docs_list, is_new=False, store_content=collection_config.store_content, collection_config=collection_config, lock_client=self.lock_client)
                 
                 if updates:
                     await self.bunny_talk.talk("collection-stats", collection_name=collection_name, updates=updates)
@@ -618,7 +618,7 @@ class RpcService(EncoderBase):
             doc_with_vectors = result[0]
             
             is_new = existing_document is None
-            await self.database.add_documents(collection_name, [doc_with_vectors], is_new=is_new, store_content=collection_config.store_content, collection_config=collection_config)
+            await self.database.add_documents(collection_name, [doc_with_vectors], is_new=is_new, store_content=collection_config.store_content, collection_config=collection_config, lock_client=self.lock_client)
             
             updates: Dict[str, Dict[str, int]] = {}
             for field_vector_name, token_length in doc_with_vectors.token_lengths.items():
