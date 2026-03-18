@@ -160,10 +160,10 @@ class EncoderServiceRunner:
 
 
     async def _start_database(self, lock_client: LockClient) -> DatabaseBase:
-        # Ensure database is available at startup and check features
         database = await get_connected_database(AMGIX_DATABASE_URL, self.logger)
-        await database.check_features()
 
         async with lock_client.acquire("database-configure", timeout=30.0):
             await database.configure()
-            return database
+
+        await database.check_features()
+        return database

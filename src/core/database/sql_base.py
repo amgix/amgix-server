@@ -179,7 +179,7 @@ class SQLBase(DatabaseBase):
         """,
         
         # Database Probing Templates
-        "version_query": "SELECT VERSION()",
+        "version_query": "SELECT VERSION() AS version",
 
         "vector_test_create": f"CREATE TEMPORARY TABLE {APP_PREFIX}_test_vector_idx (v VECTOR(1), VECTOR INDEX(v) USING HNSW WITH (M=8))",
         "vector_test_drop": f"DROP TEMPORARY TABLE {APP_PREFIX}_test_vector_idx",
@@ -423,7 +423,7 @@ class SQLBase(DatabaseBase):
         # Get version using existing SQL template
         try:
             version_result = await self.execute_sql(self.SQL_TEMPLATES["version_query"])
-            version = version_result[0]["VERSION()"] if version_result else "unknown"
+            version = version_result[0].get("version", "unknown") if version_result else "unknown"
         except Exception:
             version = "unknown"
         

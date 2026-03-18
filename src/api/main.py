@@ -100,10 +100,11 @@ async def lifespan(app: FastAPI):
     lock_client = LockClient(logger, _bunny_talk)
 
     _database = await get_connected_database(AMGIX_DATABASE_URL, logger=logger)
-    await _database.check_features()
 
     async with lock_client.acquire("database-configure", timeout=30.0):
         await _database.configure()
+
+    await _database.check_features()
   
     yield
 

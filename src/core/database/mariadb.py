@@ -135,7 +135,7 @@ class MariaDatabase(SQLBase):
             """,
             
             # Database Probing Templates (with backticks for MariaDB)
-            "version_query": "SELECT VERSION()",
+            "version_query": "SELECT VERSION() AS version",
             "vector_test_create": f"CREATE TEMPORARY TABLE `{APP_PREFIX}_test_vector_idx` (v VECTOR(1) NOT NULL)",
             "vector_test_drop": f"DROP TEMPORARY TABLE `{APP_PREFIX}_test_vector_idx`",
             

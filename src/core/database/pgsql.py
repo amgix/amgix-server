@@ -153,7 +153,7 @@ class PostgreSQLDatabase(SQLBase):
             """,
             
             # Database Probing Templates (with double quotes for PostgreSQL)
-            "version_query": "SELECT version()",
+            "version_query": "SELECT version() AS version",
             "vector_test_create": f'CREATE TEMPORARY TABLE "{APP_PREFIX}_test_vector_idx" (v VECTOR(1) NOT NULL)',
             "vector_test_drop": f'DROP TABLE "{APP_PREFIX}_test_vector_idx"',
             
@@ -369,8 +369,6 @@ class PostgreSQLDatabase(SQLBase):
 
         return out_sql, positional
 
-    async def probe(self) -> None:
-        """Probe the database connection and ensure pgvector extension is available."""
-        # Ensure pgvector extension is available
+    async def configure(self) -> None:
         await self.execute_sql_no_result("CREATE EXTENSION IF NOT EXISTS vector")
-        await super().probe()
+        await super().configure()
