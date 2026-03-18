@@ -566,12 +566,14 @@ class QdrantDatabase(DatabaseBase):
             weight_map[field_vector_name] = weight
             
             # Create search request for this vector
+            # Request only payload fields needed for SearchResult (exclude content to reduce transfer)
+            payload_fields = ["id", "timestamp", "name", "description", "metadata", "tags"]
             if VectorType.is_dense(vector_data.vector_type):
                 query_request = rest.QueryRequest(
                     using=field_vector_name,
                     query=vector_data.dense_vector,
                     limit=int(query.limit * SEARCH_PREFETCH_MULTIPLIER),
-                    with_payload=True,
+                    with_payload=payload_fields,
                     with_vector=False,
                     filter=final_filter
                 )
@@ -585,7 +587,7 @@ class QdrantDatabase(DatabaseBase):
                     using=field_vector_name,
                     query=sparse_vector,
                     limit=int(query.limit * SEARCH_PREFETCH_MULTIPLIER),
-                    with_payload=True,
+                    with_payload=payload_fields,
                     with_vector=False,
                     filter=final_filter
                 )
