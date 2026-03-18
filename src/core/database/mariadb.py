@@ -58,8 +58,8 @@ class MariaDatabase(SQLBase):
             "column_vector": '`{name}` VECTOR({dimensions}) NOT NULL',
             
             # Index Definition Templates (with backticks for MariaDB)
-            "index_primary": 'CONSTRAINT `pk_{name}` PRIMARY KEY (`{column}`)',
-            "index_primary_multi": 'CONSTRAINT `pk_{name}` PRIMARY KEY ({columns})',
+            "index_primary": 'PRIMARY KEY (`{column}`)',
+            "index_primary_multi": 'PRIMARY KEY ({columns})',
             "index_unique": 'UNIQUE KEY `ix_{name}` ({columns})',
             "index_simple": 'INDEX `ix_{name}` ({columns})',
             "index_foreign_key": 'CONSTRAINT `fk_{name}` FOREIGN KEY ({columns}) REFERENCES `{ref_table}`({ref_columns}){on_delete}',
