@@ -59,6 +59,11 @@ class ReadyResponse(BaseModel):
 class VersionResponse(BaseModel):
     version: str
 
+
+class CollectionExistsResponse(BaseModel):
+    exists: bool
+
+
 class BulkUploadRequest(BaseModel):
     documents: List[Document] = Field(..., max_length=MAX_BULK_UPLOAD)
 
@@ -377,6 +382,17 @@ async def get_collection_config(collection_name: CollectionName) -> CollectionCo
     real_collection_name = get_real_collection_name(collection_name)
     collection_config = await _database.get_collection_info(real_collection_name)
     return collection_config
+
+
+@shared_router.get("/collections/{collection_name}/exists", operation_id="collection_exists")
+async def collection_exists(collection_name: CollectionName) -> CollectionExistsResponse:
+    """Check if a collection exists. Always returns 200 with exists true or false."""
+    real_collection_name = get_real_collection_name(collection_name)
+    try:
+        await _database.get_collection_info_internal(real_collection_name)
+        return CollectionExistsResponse(exists=True)
+    except AmgixNotFound:
+        return CollectionExistsResponse(exists=False)
 
 
 @shared_router.post("/collections/{collection_name}/empty", operation_id="empty_collection")
