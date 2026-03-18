@@ -293,7 +293,7 @@ class CollectionConfig(BaseModel):
         ..., description="List of vector configurations for this collection"
     )
     store_content: bool = Field(
-        default=False, description="Whether to store document content in the database. Defaults to False for performance and cost reasons."
+        default=True, description="Whether to store document content in the database."
     )
     metadata_indexes: Optional[List[MetadataIndex]] = Field(
         default=None,
@@ -336,7 +336,7 @@ class CollectionConfigInternal(BaseModel):
         ..., description="List of vector configurations for this collection"
     )
     store_content: bool = Field(
-        default=False, description="Whether to store document content in the database. Defaults to False for performance and cost reasons."
+        default=True, description="Whether to store document content in the database."
     )
     metadata_indexes: Optional[List[MetadataIndex]] = Field(
         default=None,
