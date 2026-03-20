@@ -122,7 +122,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=f"{APP_NAME} API", 
     version=AMGIX_VERSION, 
-    description=f"{APP_NAME} (Amgix). The Hybrid Semantic Search Platform, API",
+    description=f"{APP_NAME} (Amgix). Hybrid Search Engine for Applications, API",
     lifespan=lifespan)
 
 
