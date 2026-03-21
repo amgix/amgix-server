@@ -87,10 +87,10 @@ services:
       - amgix-net
 
     environment:
-      - AMGIX_DATABASE_URL=qdrant://amgix-qdrant:6334
+      - AMGIX_DATABASE_URL=qdrant://amgix-qdrant:6334 
       - AMGIX_AMQP_URL=amqp://guest:guest@amgix-rabbitmq/
-      - AMGIX_ENCODER_ROLE=all
-      - AMGIX_LOAD_MODELS=true
+      - AMGIX_ENCODER_ROLE=all # index, query, all
+      - AMGIX_LOAD_MODELS=true # true, false
       
       # - AMGIX_LOG_LEVEL=INFO              # Optional: DEBUG, INFO, WARNING, ERROR, CRITICAL
       # - AMGIX_MEMORY_RESERVE_RAM=10%       # RAM headroom for encoder orchestration (default 10%; also accepts e.g. 2G)
