@@ -1,4 +1,4 @@
-# **Amgix** - Hybrid Search Engine for Applications
+# **Amgix** - Open-Source Hybrid Search Engine
 
 > **Amgix** (pronounced `a-MAG-ix`) - short for Amalgam Index  
 > *amalgam: a mixture or blend of different elements*
@@ -12,7 +12,7 @@ Amgix lets you add fast, relevant, modern search to your application without sti
 ## How It Works
 
 **0. Run Amgix One:**  
-Amgix One packs the API, encoder, RabbitMQ, and Qdrant into one container — the easiest way to try Amgix or run it with modest requirements.
+Amgix One packs the API, encoders, RabbitMQ, and Qdrant into one container — the easiest way to try Amgix or run it with modest requirements.
 
 ```bash
 docker run -d -p 8234:8234 -v /path/on/host:/data amgixio/amgix-one:1
