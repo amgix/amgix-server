@@ -49,6 +49,7 @@ class PostgreSQLDatabase(SQLBase):
             "column_text": '"{name}" TEXT{null_constraint}',
             "column_longtext": '"{name}" TEXT{null_constraint}',
             "column_int": '"{name}" INTEGER{null_constraint}',
+            "column_smallint": '"{name}" SMALLINT{null_constraint}',
             "column_bigint": '"{name}" BIGINT{null_constraint}',
             "column_float": '"{name}" REAL{null_constraint}',
             "column_decimal": '"{name}" NUMERIC(38,10){null_constraint}',
@@ -104,23 +105,45 @@ class PostgreSQLDatabase(SQLBase):
             
             # IDF Filter Template (PostgreSQL-specific with double quotes)
             "idf_filter": 'AND idf."doc_count" <= %(idf_threshold)s',
+            "query_vector_batch_select_first": """
+                SELECT
+                    CAST(%s AS SMALLINT) AS field_vector_id,
+                    CAST(%s AS BIGINT) AS token_id,
+                    CAST(%s AS REAL) AS weight,
+                    CAST(%s AS INTEGER) AS requires_idf
+            """,
+            "query_vector_batch_select_next": "SELECT %s, %s, %s, %s",
+            "query_vector_weighted_insert": """
+                INSERT INTO {table} ({field_vector_col}, {token_col}, {weight_col})
+                SELECT src.field_vector_id, src.token_id,
+                    CASE
+                        WHEN src.requires_idf = 1 THEN src.weight * {idf_expr}
+                        ELSE src.weight
+                    END AS weight
+                FROM ({source_rows}) src
+                LEFT JOIN {idf_table} idf
+                    ON idf.{idf_field_vector_col} = src.field_vector_id
+                    AND idf.{idf_token_col} = src.token_id
+                CROSS JOIN (SELECT COUNT(*) AS total_docs FROM {docs_table}) doc_stats
+                WHERE (src.requires_idf = 0 OR idf.{idf_token_col} IS NOT NULL)
+            """,
             
             "hybrid_search": """
-                SELECT vds.fv_name, d."id", d."name", d."description", d."timestamp", d."metadata", 
+                SELECT vds.fv_id, d."id", d."name", d."description", d."timestamp", d."metadata", 
                     (SELECT string_agg(t."tag", '|') FROM "{tags_table}" t WHERE t."doc_pk_id" = d."pk_id") tags,
                     vds.vdscore as score
                 FROM "{documents_table}" d
                 INNER JOIN (
-                    SELECT fv_name, "doc_pk_id", vdscore 
+                    SELECT fv_id, "doc_pk_id", vdscore 
                     FROM (
                         {all_unions}
                     ) combined_vectors
                 ) vds ON vds."doc_pk_id" = d."pk_id"
-                ORDER BY vds.fv_name, score DESC
+                ORDER BY vds.fv_id, score DESC
             """,
             
             "hybrid_scores_only": """
-                SELECT fv_name, "doc_pk_id", vdscore 
+                SELECT fv_id, "doc_pk_id", vdscore 
                 FROM (
                     {all_unions}
                 ) combined_vectors
@@ -165,25 +188,25 @@ class PostgreSQLDatabase(SQLBase):
             
             # Sparse Vector Search Templates (with double quotes for PostgreSQL)
             "sparse_union_single": """
-                SELECT '{field_vector_name}' fv_name, "doc_pk_id", vdscore FROM (
-                    SELECT '{field_vector_name}' fv_name, vd."doc_pk_id", sum(vd."weight" * qv."weight" * {sparse_idf}) vdscore
+                SELECT {field_vector_id} fv_id, "doc_pk_id", vdscore FROM (
+                    SELECT {field_vector_id} fv_id, vd."doc_pk_id", sum(vd."weight" * qv."weight" * {sparse_idf}) vdscore
                       FROM "{vector_data_table}" vd
                       {sparse_documents_join}
-                      INNER JOIN "{query_vectors_table}" qv ON qv."field_vector_name" = vd."field_vector_name" 
+                      INNER JOIN "{query_vectors_table}" qv ON qv."field_vector_id" = vd."field_vector_id" 
                         AND qv."token_id" = vd."token_id" 
-                        AND qv."field_vector_name" = '{field_vector_name}'
+                        AND qv."field_vector_id" = {field_vector_id}
                       {idf_join}
                       {tags_filter}
                       {idf_filter}
-                      GROUP BY fv_name, vd."doc_pk_id"
+                      GROUP BY vd."doc_pk_id"
                       ORDER BY vdscore DESC 
                       LIMIT %(prefetch_limit)s
                 ) sparse_subquery""",
             
             # Dense Vector Search Templates (with double quotes for PostgreSQL)
             "dense_union_single": """
-                SELECT '{field_vector_name}' fv_name, "pk_id" "doc_pk_id", vdscore FROM (
-                    SELECT '{field_vector_name}' fv_name, d."pk_id", (1 - {distance_expr}) vdscore
+                SELECT {field_vector_id} fv_id, "pk_id" "doc_pk_id", vdscore FROM (
+                    SELECT {field_vector_id} fv_id, d."pk_id", (1 - {distance_expr}) vdscore
                       FROM "{documents_table}" d 
                       {tags_filter}
                       ORDER BY {distance_expr} 

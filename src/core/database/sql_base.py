@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from abc import abstractmethod
 from contextlib import asynccontextmanager
 from .base import DatabaseBase, AmgixNotFound
+from .common import AmgixValidationError
 from ..models.document import Document, DocumentWithVectors, QueueDocument, QueueInfo, SearchResult, DocumentStatus, DocumentStatusResponse, VectorScore
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config
 from ..common import (
@@ -96,6 +97,7 @@ class SQLBase(DatabaseBase):
         "column_text": '"{name}" TEXT{null_constraint}',
         "column_longtext": '"{name}" LONGTEXT{null_constraint}',
         "column_int": '"{name}" INT{null_constraint}',
+        "column_smallint": '"{name}" SMALLINT{null_constraint}',
         "column_bigint": '"{name}" BIGINT{null_constraint}',
         "column_float": '"{name}" FLOAT{null_constraint}',
         "column_decimal": '"{name}" DECIMAL(38,10){null_constraint}',
@@ -118,6 +120,28 @@ class SQLBase(DatabaseBase):
         "upsert": "INSERT INTO {table} ({columns}) VALUES {values} ON DUPLICATE KEY UPDATE {update_clause}",
         # Backend-specific update clause for IDF upsert; default works for MariaDB/MySQL
         "upsert_update_doc_count": "doc_count = doc_count + 1",
+        "query_vector_batch_select_first": """
+            SELECT
+                %s AS field_vector_id,
+                %s AS token_id,
+                %s AS weight,
+                %s AS requires_idf
+        """,
+        "query_vector_batch_select_next": "SELECT %s, %s, %s, %s",
+        "query_vector_weighted_insert": """
+            INSERT INTO {table} ({field_vector_col}, {token_col}, {weight_col})
+            SELECT src.field_vector_id, src.token_id,
+                CASE
+                    WHEN src.requires_idf = 1 THEN src.weight * {idf_expr}
+                    ELSE src.weight
+                END AS weight
+            FROM ({source_rows}) src
+            LEFT JOIN {idf_table} idf
+                ON idf.{idf_field_vector_col} = src.field_vector_id
+                AND idf.{idf_token_col} = src.token_id
+            CROSS JOIN (SELECT COUNT(*) AS total_docs FROM {docs_table}) doc_stats
+            WHERE (src.requires_idf = 0 OR idf.{idf_token_col} IS NOT NULL)
+        """,
         "update": "UPDATE {table} SET {set_clause} WHERE {where_clause}",
         "update_join": "UPDATE {table} {alias} JOIN ({subquery}) {subquery_alias} ON {join_conditions} SET {set_clause}",
         "delete_join": "DELETE {alias} FROM {table} {alias} JOIN ({subquery}) {subquery_alias} ON {join_conditions} WHERE {where_clause}",
@@ -147,22 +171,22 @@ class SQLBase(DatabaseBase):
         "dense_distance_euclid": 'd.{field_name} <-> %({param_name})s',  # Same as cosine for PostgreSQL
         "dense_vector_insert": 'Vec_FromText({vector_values})',
         "hybrid_search": """
-            SELECT vds.fv_name, d.`id`, d.`name`, d.`description`, d.`timestamp`, d.`metadata`, 
+            SELECT vds.fv_id, d.`id`, d.`name`, d.`description`, d.`timestamp`, d.`metadata`, 
                 (SELECT GROUP_CONCAT(t.`tag` SEPARATOR '|') FROM `{tags_table}` t WHERE t.`doc_pk_id` = d.`pk_id`) tags,
                 vds.vdscore as score
             FROM `{documents_table}` d
             INNER JOIN (
-                SELECT fv_name, `doc_pk_id`, vdscore 
+                SELECT fv_id, `doc_pk_id`, vdscore 
                 FROM (
                     {all_unions}
                 ) combined_vectors
             ) vds ON vds.`doc_pk_id` = d.`pk_id`
-            ORDER BY vds.fv_name, score DESC
+            ORDER BY vds.fv_id, score DESC
         """,
         
         # Scores-only wrapper for union arms (no join to documents)
         "hybrid_scores_only": """
-            SELECT fv_name, `doc_pk_id`, vdscore 
+            SELECT fv_id, `doc_pk_id`, vdscore 
             FROM (
                 {all_unions}
             ) combined_vectors
@@ -187,17 +211,17 @@ class SQLBase(DatabaseBase):
         
         # Sparse Vector Search Templates
         "sparse_union_single": """
-            SELECT '{field_vector_name}' fv_name, `doc_pk_id`, vdscore FROM (
-                SELECT '{field_vector_name}' fv_name, vd.`doc_pk_id`, SUM(vd.`weight` * qv.`weight` * {sparse_idf}) vdscore
+            SELECT {field_vector_id} fv_id, `doc_pk_id`, vdscore FROM (
+                SELECT {field_vector_id} fv_id, vd.`doc_pk_id`, SUM(vd.`weight` * qv.`weight` * {sparse_idf}) vdscore
                     FROM `{vector_data_table}` vd
                     {sparse_documents_join}
-                    INNER JOIN `{query_vectors_table}` qv ON qv.`field_vector_name` = vd.`field_vector_name` 
+                    INNER JOIN `{query_vectors_table}` qv ON qv.`field_vector_id` = vd.`field_vector_id` 
                     AND qv.`token_id` = vd.`token_id` 
-                    AND qv.`field_vector_name` = '{field_vector_name}'
+                    AND qv.`field_vector_id` = {field_vector_id}
                     {idf_join}
                     {tags_filter}
                     {idf_filter}
-                    GROUP BY fv_name, vd.`doc_pk_id`
+                    GROUP BY vd.`doc_pk_id`
                     ORDER BY vdscore DESC 
                     LIMIT %(prefetch_limit)s
             ) sparse_subquery""",
@@ -210,8 +234,8 @@ class SQLBase(DatabaseBase):
         
         # Dense Vector Search Templates
         "dense_union_single": """
-            SELECT '{field_vector_name}' fv_name, `pk_id` `doc_pk_id`, vdscore FROM (
-                SELECT '{field_vector_name}' fv_name, d.`pk_id`, (1 - {distance_expr}) vdscore
+            SELECT {field_vector_id} fv_id, `pk_id` `doc_pk_id`, vdscore FROM (
+                SELECT {field_vector_id} fv_id, d.`pk_id`, (1 - {distance_expr}) vdscore
                     FROM `{documents_table}` d 
                     {tags_filter}
                     ORDER BY {distance_expr} 
@@ -498,44 +522,92 @@ class SQLBase(DatabaseBase):
             Flattened tuple of all values
         """
         return tuple(value for row in data_rows for value in row)
+
+    def _get_field_vector_ids(self, collection_config: CollectionConfigInternal) -> Dict[str, int]:
+        field_vector_names: List[str] = []
+        for vector in collection_config.vectors:
+            for field in vector.index_fields:
+                field_vector_names.append(f"{field}_{vector.name}")
+
+        field_vector_names.sort()
+
+        return {
+            field_vector_name: field_vector_id
+            for field_vector_id, field_vector_name in enumerate(field_vector_names)
+        }
     
     # ==========================================
     # Helper Methods for Query Management
     # ==========================================
     
-    async def insert_query_vectors(self, processed_sparse_vectors: Dict[str, Dict[int, float]], table_name: str, conn=None) -> None:
+    async def insert_query_vectors(
+        self,
+        collection_name: str,
+        rows: List[Tuple[int, int, float, int]],
+        table_name: str,
+        conn=None
+    ) -> None:
         """
         Insert query vector tokens for sparse search with field information.
         
-        This method takes the pre-processed sparse vectors (converted from sparse_indices + sparse_values)
-        and inserts them into the query_vectors table for efficient JOINs during search.
+        This method inserts query tokens into the temp query_vectors table. For sparse
+        vector types that use IDF, it computes the final weighted query tokens in SQL
+        during the insert so the hot search query can stay simple.
         
         Args:
-            query_id: Unique identifier for this search query
-            processed_sparse_vectors: Dictionary mapping field_vector_name to {token_id: weight} pairs
+            collection_name: Name of the collection being searched
+            rows: Prepared query vector rows as (field_vector_id, token_id, weight, requires_idf)
             conn: Database connection (from transaction context)
         """
-        if not processed_sparse_vectors:
+        if not rows:
             return
-        
-        # Prepare all rows with field_vector_name without deduping (assumes caller pre-aggregates if needed)
-        rows = []
-        for field_vector_name, vector_tokens in processed_sparse_vectors.items():
-            for token_id, weight in vector_tokens:
-                rows.append((field_vector_name, token_id, weight))
-        
+
         # Insert in batches
         batch_size = self.DEFAULT_BATCH_SIZE
+        docs_table = self.quote_identifier(self.get_table_name(collection_name, self.TableType.DOCUMENTS))
+        idf_table = self.quote_identifier(self.get_table_name(collection_name, self.TableType.IDF))
+        token_col = self.quote_identifier("token_id")
+        doc_count_col = self.quote_identifier("doc_count")
+        field_vector_col = self.quote_identifier("field_vector_id")
+        weight_col = self.quote_identifier("weight")
+
         for i in range(0, len(rows), batch_size):
             batch = rows[i:i + batch_size]
-            # Always use batch insert - it handles any size efficiently
-            sql = self.generate_batch_insert_sql(
-                table_name,
-                ['field_vector_name', 'token_id', 'weight'],
-                len(batch)
+            if not any(row[3] for row in batch):
+                sql = self.generate_batch_insert_sql(
+                    table_name,
+                    ['field_vector_id', 'token_id', 'weight'],
+                    len(batch)
+                )
+                params = self.flatten_batch_params([(fv_id, token_id, weight) for fv_id, token_id, weight, _ in batch])
+                await self.execute_sql_no_result(sql, params, conn=conn)
+                continue
+
+            select_clauses = []
+            params: List[Any] = []
+            for field_vector_id, token_id, weight, requires_idf in batch:
+                if select_clauses:
+                    select_clauses.append(self.format_sql("query_vector_batch_select_next"))
+                else:
+                    select_clauses.append(self.format_sql("query_vector_batch_select_first"))
+                params.extend([field_vector_id, token_id, weight, requires_idf])
+
+            idf_sql = self.format_sql("sparse_idf").replace("%(total_docs)s", "doc_stats.total_docs")
+            insert_sql = self.format_sql(
+                "query_vector_weighted_insert",
+                table=self.quote_identifier(table_name),
+                field_vector_col=field_vector_col,
+                token_col=token_col,
+                weight_col=weight_col,
+                idf_expr=idf_sql,
+                source_rows=" UNION ALL ".join(select_clauses),
+                idf_table=idf_table,
+                idf_field_vector_col=field_vector_col,
+                idf_token_col=token_col,
+                docs_table=docs_table,
+                doc_count_col=doc_count_col
             )
-            params = self.flatten_batch_params(batch)
-            await self.execute_sql_no_result(sql, params, conn=conn)
+            await self.execute_sql_no_result(insert_sql, tuple(params), conn=conn)
     
 
     
@@ -753,7 +825,7 @@ class SQLBase(DatabaseBase):
             columns = [
                 self.format_sql("column_pk", name="pk_id"),
                 self.format_sql("column_bigint", name="doc_pk_id", null_constraint=" NOT NULL"),
-                self.format_sql("column_varchar", name="field_vector_name", size=MAX_FIELD_VECTOR_NAME_LENGTH, null_constraint=" NOT NULL"),
+                self.format_sql("column_smallint", name="field_vector_id", null_constraint=" NOT NULL"),
                 self.format_sql("column_bigint", name="token_id", null_constraint=" NOT NULL"),
                 self.format_sql("column_float", name="weight", null_constraint=" NOT NULL")
             ]
@@ -761,7 +833,7 @@ class SQLBase(DatabaseBase):
             # Prepare indexes
             # Unique and FK constraints
             unique_indexes = [
-                ("vec_doc_field_token", self.quote_column_list(["field_vector_name", "token_id", "doc_pk_id"]))
+                ("vec_doc_field_token", self.quote_column_list(["field_vector_id", "token_id", "doc_pk_id"]))
             ]
             indexes = [
                 self.format_sql(
@@ -776,8 +848,8 @@ class SQLBase(DatabaseBase):
                 )
             ]
             vector_data_simple_indexes = [
-                ("token_vec_doc_idf", self.quote_column_list(["token_id", "field_vector_name", "doc_pk_id"])),
-                ("vec_fv_token_doc_weight", self.quote_column_list(["field_vector_name", "token_id", "doc_pk_id", "weight"]))
+                ("token_vec_doc_idf", self.quote_column_list(["token_id", "field_vector_id", "doc_pk_id"])),
+                ("vec_fv_token_doc_weight", self.quote_column_list(["field_vector_id", "token_id", "doc_pk_id", "weight"]))
             ]
             
             # Create vector data table
@@ -848,21 +920,21 @@ class SQLBase(DatabaseBase):
             await self.execute_sql_no_result(tags_sql)
 
         async def create_idf_table():
-            # Prepare columns for IDF table: field_vector_name, token_id, doc_count
+            # Prepare columns for IDF table: field_vector_id, token_id, doc_count
             idf_columns = [
-                self.format_sql("column_varchar", name="field_vector_name", size=MAX_FIELD_VECTOR_NAME_LENGTH, null_constraint=" NOT NULL"),
+                self.format_sql("column_smallint", name="field_vector_id", null_constraint=" NOT NULL"),
                 self.format_sql("column_bigint", name="token_id", null_constraint=" NOT NULL"),
                 self.format_sql("column_int", name="doc_count", null_constraint=" NOT NULL")
             ]
 
-            # Primary key on (field_vector_name, token_id)
+            # Primary key on (field_vector_id, token_id)
             idf_indexes = [
                 self.format_sql(
                     "index_primary_multi",
                     name=self._string_to_uuid(
                         f"{self.get_table_name(collection_name, self.TableType.IDF)}"
                     ),
-                    columns=self.quote_column_list(["field_vector_name", "token_id"]),
+                    columns=self.quote_column_list(["field_vector_id", "token_id"]),
                 )
             ]
 
@@ -959,6 +1031,7 @@ class SQLBase(DatabaseBase):
 
     async def _add_documents_impl(self, collection_name: str, documents_with_vectors: List[DocumentWithVectors], is_new: bool, store_content: bool, collection_config: CollectionConfigInternal) -> None:
         metadata_indexes = collection_config.metadata_indexes or []
+        field_vector_ids = self._get_field_vector_ids(collection_config)
         
         async def insert_document(document_with_vectors: DocumentWithVectors, conn=None):
             # Prepare metadata JSON
@@ -1144,9 +1217,9 @@ class SQLBase(DatabaseBase):
             idf_update_sql = self.format_sql("update_join",
                 table=self.get_table_name(collection_name, self.TableType.IDF),
                 alias="idf",
-                subquery=f"SELECT DISTINCT {self.quote_identifier('field_vector_name')}, {self.quote_identifier('token_id')} FROM {self.quote_identifier(self.get_table_name(collection_name, self.TableType.VECTOR_DATA))} WHERE {self.quote_identifier('doc_pk_id')} = %s",
+                subquery=f"SELECT DISTINCT {self.quote_identifier('field_vector_id')}, {self.quote_identifier('token_id')} FROM {self.quote_identifier(self.get_table_name(collection_name, self.TableType.VECTOR_DATA))} WHERE {self.quote_identifier('doc_pk_id')} = %s",
                 subquery_alias="vd",
-                join_conditions="vd.field_vector_name = idf.field_vector_name AND vd.token_id = idf.token_id",
+                join_conditions="vd.field_vector_id = idf.field_vector_id AND vd.token_id = idf.token_id",
                 set_clause=f"{self.quote_identifier('doc_count')} = {self.quote_identifier('doc_count')} - 1"
             )
             
@@ -1157,9 +1230,9 @@ class SQLBase(DatabaseBase):
             idf_cleanup_sql = self.format_sql("delete_join",
                 table=self.get_table_name(collection_name, self.TableType.IDF),
                 alias="idf",
-                subquery=f"SELECT DISTINCT {self.quote_identifier('field_vector_name')}, {self.quote_identifier('token_id')} FROM {self.quote_identifier(self.get_table_name(collection_name, self.TableType.VECTOR_DATA))} WHERE {self.quote_identifier('doc_pk_id')} = %s",
+                subquery=f"SELECT DISTINCT {self.quote_identifier('field_vector_id')}, {self.quote_identifier('token_id')} FROM {self.quote_identifier(self.get_table_name(collection_name, self.TableType.VECTOR_DATA))} WHERE {self.quote_identifier('doc_pk_id')} = %s",
                 subquery_alias="vd",
-                join_conditions="vd.field_vector_name = idf.field_vector_name AND vd.token_id = idf.token_id",
+                join_conditions="vd.field_vector_id = idf.field_vector_id AND vd.token_id = idf.token_id",
                 where_clause=f"{self.quote_identifier('doc_count')} = 0"
             )
             
@@ -1177,10 +1250,11 @@ class SQLBase(DatabaseBase):
                 for v in document_with_vectors.vectors:
                     if v.sparse_indices and v.sparse_values:
                         field_vector_name = f"{v.field}_{v.vector_name}"
+                        field_vector_id = field_vector_ids[field_vector_name]
                         for token_id, weight in zip(v.sparse_indices, v.sparse_values):
-                            rows.append((doc_pk_id, field_vector_name, token_id, weight))
+                            rows.append((doc_pk_id, field_vector_id, token_id, weight))
                             # Collect unique tokens for IDF updates
-                            token_occurrences.add((field_vector_name, token_id))
+                            token_occurrences.add((field_vector_id, token_id))
 
                 if rows:
                     batch_size = self.DEFAULT_BATCH_SIZE
@@ -1189,23 +1263,23 @@ class SQLBase(DatabaseBase):
                         # Always use batch insert - it handles any size efficiently
                         sql = self.generate_batch_insert_sql(
                             self.get_table_name(collection_name, self.TableType.VECTOR_DATA),
-                            ['doc_pk_id', 'field_vector_name', 'token_id', 'weight'],
+                            ['doc_pk_id', 'field_vector_id', 'token_id', 'weight'],
                             len(batch)
                         )
                         params = self.flatten_batch_params(batch)
                         await self.execute_sql_no_result(sql, params, conn=conn)
 
-                    # Now upsert IDF records for all unique (field_vector_name, token_id) pairs
+                    # Now upsert IDF records for all unique (field_vector_id, token_id) pairs
                     if token_occurrences:
                         # Convert to list and sort deterministically to impose a stable lock order
-                        idf_rows = sorted((field_vector_name, token_id, 1) for field_vector_name, token_id in token_occurrences)
+                        idf_rows = sorted((field_vector_id, token_id, 1) for field_vector_id, token_id in token_occurrences)
                         
                         # Process IDF updates in batches
                         for i in range(0, len(idf_rows), batch_size):
                             batch = idf_rows[i:i + batch_size]
                             
                             # Build the upsert SQL using the new upsert template
-                            columns = ['field_vector_name', 'token_id', 'doc_count']
+                            columns = ['field_vector_id', 'token_id', 'doc_count']
                             values_placeholders = ', '.join(['(%s, %s, %s)'] * len(batch))
                             update_clause = self.SQL_TEMPLATES["upsert_update_doc_count"].format(
                                 table=self.get_table_name(collection_name, self.TableType.IDF)
@@ -1217,13 +1291,13 @@ class SQLBase(DatabaseBase):
                                 columns=', '.join([self.quote_identifier(col) for col in columns]),
                                 values=values_placeholders,
                                 update_clause=update_clause,
-                                conflict_columns=self.quote_column_list(["field_vector_name", "token_id"]),
+                                conflict_columns=self.quote_column_list(["field_vector_id", "token_id"]),
                             )
                             
                             # Flatten the batch parameters
                             params = []
-                            for field_vector_name, token_id, doc_count in batch:
-                                params.extend([field_vector_name, token_id, doc_count])
+                            for field_vector_id, token_id, doc_count in batch:
+                                params.extend([field_vector_id, token_id, doc_count])
                             
                             await self.execute_sql_no_result(upsert_sql, tuple(params), conn=conn)
 
@@ -1393,9 +1467,9 @@ class SQLBase(DatabaseBase):
                 idf_update_sql = self.format_sql("update_join",
                     table=self.get_table_name(collection_name, self.TableType.IDF),
                     alias="idf",
-                    subquery=f"SELECT DISTINCT {self.quote_identifier('field_vector_name')}, {self.quote_identifier('token_id')} FROM {self.quote_identifier(self.get_table_name(collection_name, self.TableType.VECTOR_DATA))} WHERE {self.quote_identifier('doc_pk_id')} = %s",
+                    subquery=f"SELECT DISTINCT {self.quote_identifier('field_vector_id')}, {self.quote_identifier('token_id')} FROM {self.quote_identifier(self.get_table_name(collection_name, self.TableType.VECTOR_DATA))} WHERE {self.quote_identifier('doc_pk_id')} = %s",
                     subquery_alias="vd",
-                    join_conditions="vd.field_vector_name = idf.field_vector_name AND vd.token_id = idf.token_id",
+                    join_conditions="vd.field_vector_id = idf.field_vector_id AND vd.token_id = idf.token_id",
                     set_clause=f"{self.quote_identifier('doc_count')} = {self.quote_identifier('doc_count')} - 1"
                 )
                 
@@ -1406,9 +1480,9 @@ class SQLBase(DatabaseBase):
                 idf_cleanup_sql = self.format_sql("delete_join",
                     table=self.get_table_name(collection_name, self.TableType.IDF),
                     alias="idf",
-                    subquery=f"SELECT DISTINCT {self.quote_identifier('field_vector_name')}, {self.quote_identifier('token_id')} FROM {self.quote_identifier(self.get_table_name(collection_name, self.TableType.VECTOR_DATA))} WHERE {self.quote_identifier('doc_pk_id')} = %s",
+                    subquery=f"SELECT DISTINCT {self.quote_identifier('field_vector_id')}, {self.quote_identifier('token_id')} FROM {self.quote_identifier(self.get_table_name(collection_name, self.TableType.VECTOR_DATA))} WHERE {self.quote_identifier('doc_pk_id')} = %s",
                     subquery_alias="vd",
-                    join_conditions="vd.field_vector_name = idf.field_vector_name AND vd.token_id = idf.token_id",
+                    join_conditions="vd.field_vector_id = idf.field_vector_id AND vd.token_id = idf.token_id",
                     where_clause=f"{self.quote_identifier('doc_count')} = 0"
                 )
                 
@@ -1430,73 +1504,41 @@ class SQLBase(DatabaseBase):
     async def search(self, collection_name: str, query: SearchQueryWithVectors, collection_config: CollectionConfigInternal) -> List[SearchResult]:
         """
         Perform a hybrid search on the collection using precalculated vectors.
-        Uses a transaction for automatic cleanup of temporary query vector data.
         """
-        # Prepare sparse vector queries - convert sparse_indices + sparse_values to {token_id: weight} dict
-        processed_sparse_vectors = {}  # Maps field_vector_name -> {token_id: weight} for sparse vectors
-        weight_map = {}
-        
-        # Create a lookup dictionary for vector weights
+        field_vector_ids = self._get_field_vector_ids(collection_config)
+        vector_config_map = {vc.name: vc for vc in collection_config.vectors}
         weight_lookup = {(x.vector_name, x.field): x.weight for x in query.vector_weights}
-        
-        # Collect all vectors and their weights
+        search_arms = []
+
         for vector_data in query.vectors:
             field_vector_name = f"{vector_data.field}_{vector_data.vector_name}"
-            # Default to 1.0 if no weight specified, override with user value if provided
             weight = weight_lookup.get((vector_data.vector_name, vector_data.field), 1.0)
-            
-            # Skip vectors with weight 0 - they contribute nothing
             if weight == 0:
                 continue
-            
-            # For sparse vectors, prepare the tokens for database insertion as list-of-pairs
-            # Note: We trust the vectorizer to avoid duplicates for query vectors
+
+            field_vector_id = field_vector_ids[field_vector_name]
+            sparse_tokens = None
+            requires_idf = 0
             if not VectorType.is_dense(vector_data.vector_type):
-                processed_sparse_vectors[field_vector_name] = list(zip(vector_data.sparse_indices, vector_data.sparse_values))
-            
-            # Store the weight for both sparse and dense vectors
-            weight_map[field_vector_name] = weight
-        
-        results = None
-            
-        # Use the transaction context manager for atomic search operations
-        async with self.transaction() as conn:
-            # Step 1: Insert sparse vector tokens into query_vectors table for efficient JOINs
-            if processed_sparse_vectors:
-                # Ensure per-connection TEMP table exists and is empty
-                temp_table = self.get_table_name("", self.TableType.QUERY_VECTORS)
-                temp_cols = [
-                    self.format_sql("column_varchar", name="field_vector_name", size=MAX_FIELD_VECTOR_NAME_LENGTH, null_constraint=" NOT NULL"),
-                    self.format_sql("column_bigint", name="token_id", null_constraint=" NOT NULL"),
-                    self.format_sql("column_float", name="weight", null_constraint=" NOT NULL"),
-                    self.format_sql("index_primary_multi", name=temp_table, columns=self.quote_column_list(["field_vector_name", "token_id"]))
-                ]
-                create_temp_sql = self.format_sql(
-                    "create_temp_table",
-                    table_name=temp_table,
-                    columns=',\n                '.join(temp_cols),
-                    table_options=self.SQL_TEMPLATES.get("table_options", "")
-                )
-                await self.execute_sql_no_result(create_temp_sql, conn=conn)
-                # Truncate before each search to isolate rows
-                await self.execute_sql_no_result(self.format_sql("truncate", table=temp_table), conn=conn)
-                # Insert into temp table
-                await self.insert_query_vectors(processed_sparse_vectors, table_name=temp_table, conn=conn)
-            
-            ef_sql = self.format_sql("ef_search", ef_search=query.limit * 3)
-            if ef_sql:
-                await self.execute_sql_no_result(ef_sql, conn=conn)
+                vector_config = vector_config_map.get(vector_data.vector_name)
+                requires_idf = 1 if (
+                    vector_data.vector_type in VectorType.custom_tokenization() or (
+                        vector_config is not None
+                        and vector_config.model is not None
+                        and vector_config.model.lower() == "qdrant/bm25"
+                    )
+                ) else 0
+                sparse_tokens = list(zip(vector_data.sparse_indices, vector_data.sparse_values))
 
-            # Step 2: Execute the actual search using the inserted query vectors
-            results = await self._perform_search(collection_name, query, processed_sparse_vectors, weight_map, collection_config, conn=conn)
-            # Step 3: Clean up by rolling back (query vectors are temporary for this search only)
-            # this exception will be swallowed by transaction context manager and will send us to return results.
-            raise TransactionRollback()
+            search_arms.append((vector_data, field_vector_id, weight, sparse_tokens, requires_idf))
 
-            # end_time = time.time()
-            # self.logger.info(f"Search time: {end_time - start_time} seconds")
-
-        return results
+        return await self._perform_search(
+            collection_name,
+            query,
+            search_arms,
+            collection_config,
+            field_vector_ids
+        )
 
     def _normalize_metadata_filter_value(
         self,
@@ -1588,63 +1630,37 @@ class SQLBase(DatabaseBase):
         self, 
         collection_name: str, 
         query: SearchQueryWithVectors,
-        processed_sparse_vectors: Dict[str, Dict[int, float]],
-        weight_map: Dict[str, float],
+        search_arms: List[Tuple[Any, int, float, Optional[List[Tuple[int, float]]], int]],
         collection_config: CollectionConfigInternal,
-        conn=None
+        field_vector_ids: Dict[str, int],
     ) -> List[SearchResult]:
         """
-        Internal search method that performs hybrid search in a single query.
-        
-        This method handles the SQL generation and execution for hybrid search,
-        combining both sparse and dense vector results using UNION ALL subqueries.
-        
-        Args:
-            collection_name: Name of the collection to search
-            query: Search query with pre-vectorized data
-            query_id: Unique identifier for this search (used for query_vectors table)
-            processed_sparse_vectors: Pre-processed sparse vectors as {field_vector_name: {token_id: weight}}
-            weight_map: Vector weights (default 1.0 if not specified, user values if provided)
-            conn: Database connection (from transaction context)
+        Internal search method that executes vector arms in parallel and fuses the results.
         """
-        # Get all vector queries (both sparse and dense)
-        all_vectors = query.vectors
+        if not search_arms:
+            raise AmgixValidationError("Search query has no active vectors to search with")
         
-        # Initialize parameters dictionary early so it can be used throughout the method
-        params = {}
-        
-        # Get all table names once to avoid repeated lookups
         docs_table = self.get_table_name(collection_name, self.TableType.DOCUMENTS)
         vector_table = self.get_table_name(collection_name, self.TableType.VECTOR_DATA)
-        # Use per-connection temporary query table name
         query_vectors_table = self.get_table_name("", self.TableType.QUERY_VECTORS)
         tags_table = self.get_table_name(collection_name, self.TableType.TAGS)
-        idf_table = self.get_table_name(collection_name, self.TableType.IDF)
-        
-        # Precompute total_docs once per search to avoid repeated scans
-        total_docs_row = await self.execute_sql(
-            self.format_sql("count", table=docs_table, where=""),
-            conn=conn
-        )
-        params["total_docs"] = (total_docs_row[0]["count"] if total_docs_row else 0)
-        
-        # Determine document and metadata filtering
+
         has_document_tags_filter = bool(query.document_tags)
         metadata_filter_sql = ""
+        filter_params: Dict[str, Any] = {}
         if query.metadata_filter:
             metadata_filter_sql, filter_params = self._convert_metadata_filter_to_sql(
                 query.metadata_filter,
                 collection_config,
             )
-            params.update(filter_params)
-        has_metadata_filter = bool(metadata_filter_sql)
-        has_document_filter = has_document_tags_filter or has_metadata_filter
+        has_document_filter = has_document_tags_filter or bool(metadata_filter_sql)
 
         tag_filter_condition = ""
+        base_params: Dict[str, Any] = dict(filter_params)
         if has_document_tags_filter:
-            params["document_tags"] = tuple(query.document_tags)
+            base_params["document_tags"] = tuple(query.document_tags)
             if query.document_tags_match_all:
-                params["document_tags_count"] = len(query.document_tags)
+                base_params["document_tags_count"] = len(query.document_tags)
                 tag_filter_template = self.format_sql("tags_filter_and", tags_table=tags_table).strip()
             else:
                 tag_filter_template = self.format_sql("tags_filter", tags_table=tags_table).strip()
@@ -1665,170 +1681,104 @@ class SQLBase(DatabaseBase):
             if has_document_filter
             else ""
         )
-        
-        # Create a map of vector names to their configs for efficient lookup
         vector_config_map = {vc.name: vc for vc in collection_config.vectors}
-        
-        # Build all union statements and parameters in a single loop
-        all_unions = []
-        
-        for i, vector in enumerate(all_vectors):
-            if VectorType.is_dense(vector.vector_type):
-                # Handle dense vector
-                field_vector_name = f"{vector.field}_{vector.vector_name}"
-                
-                # Get vector config from the map
-                vector_config = vector_config_map.get(vector.vector_name)
-                
-                # Use proper parameter binding with unique names
-                param_name = f"dense_vector_{i}"
-                
-                # Use the appropriate distance function based on vector config
-                template_name = f"dense_distance_{vector_config.dense_distance}"
-                distance_expr = self.format_sql(template_name, 
-                    field_name=field_vector_name,
-                    param_name=param_name
-                )
-                
-                all_unions.append(self.format_sql("dense_union_single",
-                    field_vector_name=field_vector_name,
-                    documents_table=docs_table,
-                    distance_expr=distance_expr,
-                    prefetch_limit=int(query.limit * SEARCH_PREFETCH_MULTIPLIER),
-                    tags_filter=tags_filter
-                ))
-                # Add dense vector parameter - format it properly for Vec_FromText()
-                dense_vector_str = f"[{','.join(str(val) for val in vector.dense_vector)}]"
-                params[f"dense_vector_{i}"] = dense_vector_str
-            else:
-                # Handle sparse vector (sparse_model, full_text, trigrams, wmtr)
-                field_vector_name = f"{vector.field}_{vector.vector_name}"
+        field_vector_names_by_id = (
+            {field_vector_id: field_vector_name for field_vector_name, field_vector_id in field_vector_ids.items()}
+            if query.raw_scores else None
+        )
+        raw_scores_map: Dict[int, List[VectorScore]] = {}
+        prefetch_limit = int(query.limit * SEARCH_PREFETCH_MULTIPLIER)
+        temp_cols = [
+            self.format_sql("column_smallint", name="field_vector_id", null_constraint=" NOT NULL"),
+            self.format_sql("column_bigint", name="token_id", null_constraint=" NOT NULL"),
+            self.format_sql("column_float", name="weight", null_constraint=" NOT NULL"),
+            self.format_sql("index_primary_multi", name=query_vectors_table, columns=self.quote_column_list(["field_vector_id", "token_id"]))
+        ]
+        create_temp_sql = self.format_sql(
+            "create_temp_table",
+            table_name=query_vectors_table,
+            columns=',\n                '.join(temp_cols),
+            table_options=self.SQL_TEMPLATES.get("table_options", "")
+        )
+        async def execute_arm(search_arm):
+            vector_data, field_vector_id, _, sparse_tokens, requires_idf = search_arm
+            arm_rows = []
+            params = dict(base_params)
+            params["prefetch_limit"] = prefetch_limit
 
-                # Get vector config from the map
-                vector_config = vector_config_map.get(vector.vector_name)
-
-                if vector.vector_type in VectorType.custom_tokenization() or (vector_config.model and vector_config.model.lower() == "qdrant/bm25"):
-                    sparse_idf = self.format_sql("sparse_idf")
-                    idf_join = self.format_sql(
-                        "idf_join",
-                        idf_table=self.quote_identifier(idf_table),
-                        token_col=self.quote_identifier("token_id"),
-                        fv_col=self.quote_identifier("field_vector_name"),
+            async with self.transaction() as conn:
+                if sparse_tokens is None:
+                    field_vector_name = f"{vector_data.field}_{vector_data.vector_name}"
+                    vector_config = vector_config_map.get(vector_data.vector_name)
+                    distance_expr = self.format_sql(
+                        f"dense_distance_{vector_config.dense_distance}",
+                        field_name=field_vector_name,
+                        param_name="dense_vector"
+                    )
+                    sql = self.format_sql(
+                        "dense_union_single",
+                        field_vector_id=field_vector_id,
+                        documents_table=docs_table,
+                        distance_expr=distance_expr,
+                        prefetch_limit=prefetch_limit,
+                        tags_filter=tags_filter
+                    )
+                    params["dense_vector"] = f"[{','.join(str(val) for val in vector_data.dense_vector)}]"
+                    ef_sql = self.format_sql("ef_search", ef_search=prefetch_limit)
+                    if ef_sql:
+                        await self.execute_sql_no_result(ef_sql, conn=conn)
+                else:
+                    await self.execute_sql_no_result(create_temp_sql, conn=conn)
+                    rows = [
+                        (field_vector_id, token_id, weight, requires_idf)
+                        for token_id, weight in sparse_tokens
+                    ]
+                    await self.insert_query_vectors(
+                        collection_name,
+                        rows,
+                        table_name=query_vectors_table,
+                        conn=conn
+                    )
+                    sql = self.format_sql(
+                        "sparse_union_single",
+                        vector_data_table=vector_table,
+                        query_vectors_table=query_vectors_table,
+                        field_vector_id=field_vector_id,
+                        prefetch_limit=prefetch_limit,
+                        sparse_documents_join=sparse_documents_join,
+                        tags_filter=tags_filter,
+                        sparse_idf=1.0,
+                        idf_join="",
+                        idf_filter=""
                     )
 
-                    # Here is the logic for IDF filtering below
-                    # custom tokenizers produce a lot of noisy tokens
-                    # which kills performance on larger datasets and actually reduces recall
-                    # so we will apply IDF filtering to remove noisy tokens
-                    # for example on arguana dataset, we've seen performance improve by 5-6 times, while recall improved slightly also
-                    #
-                    # however, if the number of tokens we search with is small (short query),
-                    # filtering may actually remove ALL candidates
-                    # so we will only apply IDF filtering if the number of tokens is greater than MAX_SEARCH_LIMIT
-                    # this potentially sacrifices both performance and recall for short queries, but we find everything that matches.
-                    idf_threshold = MAX_SEARCH_LIMIT * IDF_THRESHOLD_MULTIPLIER
-                    if len(vector.sparse_indices) > MAX_SEARCH_LIMIT:
-                        params["idf_threshold"] = idf_threshold
-                        idf_filter = self.format_sql("idf_filter")
-                    else:
-                        idf_filter = ""  # No filtering for short queries
-                else:
-                    sparse_idf = 1.0
-                    idf_join = ""
-                    idf_filter = ""
-                
-                all_unions.append(self.format_sql("sparse_union_single",
-                    vector_data_table=vector_table,
-                    query_vectors_table=query_vectors_table,
-                    field_vector_name=field_vector_name,
-                    prefetch_limit=int(query.limit * SEARCH_PREFETCH_MULTIPLIER),
-                    sparse_documents_join=sparse_documents_join,
-                    tags_filter=tags_filter,
-                    sparse_idf=sparse_idf,
-                    idf_join=idf_join,
-                    idf_filter=idf_filter
-                ))
-        
+                arm_rows = await self.execute_sql(sql, params, conn=conn)
+                raise TransactionRollback()
 
-        
-        # Build the combined union query
-        all_unions_sql = ""
-        if all_unions:
-            if len(all_unions) > 1:
-                all_unions_sql = " UNION ALL ".join(all_unions)
-            else:
-                all_unions_sql = all_unions[0]
-        else:
-            # If no vectors at all, create a dummy subquery that returns no rows
-            all_unions_sql = "SELECT NULL as doc_pk_id, 0 as vdscore WHERE 1=0"
-        
-        # Dense vector processing is now handled by the dense_union subqueries
-        # No need for separate similarity calculations
-        
-        # First stage: get scores only without joining documents
-        scores_sql = self.format_sql(
-            "hybrid_scores_only",
-            all_unions=all_unions_sql
-        )
+            return arm_rows
 
-        # Add prefetch_limit for subqueries (multiplied by SEARCH_PREFETCH_MULTIPLIER)
-        params["prefetch_limit"] = int(query.limit * SEARCH_PREFETCH_MULTIPLIER)
-
-        # print(f"scores_sql: {scores_sql}")
-
-        score_rows = await self.execute_sql(scores_sql, params, conn=conn)
-
-        # Build id lists per fv_name for RRF and optionally collect raw scores with ranking
-        id_lists: Dict[str, List[int]] = {}
-        raw_scores_map: Dict[int, List[VectorScore]] = {}
-        
-        # Track current rank per fv_name (since scores are ordered by fv_name, score DESC)
-        current_ranks: Dict[str, int] = {}
-        last_fv_name = None
-        
-        for row in score_rows:
-            fv_name = row["fv_name"]
-            doc_pk_id = row["doc_pk_id"]
-            vdscore = row["vdscore"]
-            
-            # Reset rank counter when fv_name changes
-            if fv_name != last_fv_name:
-                current_ranks[fv_name] = 1
-                last_fv_name = fv_name
-            else:
-                current_ranks[fv_name] += 1
-            
-            # Build id lists for RRF
-            if fv_name not in id_lists:
-                id_lists[fv_name] = []
-            id_lists[fv_name].append(doc_pk_id)
-            
-            # Only collect raw scores if requested
-            if query.raw_scores:
-                # Parse field_vector_name to extract field and vector
-                field, vector = fv_name.rsplit('_', 1)
-                
-                # Create VectorScore object
-                vector_score = VectorScore(
-                    field=field,
-                    vector=vector,
-                    score=vdscore,
-                    rank=current_ranks[fv_name]
-                )
-                
-                # Add to raw_scores_map
-                if doc_pk_id not in raw_scores_map:
-                    raw_scores_map[doc_pk_id] = []
-                raw_scores_map[doc_pk_id].append(vector_score)
-
+        arm_results = await asyncio.gather(*(execute_arm(search_arm) for search_arm in search_arms))
         id_lists_values: List[List[int]] = []
         weights: List[float] = []
-        for vector_data in query.vectors:
-            field_vector_name = f"{vector_data.field}_{vector_data.vector_name}"
-            # Only process vectors that were included in weight_map (weight != 0)
-            if field_vector_name in weight_map:
-                id_lists_values.append(id_lists.get(field_vector_name, []))
-                weights.append(weight_map[field_vector_name])
+        for search_arm, arm_rows in zip(search_arms, arm_results):
+            vector_data, field_vector_id, weight, _, _ = search_arm
+            id_lists_values.append([row["doc_pk_id"] for row in arm_rows])
+            weights.append(weight)
+
+            if query.raw_scores:
+                fv_name = field_vector_names_by_id[field_vector_id]
+                field, vector = fv_name.rsplit('_', 1)
+                for rank, row in enumerate(arm_rows, start=1):
+                    doc_pk_id = row["doc_pk_id"]
+                    vector_score = VectorScore(
+                        field=field,
+                        vector=vector,
+                        score=row["vdscore"],
+                        rank=rank
+                    )
+                    if doc_pk_id not in raw_scores_map:
+                        raw_scores_map[doc_pk_id] = []
+                    raw_scores_map[doc_pk_id].append(vector_score)
 
         fused_results = self.rrf_fuse(
             id_lists=id_lists_values,
@@ -1859,7 +1809,7 @@ class SQLBase(DatabaseBase):
             placeholders=placeholders
         )
 
-        doc_rows = await self.execute_sql(docs_select_sql, tuple(top_pk_ids), conn=conn)
+        doc_rows = await self.execute_sql(docs_select_sql, tuple(top_pk_ids))
         by_pk: Dict[int, Dict[str, Any]] = {row["pk_id"]: row for row in doc_rows}
 
         results: List[SearchResult] = []
