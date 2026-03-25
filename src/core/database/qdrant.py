@@ -212,8 +212,7 @@ class QdrantDatabase(DatabaseBase):
             elif vector_config.type in VectorType.sparse_types():
                 # For sparse vectors, we'll use Qdrant's sparse vector support
                 # Create field-specific vectors for each field in index_fields
-                idf_modifier = rest.Modifier.IDF if vector_config.type in VectorType.custom_tokenization() \
-                                                or (vector_config.model and vector_config.model.lower() == "qdrant/bm25") else None
+                idf_modifier = rest.Modifier.IDF if vector_config.type in VectorType.custom_tokenization() else None
                 for field in vector_config.index_fields:
                     field_vector_name = f"{field}_{vector_name}"
                     sparse_vectors_config[field_vector_name] = rest.SparseVectorParams(

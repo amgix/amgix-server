@@ -1520,14 +1520,7 @@ class SQLBase(DatabaseBase):
             sparse_tokens = None
             requires_idf = 0
             if not VectorType.is_dense(vector_data.vector_type):
-                vector_config = vector_config_map.get(vector_data.vector_name)
-                requires_idf = 1 if (
-                    vector_data.vector_type in VectorType.custom_tokenization() or (
-                        vector_config is not None
-                        and vector_config.model is not None
-                        and vector_config.model.lower() == "qdrant/bm25"
-                    )
-                ) else 0
+                requires_idf = 1 if vector_data.vector_type in VectorType.custom_tokenization() else 0
                 sparse_tokens = list(zip(vector_data.sparse_indices, vector_data.sparse_values))
 
             search_arms.append((vector_data, field_vector_id, weight, sparse_tokens, requires_idf))
