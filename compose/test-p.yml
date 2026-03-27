@@ -1,0 +1,97 @@
+name: amgix
+
+networks:
+  amgix-net:
+    driver: bridge
+
+services:
+
+  postgres:
+    image: pgvector/pgvector:pg18-trixie
+    container_name: amgix-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: amgix
+    ports:
+      - "5432:5432"
+    volumes:
+      - ../data/postgres:/var/lib/postgresql
+      - ../data/postgresql.conf:/etc/postgresql/postgresql.conf
+    command: postgres -c shared_preload_libraries=vector -c config_file=/etc/postgresql/postgresql.conf
+
+    networks:
+      - amgix-net
+
+  rabbitmq:
+    container_name: amgix-rabbitmq
+    image: rabbitmq:4-management
+    restart: unless-stopped
+    networks:
+      - amgix-net
+
+    # map a volume to presist storage
+    # volumes:
+    #   - ./data/rabbitmq:/var/lib/rabbitmq
+
+  api:
+    image: amgixio/amgix-api:1
+    pull_policy: always
+    restart: unless-stopped
+    ports:
+      - "8234:8234"
+    depends_on:
+      - postgres
+      - rabbitmq
+    networks:
+      - amgix-net
+    environment:
+      - AMGIX_DATABASE_URL=postgresql://postgres:password@amgix-postgres:5432/amgix
+      - AMGIX_AMQP_URL=amqp://guest:guest@amgix-rabbitmq/
+
+      # - AMGIX_LOG_LEVEL=INFO  # Optional: DEBUG, INFO, WARNING, ERROR, CRITICAL
+
+  encoder:
+    # image: amgixio/amgix-encoder:1
+    restart: unless-stopped
+
+    # use GPU image for NVIDIA GPU embedding support
+    image: amgixio/amgix-encoder:1-gpu 
+    pull_policy: always
+
+    # uncomment this block to use GPU embedding support
+    # requires NVIDIA Container Toolkit
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    depends_on:
+      - postgres
+      - rabbitmq
+
+    # map a volume to presist model cache
+    volumes:
+      - ../data/amgix-cache:/data/amgix/cache
+
+    networks:
+      - amgix-net
+
+    environment:
+      - AMGIX_DATABASE_URL=postgresql://postgres:password@amgix-postgres:5432/amgix
+      - AMGIX_AMQP_URL=amqp://guest:guest@amgix-rabbitmq/
+      - AMGIX_ENCODER_ROLE=all # index, query, all
+      - AMGIX_LOAD_MODELS=true # true, false
+      
+      # - AMGIX_LOG_LEVEL=INFO              # Optional: DEBUG, INFO, WARNING, ERROR, CRITICAL
+      # - AMGIX_MEMORY_RESERVE_RAM=10%       # RAM headroom for encoder orchestration (default 10%; also accepts e.g. 2G)
+      # - AMGIX_MEMORY_RESERVE_VRAM=15%      # GPU VRAM headroom (default 15%)
+      # - AMGIX_TRUSTED_ORGS=false           # if true, only load HF models from Hugging Face “trusted” publishers
+      # - AMGIX_MODEL_CACHE_SIZE=100         # max embedding models kept in encoder LRU cache (default 100)
+      # - AMGIX_SAFETENSORS=false            # if true, steer HF loads toward safetensors (dense + sparse SPLADE-style)
+
+      # we recommend to set HF_TOKEN for gated Hugging Face models and to avoid rate limiting
+      - HF_TOKEN=${HF_TOKEN} 
