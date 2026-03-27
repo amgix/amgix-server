@@ -148,15 +148,6 @@ class MariaDatabase(SQLBase):
             """,
             
             # Collection Management Templates (with backticks for MariaDB)
-            "list_collections_query": """
-                SELECT DISTINCT 
-                    SUBSTRING(`table_name`, 1, LENGTH(`table_name`) - {docs_suffix_length}) as collection_name
-                FROM information_schema.tables 
-                WHERE table_schema = '{database}' 
-                AND `table_name` LIKE '{prefix}' 
-                AND `table_name` LIKE '%_{docs_suffix}'
-            """,
-            
             # Database Probing Templates (with backticks for MariaDB)
             "version_query": "SELECT VERSION() AS version",
             "vector_test_create": f"CREATE TEMPORARY TABLE `{APP_PREFIX}_test_vector_idx` (v VECTOR(1) NOT NULL)",

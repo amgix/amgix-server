@@ -59,8 +59,8 @@ class SQLBase(DatabaseBase):
             table_type: Type of table (meta, documents, vector_data, query_vectors)
             
         Returns:
-            Full table name in the format: {collection_name}_{table_type} for collection tables,
-            or {APP_PREFIX}sys_{table_type} for system tables
+            Full table name in the format: {APP_PREFIX}_{uuid}_{table_type} for collection tables,
+            or {APP_PREFIX}_sys_{table_type} for system tables
         """
         if table_type == self.TableType.QUERY_VECTORS:
             return f"{APP_PREFIX}_sys_{table_type.value}"
@@ -190,17 +190,6 @@ class SQLBase(DatabaseBase):
             FROM (
                 {all_unions}
             ) combined_vectors
-        """,
-        
-        # Collection Management Templates
-        "list_collections_query": """
-            SELECT DISTINCT 
-                SUBSTRING(table_name, 1, LENGTH(table_name) - {docs_suffix_length}) as collection_name
-            FROM information_schema.tables 
-            WHERE table_schema = '{database}' 
-            AND table_name LIKE '{prefix}%' 
-            AND table_name NOT LIKE '{prefix}sys_%' 
-            AND table_name LIKE '%_{docs_suffix}'
         """,
         
         # Database Probing Templates
@@ -959,24 +948,16 @@ class SQLBase(DatabaseBase):
         return True
     
     async def list_collections(self) -> List[str]:
-        """List all collections"""
-        # Use our TableType enum to construct the expected table name pattern
-        # For a collection named 'my_collection', we expect a table named 'my_collection_docs'
-        docs_suffix = self.TableType.DOCUMENTS.value
-        
-        # Query information_schema to find tables that match our naming pattern
-        # We look for tables that end with '_docs' and extract the collection name
-        sql = self.format_sql("list_collections_query",
-            docs_suffix_length=len(docs_suffix) + 1,
-            docs_suffix=docs_suffix,
-            database=self.database,
-            prefix=APP_PREFIX
+        """List all collections (internal names as stored in meta, e.g. amgix_<user_name>)."""
+        meta_table = self.quote_identifier(self.meta_collection)
+        col_name = self.quote_identifier("collection_name")
+        col_key = self.quote_identifier("key")
+        sql = (
+            f"SELECT DISTINCT {col_name} AS collection_name FROM {meta_table} "
+            f"WHERE {col_key} = 'config' ORDER BY {col_name}"
         )
         results = await self.execute_sql(sql)
-        
-        # Filter out any empty collection names and return the list
-        collection_names = [row['collection_name'] for row in results if row['collection_name']]
-        return collection_names
+        return [row["collection_name"] for row in results if row.get("collection_name")]
     
     async def delete_collection(self, collection_name: str) -> bool:
         """Delete a collection and all its data."""

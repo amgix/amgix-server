@@ -149,16 +149,6 @@ class PostgreSQLDatabase(SQLBase):
                 ) combined_vectors
             """,
             
-            # Collection Management Templates (with double quotes for PostgreSQL)
-            "list_collections_query": """
-                SELECT DISTINCT 
-                    substring("table_name", 1, length("table_name") - {docs_suffix_length}) as collection_name
-                FROM information_schema.tables 
-                WHERE table_schema = 'public' 
-                AND "table_name" LIKE '{prefix}' 
-                AND "table_name" LIKE '%_{docs_suffix}'
-            """,
-
             # Select documents by pk_id list with aggregated tags (PostgreSQL uses string_agg)
             "select_docs_in_with_tags": """
                 SELECT 
