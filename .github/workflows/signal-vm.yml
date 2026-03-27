@@ -58,12 +58,30 @@ jobs:
               content: JSON.stringify({ requestedAt }, null, 2)
             };
 
-            await github.rest.gists.update({
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+            const updateRes = await github.rest.gists.update({
               gist_id: gistId,
               files
             });
-            const refetch = await github.rest.gists.get({ gist_id: gistId });
-            const refetchFiles = refetch.data.files || {};
-            if (!refetchFiles[fileName]) {
-              throw new Error(`Gist update returned success but GET does not show ${fileName}. Check GIST_ID and GIST_TOKEN (gist scope).`);
+            const fromUpdate = updateRes.data.files || {};
+            if (fromUpdate[fileName]) {
+              return;
             }
+
+            const delaysMs = [500, 1500, 3000, 5000];
+            let refetchFiles = {};
+            for (const ms of delaysMs) {
+              await sleep(ms);
+              const refetch = await github.rest.gists.get({ gist_id: gistId });
+              refetchFiles = refetch.data.files || {};
+              if (refetchFiles[fileName]) {
+                return;
+              }
+            }
+
+            const keys = Object.keys(refetchFiles).sort().join(', ');
+            throw new Error(
+              `Gist update succeeded but ${fileName} not visible after verify (update body and ${delaysMs.length} GET retries). ` +
+                `If keys are empty or stale, suspect API lag; otherwise check gist state. Last GET file keys: ${keys || '(none)'}`
+            );
