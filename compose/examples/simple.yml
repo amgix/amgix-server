@@ -44,6 +44,7 @@ services:
 
   api:
     image: amgixio/amgix-api:1
+    pull_policy: always
     restart: unless-stopped
     ports:
       - "8234:8234"
@@ -60,6 +61,7 @@ services:
 
   encoder:
     image: amgixio/amgix-encoder:1
+    pull_policy: always
     restart: unless-stopped
 
     # use GPU image for NVIDIA GPU embedding support
