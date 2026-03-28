@@ -15,7 +15,7 @@ Amgix lets you add fast, relevant, modern search to your application without sti
 Amgix One packs the API, encoders, RabbitMQ, and Qdrant into one container — the easiest way to try Amgix or run it with modest requirements.
 
 ```bash
-docker run -d -p 8234:8234 -v /path/on/host:/data amgixio/amgix-one:1
+docker run -d -p 8234:8234 -v <path/on/host>:/data amgixio/amgix-one:1
 ```
 This persists data and caches Hugging Face models under `/data`.
 
