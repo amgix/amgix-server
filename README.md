@@ -1,9 +1,9 @@
-# **Amgix** - Open-Source Hybrid Search Engine
+# **Amgix** - Open-Source Hybrid Search System
 
 > **Amgix** (pronounced `a-MAG-ix`) - short for Amalgam Index  
 > *amalgam: a mixture or blend of different elements*
 
-Amgix is a hybrid search engine for applications. It provides a unified stack for ingestion, embedding, and search — combining keyword and semantic retrieval in an architecture that can scale from a single container to distributed services.
+Amgix is a hybrid search system for applications. It provides a unified stack for ingestion, embedding, and search — combining keyword and semantic retrieval in an architecture that can scale from a single container to distributed services.
 
 Amgix lets you add fast, relevant, modern search to your application without stitching together separate systems for indexing, embeddings, and retrieval.
 
@@ -100,4 +100,4 @@ Amgix was built to solve these headaches. Instead of stitching together your own
 
 Visit [Documentation](https://docs.amgix.io/)
 
-Clients: [Typescript](https://github.com/amgix/amgix-client-typescript/), [Python](https://github.com/amgix/amgix-client-python/)
+Clients: [Python](https://github.com/amgix/amgix-client-python/), [Typescript](https://github.com/amgix/amgix-client-typescript/)
