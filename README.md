@@ -3,9 +3,7 @@
 > **Amgix** (pronounced `a-MAG-ix`) - short for Amalgam Index  
 > *amalgam: a mixture or blend of different elements*
 
-Amgix is a hybrid search system for applications. It provides a unified stack for ingestion, embedding, and search — combining keyword and semantic retrieval in an architecture that can scale from a single container to distributed services.
-
-Amgix lets you add fast, relevant, modern search to your application without stitching together separate systems for indexing, embeddings, and retrieval.
+**Amgix is an open-source system that handles ingestion, embedding, and hybrid retrieval behind one REST API.** You do not need to stitch together queues, a vector database, and ranking or fusion logic in your application.
 
 ---
 
