@@ -1224,7 +1224,7 @@ class SQLBase(DatabaseBase):
             # Insert sparse vector data if present
             if document_with_vectors.vectors:
                 # Build rows for all sparse vectors from provided VectorData
-                # AND collect unique token occurrences for IDF updates in the same loop
+                # and collect token occurrences for IDF only where search uses IDF (lexical sparse types)
                 rows: List[tuple] = []
                 token_occurrences = set()
                 
@@ -1232,10 +1232,11 @@ class SQLBase(DatabaseBase):
                     if v.sparse_indices and v.sparse_values:
                         field_vector_name = f"{v.field}_{v.vector_name}"
                         field_vector_id = field_vector_ids[field_vector_name]
+                        track_idf = v.vector_type in VectorType.custom_tokenization()
                         for token_id, weight in zip(v.sparse_indices, v.sparse_values):
                             rows.append((doc_pk_id, field_vector_id, token_id, weight))
-                            # Collect unique tokens for IDF updates
-                            token_occurrences.add((field_vector_id, token_id))
+                            if track_idf:
+                                token_occurrences.add((field_vector_id, token_id))
 
                 if rows:
                     batch_size = self.DEFAULT_BATCH_SIZE
