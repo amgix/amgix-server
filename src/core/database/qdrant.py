@@ -610,50 +610,52 @@ class QdrantDatabase(DatabaseBase):
         #     for point in res.points:
         #         print(f"{point.payload["id"]} {point.score}")
         
-        # Extract ranked ids and build point lookup in a single pass
-        id_lists = []
+        # Extract ranked ids, optional raw scores for response, and linear-fusion inputs in one pass
+        id_lists: List[List] = []
+        scored_lists: List[List[tuple]] = []
         point_lookup = {}
         raw_scores_map = {}
-        
+        arm_weights = [weight_map[name] for name in batch_vector_names]
+
         for idx, response in enumerate(batch_response):
             field_vector_name = batch_vector_names[idx]
-            
-            # Each response contains ranked results from one vector
+
             ids = []
+            scored_arm: List[tuple] = []
             for rank, point in enumerate(response.points, 1):  # 1-based ranking
-                # Add to id list for this vector
                 ids.append(point.id)
-                # Add to lookup map (last occurrence wins)
+                scored_arm.append((point.id, float(point.score)))
                 point_lookup[point.id] = point
-                
-                # Only collect raw scores if requested
+
                 if query.raw_scores:
-                    # Parse field_vector_name to extract field and vector
                     field, vector = field_vector_name.split('_', 1)
-                    
-                    # Create VectorScore object
                     vector_score = VectorScore(
                         field=field,
                         vector=vector,
                         score=point.score,
                         rank=rank
                     )
-                    
-                    # Collect raw scores per document
                     if point.id not in raw_scores_map:
                         raw_scores_map[point.id] = []
                     raw_scores_map[point.id].append(vector_score)
             id_lists.append(ids)
-        
-        # Use RRF to fuse the ranked lists
-        # fusion_start = time.time()
-        fused_results = self.rrf_fuse(
-            id_lists=id_lists,
-            weights=[weight_map[name] for name in batch_vector_names],
-            limit=query.limit,
-            score_threshold=query.score_threshold,
-            k=2
-        )
+            scored_lists.append(scored_arm)
+
+        if query.fusion_mode == "linear":
+            fused_results = self.linear_weighted_score_fuse(
+                scored_lists=scored_lists,
+                weights=arm_weights,
+                limit=query.limit,
+                score_threshold=query.score_threshold,
+            )
+        else:
+            fused_results = self.rrf_fuse(
+                id_lists=id_lists,
+                weights=arm_weights,
+                limit=query.limit,
+                score_threshold=query.score_threshold,
+                k=2
+            )
         # fusion_time = (time.time() - fusion_start) * 1000
         # print(f"RRF fusion post-processing time: {fusion_time:.2f}ms")
         

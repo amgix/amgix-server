@@ -1734,10 +1734,12 @@ class SQLBase(DatabaseBase):
 
         arm_results = await asyncio.gather(*(execute_arm(search_arm) for search_arm in search_arms))
         id_lists_values: List[List[int]] = []
+        scored_lists: List[List[Tuple[int, float]]] = []
         weights: List[float] = []
         for search_arm, arm_rows in zip(search_arms, arm_results):
             vector_data, field_vector_id, weight, _, _ = search_arm
             id_lists_values.append([row["doc_pk_id"] for row in arm_rows])
+            scored_lists.append([(row["doc_pk_id"], float(row["vdscore"])) for row in arm_rows])
             weights.append(weight)
 
             if query.raw_scores:
@@ -1755,13 +1757,21 @@ class SQLBase(DatabaseBase):
                         raw_scores_map[doc_pk_id] = []
                     raw_scores_map[doc_pk_id].append(vector_score)
 
-        fused_results = self.rrf_fuse(
-            id_lists=id_lists_values,
-            weights=weights,
-            limit=query.limit,
-            score_threshold=query.score_threshold,
-            k=2
-        )
+        if query.fusion_mode == "linear":
+            fused_results = self.linear_weighted_score_fuse(
+                scored_lists=scored_lists,
+                weights=weights,
+                limit=query.limit,
+                score_threshold=query.score_threshold,
+            )
+        else:
+            fused_results = self.rrf_fuse(
+                id_lists=id_lists_values,
+                weights=weights,
+                limit=query.limit,
+                score_threshold=query.score_threshold,
+                k=2
+            )
 
         top_pk_ids = [pk for pk, _ in fused_results]
         if not top_pk_ids:

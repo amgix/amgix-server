@@ -128,7 +128,44 @@ class DatabaseBase(ABC):
 
         # Efficiently take top-k by fused score without sorting everything
         return nlargest(limit, items_iter, key=lambda t: t[1])
-    
+
+    @staticmethod
+    def linear_weighted_score_fuse(
+        scored_lists: List[List[Tuple[Hashable, float]]],
+        weights: List[float],
+        limit: int = 10,
+        score_threshold: Optional[float] = None,
+    ) -> List[Tuple[Hashable, float]]:
+        """
+        Fuse retrievers by min-max normalizing raw scores within each list, then summing weight * norm_score.
+
+        Missing retriever scores for an id count as 0. Ties (min == max) within a list assign normalized 1.0.
+        """
+        normalized_maps: List[Dict[Hashable, float]] = []
+        for arm in scored_lists:
+            if not arm:
+                normalized_maps.append({})
+                continue
+            raw_scores = [s for _, s in arm]
+            mn, mx = min(raw_scores), max(raw_scores)
+            if mx == mn:
+                normalized_maps.append({item_id: 1.0 for item_id, _ in arm})
+            else:
+                scale = mx - mn
+                normalized_maps.append(
+                    {item_id: (s - mn) / scale for item_id, s in arm}
+                )
+
+        candidates: Dict[Hashable, float] = {}
+        for list_idx, w in enumerate(weights):
+            for item_id, nscore in normalized_maps[list_idx].items():
+                candidates[item_id] = candidates.get(item_id, 0.0) + w * nscore
+
+        items_iter = ((i, candidates[i]) for i in candidates)
+        if score_threshold is not None:
+            items_iter = (t for t in items_iter if t[1] >= score_threshold)
+        return nlargest(limit, items_iter, key=lambda t: t[1])
+
     @abstractmethod
     async def create_collection(self, collection_name: str, config: CollectionConfigInternal) -> bool:
         """

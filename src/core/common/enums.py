@@ -111,6 +111,19 @@ DocumentFieldLiteral = Literal[
     DocumentField.CONTENT
 ]
 
+
+class SearchFusionMode:
+    """How multi-vector search hits are merged (Qdrant and SQL search paths)."""
+
+    RRF = "rrf"
+    LINEAR = "linear"
+
+
+SearchFusionModeLiteral = Literal[
+    SearchFusionMode.RRF,
+    SearchFusionMode.LINEAR,
+]
+
 # Document processing status values
 class QueuedDocumentStatus:
     QUEUED = "queued"

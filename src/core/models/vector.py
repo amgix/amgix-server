@@ -3,8 +3,9 @@ import re
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..common import (
-    VectorType, VectorTypeLiteral, DocumentField, DocumentFieldLiteral, 
-    DenseDistance, DenseDistanceLiteral, MAX_VECTOR_NAME_LENGTH, 
+    VectorType, VectorTypeLiteral, DocumentField, DocumentFieldLiteral,
+    SearchFusionModeLiteral,
+    DenseDistance, DenseDistanceLiteral, MAX_VECTOR_NAME_LENGTH,
     MAX_MODEL_NAME_LENGTH, MAX_DOCUMENT_TAGS_COUNT, MAX_DOCUMENT_TAG_LENGTH,
     MAX_SEARCH_QUERY_LENGTH, DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT, MAX_TOP_K_VALUE,
     MAX_VECTOR_DIMENSIONS, DEFAULT_TOP_K, LANGUAGE_DETECTION_CONFIDENCE,
@@ -500,8 +501,15 @@ class SearchQuery(BaseModel):
     raw_scores: bool = Field(
         default=False, description="Whether to include individual vector scores in results"
     )
-    
-    
+    fusion_mode: SearchFusionModeLiteral = Field(
+        default="rrf",
+        description=(
+            "How to combine multi-vector search results. "
+            "'rrf' = reciprocal rank fusion (rank-based). "
+            "'linear' = min-max normalize each retriever's scores on its prefetch list, then sum weight * normalized score."
+        ),
+    )
+
     @field_validator('query')
     @classmethod
     def validate_query_not_empty(cls, v):
