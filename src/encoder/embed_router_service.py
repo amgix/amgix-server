@@ -49,7 +49,7 @@ HOSTNAME = os.getenv('HOSTNAME', 'unknown')
 
 NODE_QUEUE_PREFIX = "embed-node"
 NODE_QUEUE_NAME = f"{NODE_QUEUE_PREFIX}-{HOSTNAME}"
-OPEN_ST_QUEUE_NAME = "embed-st-open"
+OPEN_EMBED_QUEUE_NAME = "embed-open"
 LEADER_QUEUE_NAME = "embed-leader"
 
 # Metrics aggregation windows in seconds
@@ -137,7 +137,7 @@ class EmbedRouterService(EncoderBase):
         self.at_capacity = False
         self.leader: Tuple[RobustQueue, str] = None
         self.node: Tuple[RobustQueue, str] = None
-        self.st_open: Tuple[RobustQueue, str] = None
+        self.embed_open: Tuple[RobustQueue, str] = None
 
         self.load_models = AMGIX_LOAD_MODELS
 
@@ -237,15 +237,20 @@ class EmbedRouterService(EncoderBase):
                                     except KeyError:
                                         pass
 
-                                    # is it supported model and do we have space for another model?
-                                    if self._is_supported_model_family(vector_config) and not self._at_model_capacity():
-                                        # yes, try to load the model and embed locally
+                                    # Load on this node only when AMGIX_LOAD_MODELS is on and memory reserve is not exceeded.
+                                    if self.load_models and not self._at_model_capacity():
+                                        # Try to acquire the model locally and embed.
                                         result = await self._own_the_model(vector_config, model_key, queue_name, docs, hops)
                                     else:
-                                        # no, either not supported model or at capacity, we need to route to other workers
-                                        self.logger.debug(f"Router: Can't embed locally. Supported model family: {self.model_family}. Local models: {list(self.local_models.keys())}.")
+                                        # If load_models is off, skip logging (by design). If on, we're only here due to capacity.
+                                        if self.load_models:
+                                            self.logger.debug(
+                                                "Router: Not loading model locally (memory reserve / capacity). model_key=%s local_models=%s",
+                                                model_key,
+                                                list(self.local_models.keys()),
+                                            )
 
-                                        open_queue_name = OPEN_ST_QUEUE_NAME
+                                        open_queue_name = OPEN_EMBED_QUEUE_NAME
                                         try:
                                             # try to send it to open queue
                                             self.logger.debug(f"Router: Routing to {open_queue_name}.")
@@ -378,7 +383,7 @@ class EmbedRouterService(EncoderBase):
     def _get_model_queue_name(self, vector_config: VectorConfigInternal) -> str:
         """Get the queue name for the model."""
 
-        model_family = 'st'
+        # RPC queue for this model: embed-<d|s>-<name> (d=dense, s=sparse).
         model_type = 'd' if vector_config.type == VectorType.DENSE_MODEL else 's'
 
         model_name = vector_config.model
@@ -386,7 +391,7 @@ class EmbedRouterService(EncoderBase):
         if vector_config.revision:
             model_name = f"{model_name}:{vector_config.revision[-20:]}"
 
-        return f"embed-{model_family}-{model_type}-{model_name}"
+        return f"embed-{model_type}-{model_name}"
 
     def _at_model_capacity(self, force_check: bool = False) -> bool:
         """Check if we can load another model based on memory reserves."""
@@ -407,11 +412,6 @@ class EmbedRouterService(EncoderBase):
                 self.at_capacity = ram_violation or vram_violation
 
         return self.at_capacity
-
-    def _is_supported_model_family(self, vector_config: VectorConfigInternal) -> bool:
-        """Check if this node can load the model type."""
-
-        return self.load_models and vector_config.type in [VectorType.DENSE_MODEL, VectorType.SPARSE_MODEL]
 
     async def _own_the_model(self, 
                             vector_config: VectorConfigInternal,
@@ -494,30 +494,30 @@ class EmbedRouterService(EncoderBase):
 
         if start_listening:
             if self.load_models:
-                if not self.st_open:
-                    self.logger.debug(f"Router: Listening for requests on {OPEN_ST_QUEUE_NAME}.")
+                if not self.embed_open:
+                    self.logger.debug(f"Router: Listening for requests on {OPEN_EMBED_QUEUE_NAME}.")
                     try:
-                        self.st_open = await self.bunny_talk.listen(
-                            routing_key=OPEN_ST_QUEUE_NAME,
-                                handler=self.route,
-                                auto_delete=True
+                        self.embed_open = await self.bunny_talk.listen(
+                            routing_key=OPEN_EMBED_QUEUE_NAME,
+                            handler=self.route,
+                            auto_delete=True,
                         )
                     except Exception as e:
-                        self.logger.error(f"Router: Error listening on {OPEN_ST_QUEUE_NAME}: {e}")
+                        self.logger.error(f"Router: Error listening on {OPEN_EMBED_QUEUE_NAME}: {e}")
                 else:
-                    self.logger.debug(f"Router: Already listening for requests on {OPEN_ST_QUEUE_NAME}.")
+                    self.logger.debug(f"Router: Already listening for requests on {OPEN_EMBED_QUEUE_NAME}.")
         else:
-            if self.st_open:
+            if self.embed_open:
                 # cancel the listener
                 try:
-                    queue, consumer_tag = self.st_open
+                    queue, consumer_tag = self.embed_open
                     self.logger.debug(f"Router: Cancelling listener on {queue.name}.")
                     await self.bunny_talk.cancel_listener(queue, consumer_tag)
                 except Exception as e:
                     self.logger.error(f"Router: Error cancelling listener on {queue.name}: {e}")
 
                 # clear the queue info
-                self.st_open = None
+                self.embed_open = None
 
     async def _node_signal(self, load: bool, model_key: str) -> None:
         """Listen for node signals."""
