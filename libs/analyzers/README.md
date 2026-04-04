@@ -57,9 +57,11 @@ indices, values = aa.tokenize_fulltext(
 indices, values = aa.tokenize_wmtr(
     text="example text",
     lang_code="en",
-    stopwords=["the", "a"],
     top_k_limit=100,
     word_weight_percentage=80,
+    use_stopwords=True,
+    avgdl=10.0,
+    trigram_weight=1.0,
 )
 ```
 

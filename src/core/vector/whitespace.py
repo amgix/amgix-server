@@ -21,7 +21,13 @@ class WhiteSpaceVector(VectorBase):
     def __init__(self, trusted_organizations: set = None, logger: logging.Logger = None):
         super().__init__(trusted_organizations, logger)
     
-    def _get_sparse_vector(self, config: VectorConfigInternal, text: str, avgdl: float) -> Tuple[List[int], List[float]]:
+    def _get_sparse_vector(
+        self,
+        config: VectorConfigInternal,
+        text: str,
+        avgdl: float,
+        trigram_weight: float,
+    ) -> Tuple[List[int], List[float]]:
         """
         Generate a sparse vector from text using whitespace tokenization.
         

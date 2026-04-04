@@ -58,7 +58,12 @@ class SparseModelVector(VectorBase):
         else:
             self._device = None
 
-    def get_sparse_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[Tuple[List[int], List[float]]]:
+    def get_sparse_vector(
+        self,
+        config: VectorConfigInternal,
+        docs: List[str],
+        trigram_weight: float,
+    ) -> List[Tuple[List[int], List[float]]]:
         if not config.model or not config.model.strip():
             raise ValueError("SparseModelVector requires 'model' to be specified in VectorConfig")
         
@@ -144,7 +149,13 @@ class SparseModelVector(VectorBase):
     def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:  # type: ignore[override]
         raise NotImplementedError("SparseModelVector does not produce dense vectors")
 
-    def _get_sparse_vector(self, config: VectorConfigInternal, docs: str) -> Tuple[List[int], List[float]]:
+    def _get_sparse_vector(
+        self,
+        config: VectorConfigInternal,
+        docs: str,
+        avgdl: float,
+        trigram_weight: float,
+    ) -> Tuple[List[int], List[float]]:
         raise NotImplementedError("SparseModelVector does use _get_sparse_vector")
 
     def _load_model(self, model_name: str, revision: Optional[str]):

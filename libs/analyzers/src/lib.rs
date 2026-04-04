@@ -14,6 +14,10 @@ const BM25_K1: f32 = 1.2;
 const BM25_B: f32 = 0.75;
 const BM25_DELTA: f32 = 0.0;
 
+/// Base multipliers on BM25 TF saturation for each WMTR channel (`tokenize_wmtr` only).
+const WMTR_WEIGHT_WHITESPACE: f32 = 4.0;
+const WMTR_WEIGHT_LANG: f32 = 8.0;
+
 /// Compute BM25-style TF saturation with length normalization
 /// Formula: ((tf * (k1 + 1)) / (tf + k1 * length_norm))
 /// length_norm = 1 - b + b * (|d|/avgdl) where |d| is doc length and avgdl is average doc length
@@ -414,6 +418,7 @@ fn tokenize_wmtr(
     word_weight_percentage: u32,
     use_stopwords: bool,
     avgdl: f32,
+    trigram_weight: f32,
 ) -> PyResult<(Vec<u32>, Vec<f32>)> {
     if text.trim().is_empty() {
         return Ok((vec![], vec![]));
@@ -470,15 +475,27 @@ fn tokenize_wmtr(
     // Apply different base weights and prefixes for each token type
     // Pass text_length for length-based boosting (applied to word-level tokens only)
     // Pass total_doc_length for BM25 normalization (same for all components)
-    let ws_weights = get_count_weights_prefixed_with_norm(&whitespace_tokens, 1.0, 1, text_length, length_norm);
-    let lang_weights = get_count_weights_prefixed_with_norm(&lang_tokens, 2.0, 2, text_length, length_norm);
+    let ws_weights = get_count_weights_prefixed_with_norm(
+        &whitespace_tokens,
+        WMTR_WEIGHT_WHITESPACE,
+        1,
+        text_length,
+        length_norm,
+    );
+    let lang_weights = get_count_weights_prefixed_with_norm(
+        &lang_tokens,
+        WMTR_WEIGHT_LANG,
+        2,
+        text_length,
+        length_norm,
+    );
     // Build trigram weights from counts map using BM25-style TF saturation
     // Use the same length_norm as word-level tokens
     let mut trigram_weights: Vec<(u32, f32)> = Vec::with_capacity(trigram_counts.len());
     for (token, count) in trigram_counts.into_iter() {
         let token_id = hash_with_prefix(3, &token);
         let tf = count as f32;
-        let weight = 0.25 * bm25_tf_saturation(tf, length_norm);
+        let weight = trigram_weight * bm25_tf_saturation(tf, length_norm);
         trigram_weights.push((token_id, weight));
     }
     

@@ -15,7 +15,13 @@ class CustomDenseVector(VectorBase):
     def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
         raise NotImplementedError("CustomDenseVector does not generate from text")
 
-    def _get_sparse_vector(self, config: VectorConfigInternal, docs: str) -> Tuple[List[int], List[float]]:
+    def _get_sparse_vector(
+        self,
+        config: VectorConfigInternal,
+        docs: str,
+        avgdl: float,
+        trigram_weight: float,
+    ) -> Tuple[List[int], List[float]]:
         raise NotImplementedError("CustomDenseVector does not produce sparse vectors")
 
     @staticmethod

@@ -3,7 +3,7 @@ import asyncio
 
 from ..models.document import Document, DocumentWithVectors
 from ..models.vector import VectorConfigInternal, SearchQuery, SearchQueryWithVectors, VectorData, VectorSearchWeight
-from ..common import VectorType, EmbedRouter
+from ..common import VectorType, EmbedRouter, WMTR_DEFAULT_TRIGRAM_WEIGHT
 from .dense_custom import CustomDenseVector
 from .sparse_custom import CustomSparseVector
 
@@ -47,7 +47,11 @@ class Vectorizer:
                         for field in config.index_fields:
                             texts.append(Vectorizer._get_field_text(doc, field))
 
-                    dense_vectors = await router(config, texts)
+                    dense_vectors = await router(
+                        config,
+                        texts,
+                        trigram_weight=WMTR_DEFAULT_TRIGRAM_WEIGHT,
+                    )
 
                     idx = 0
                     for doc_idx, _doc in enumerate(documents):
@@ -107,7 +111,12 @@ class Vectorizer:
                                 field_vector_name = f"{field}_{config.name}"
                                 avgdls.append(avgdl_dict[field_vector_name])
 
-                    sparse_vectors = await router(config, texts, avgdls=avgdls)
+                    sparse_vectors = await router(
+                        config,
+                        texts,
+                        avgdls=avgdls,
+                        trigram_weight=WMTR_DEFAULT_TRIGRAM_WEIGHT,
+                    )
 
                     idx = 0
                     for doc_idx, _doc in enumerate(documents):
@@ -298,7 +307,11 @@ class Vectorizer:
                 effective_config = VectorConfigInternal(**dumped)
 
             # Generated dense vector - generate once, reuse for all fields
-            result = await router(effective_config, [query.query])
+            result = await router(
+                effective_config,
+                [query.query],
+                trigram_weight=WMTR_DEFAULT_TRIGRAM_WEIGHT,
+            )
             dense_vector = result[0]
             
             # If dimensions were specified in config, validate they match detected dimensions
@@ -353,9 +366,18 @@ class Vectorizer:
             
             # Generated sparse vector - generate once, reuse for all fields
             if config.type in VectorType.custom_tokenization():
-                result = await router(effective_config, [query.query], avgdls=[5.0])
+                result = await router(
+                    effective_config,
+                    [query.query],
+                    avgdls=[5.0],
+                    trigram_weight=query.wmtr_trigram_weight,
+                )
             else:
-                result = await router(effective_config, [query.query])
+                result = await router(
+                    effective_config,
+                    [query.query],
+                    trigram_weight=query.wmtr_trigram_weight,
+                )
             indices, values = result[0]
             
             # Create VectorData for all fields using the same generated vector

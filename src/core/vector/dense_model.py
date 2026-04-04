@@ -76,7 +76,13 @@ class DenseModelVector(VectorBase):
         )
         return [emb.tolist() for emb in embeddings]
 
-    def _get_sparse_vector(self, config: VectorConfigInternal, docs: List[str]):
+    def _get_sparse_vector(
+        self,
+        config: VectorConfigInternal,
+        docs: List[str],
+        avgdl: float,
+        trigram_weight: float,
+    ):
         raise NotImplementedError("DenseVector does not produce sparse vectors")
 
     def _load_model(self, model_name: str, revision: Optional[str]):

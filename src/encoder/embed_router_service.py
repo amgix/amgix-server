@@ -10,7 +10,7 @@ from aiorwlock import RWLock
 
 from aio_pika import RobustQueue
 from src.core.common.cache import AMGIXCache
-from src.core.common.constants import RPC_TIMEOUT_SECONDS
+from src.core.common.constants import RPC_TIMEOUT_SECONDS, WMTR_DEFAULT_TRIGRAM_WEIGHT
 from src.core.common.embed_router import EmbedRouter
 from src.core.models.vector import VectorConfigInternal
 from src.core.vector import VectorBase, TrigramsVector, FullTextVector, WhiteSpaceVector, WMTRVector, DenseModelVector, SparseModelVector, CustomDenseVector, CustomSparseVector
@@ -182,7 +182,14 @@ class EmbedRouterService(EncoderBase):
 
         asyncio.create_task(self._metrics_loop())
 
-    async def route(self, vector_config: VectorConfigInternal, docs: List[str], hops: int = 0, avgdls: Optional[List[float]] = None) -> Union[List[List[float]], List[Tuple[List[int], List[float]]]]:
+    async def route(
+        self,
+        vector_config: VectorConfigInternal,
+        docs: List[str],
+        hops: int = 0,
+        avgdls: Optional[List[float]] = None,
+        trigram_weight: float = WMTR_DEFAULT_TRIGRAM_WEIGHT,
+    ) -> Union[List[List[float]], List[Tuple[List[int], List[float]]]]:
         """Embed a list of documents using the specified vector type."""
 
         result = None
@@ -266,7 +273,12 @@ class EmbedRouterService(EncoderBase):
                                 if result is None:
                                     raise e
             else:
-                result = self.embed(vector_config, docs, avgdls=avgdls)
+                result = self.embed(
+                    vector_config,
+                    docs,
+                    avgdls=avgdls,
+                    trigram_weight=trigram_weight,
+                )
                 
         except Exception as e:
             self.logger.error(f"Router: Error embedding documents: {e}")
@@ -336,13 +348,24 @@ class EmbedRouterService(EncoderBase):
         
         return processed_metrics
 
-    def embed(self, vector_config: VectorConfigInternal, docs: List[str], avgdls: Optional[List[float]] = None) -> Union[List[List[float]], List[Tuple[List[int], List[float]]]]:
+    def embed(
+        self,
+        vector_config: VectorConfigInternal,
+        docs: List[str],
+        avgdls: Optional[List[float]] = None,
+        trigram_weight: float = WMTR_DEFAULT_TRIGRAM_WEIGHT,
+    ) -> Union[List[List[float]], List[Tuple[List[int], List[float]]]]:
         """Embed a list of documents using the specified vector type."""
 
         if VectorType.is_dense(vector_config.type):
             result = self._embed_dense_model(vector_config, docs)
         else:
-            result = self._embed_sparse_model(vector_config, docs, avgdls=avgdls)
+            result = self._embed_sparse_model(
+                vector_config,
+                docs,
+                avgdls=avgdls,
+                trigram_weight=trigram_weight,
+            )
 
         return result
 
@@ -351,12 +374,27 @@ class EmbedRouterService(EncoderBase):
 
         return self._instances[vector_config.type].get_dense_vector(vector_config, docs)
 
-    def _embed_sparse_model(self, vector_config: VectorConfigInternal, docs: List[str], avgdls: Optional[List[float]]) -> List[Tuple[List[int], List[float]]]:
+    def _embed_sparse_model(
+        self,
+        vector_config: VectorConfigInternal,
+        docs: List[str],
+        avgdls: Optional[List[float]],
+        trigram_weight: float,
+    ) -> List[Tuple[List[int], List[float]]]:
         """Embed a list of documents using the specified sparse model."""
 
         if vector_config.type in VectorType.custom_tokenization():
-            return self._instances[vector_config.type].get_sparse_vector(vector_config, docs, avgdls=avgdls)
-        return self._instances[vector_config.type].get_sparse_vector(vector_config, docs)
+            return self._instances[vector_config.type].get_sparse_vector(
+                vector_config,
+                docs,
+                avgdls=avgdls,
+                trigram_weight=trigram_weight,
+            )
+        return self._instances[vector_config.type].get_sparse_vector(
+            vector_config,
+            docs,
+            trigram_weight=trigram_weight,
+        )
 
     async def _load_trusted_organizations(self) -> set:
         """Load trusted organizations from file."""

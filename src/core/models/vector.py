@@ -10,6 +10,7 @@ from ..common import (
     MAX_SEARCH_QUERY_LENGTH, DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT, MAX_TOP_K_VALUE,
     MAX_VECTOR_DIMENSIONS, DEFAULT_TOP_K, LANGUAGE_DETECTION_CONFIDENCE,
     WMTR_WORD_WEIGHT_PERCENTAGE,
+    WMTR_DEFAULT_TRIGRAM_WEIGHT,
     MetadataValueTypeLiteral, MetadataFilterOpLiteral, MAX_METADATA_KEY_LENGTH
 )
 
@@ -500,6 +501,10 @@ class SearchQuery(BaseModel):
     )
     raw_scores: bool = Field(
         default=False, description="Whether to include individual vector scores in results"
+    )
+    wmtr_trigram_weight: float = Field(
+        default=WMTR_DEFAULT_TRIGRAM_WEIGHT,
+        description="WMTR trigram channel multiplier for this search query.",
     )
     fusion_mode: SearchFusionModeLiteral = Field(
         default="rrf",

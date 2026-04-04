@@ -21,7 +21,13 @@ class WMTRVector(VectorBase):
     def __init__(self, trusted_organizations: set = None, logger: logging.Logger = None):
         super().__init__(trusted_organizations, logger)
     
-    def _get_sparse_vector(self, config: VectorConfigInternal, text: str, avgdl: float) -> Tuple[List[int], List[float]]:
+    def _get_sparse_vector(
+        self,
+        config: VectorConfigInternal,
+        text: str,
+        avgdl: float,
+        trigram_weight: float,
+    ) -> Tuple[List[int], List[float]]:
         """
         Generate a sparse vector from text using WMTR approach.
         
@@ -44,6 +50,7 @@ class WMTRVector(VectorBase):
             word_weight_percentage=config.wmtr_word_weight,
             use_stopwords=True,
             avgdl=avgdl,
+            trigram_weight=trigram_weight,
         )
     
     def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:

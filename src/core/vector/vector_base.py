@@ -88,8 +88,17 @@ class VectorBase(ABC):
         
         return indices, values
     
-    def get_sparse_vector(self, config: VectorConfigInternal, docs: List[str], avgdls: Optional[List[float]]) -> List[Tuple[List[int], List[float]]]:
-        return [self._get_sparse_vector(config, doc, avgdl=avgdl) for doc, avgdl in zip(self.preprocess_text(docs), avgdls)]
+    def get_sparse_vector(
+        self,
+        config: VectorConfigInternal,
+        docs: List[str],
+        avgdls: Optional[List[float]],
+        trigram_weight: float,
+    ) -> List[Tuple[List[int], List[float]]]:
+        return [
+            self._get_sparse_vector(config, doc, avgdl=avgdl, trigram_weight=trigram_weight)
+            for doc, avgdl in zip(self.preprocess_text(docs), avgdls)
+        ]
         # processed_docs = self.preprocess_text(docs)
         # if not processed_docs:
         #     return []
@@ -113,7 +122,13 @@ class VectorBase(ABC):
         # return results
 
     @abstractmethod
-    def _get_sparse_vector(self, config: VectorConfigInternal, docs: str, avgdl: float) -> Tuple[List[int], List[float]]:
+    def _get_sparse_vector(
+        self,
+        config: VectorConfigInternal,
+        docs: str,
+        avgdl: float,
+        trigram_weight: float,
+    ) -> Tuple[List[int], List[float]]:
         """
         Generate a sparse vector from text.
         

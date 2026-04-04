@@ -56,6 +56,7 @@ SPARSE_MODEL_BATCH_SIZE = 8
 LANGUAGE_DETECTION_CONFIDENCE = 0.9  # Minimum confidence for language detection
 DEFAULT_SEARCH_LIMIT = 10  # Default limit for search results
 WMTR_WORD_WEIGHT_PERCENTAGE = 80  # Percentage of top_k allocated to word weights
+WMTR_DEFAULT_TRIGRAM_WEIGHT = 1.0  # Default trigram channel multiplier for WMTR (documents; queries use SearchQuery.wmtr_trigram_weight)
 
 # Numeric limits
 MAX_TOP_K_VALUE = 10000  # Maximum value for top_k parameter
