@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('amgix-dashboard-theme')
+          if (t === 'dark' || t === 'light') {
+            document.documentElement.dataset.theme = t
+          }
+        } catch (e) {}
+      })()
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="./src/assets/amgix-logo-icon.png" />
+    <title>Amgix Dashboard</title>
+  </head>
+  <body class="mdc-typography">
+    <div id="app">
+      <header class="mdc-top-app-bar mdc-top-app-bar--fixed" id="dashboard-top-bar">
+        <div class="mdc-top-app-bar__row">
+          <section class="mdc-top-app-bar__section mdc-top-app-bar__section--align-start">
+            <div class="dashboard-top-bar-brand">
+              <img
+                class="dashboard-logo-slot"
+                alt="Amgix"
+                width="40"
+                height="40"
+                decoding="async"
+              />
+              <span class="mdc-top-app-bar__title">Amgix Dashboard</span>
+            </div>
+            <div class="dashboard-top-bar-nav-slot">
+              <nav class="dashboard-nav" role="navigation" aria-label="Sections">
+                <button type="button" data-panel-link="home" aria-current="page">
+                  <span class="material-symbols-outlined material-symbols--btn" aria-hidden="true">home</span>
+                  <span>Home</span>
+                </button>
+                <button type="button" data-panel-link="collections">
+                  <span class="material-symbols-outlined material-symbols--btn" aria-hidden="true">docs</span>
+                  <span>Collections</span>
+                </button>
+                <button type="button" data-panel-link="query">
+                  <span class="material-symbols-outlined material-symbols--btn" aria-hidden="true">search</span>
+                  <span>Query</span>
+                </button>
+              </nav>
+            </div>
+          </section>
+          <section class="mdc-top-app-bar__section mdc-top-app-bar__section--align-end">
+            <button
+              type="button"
+              class="dashboard-theme-toggle"
+              id="theme-toggle"
+              title="Switch to light theme"
+              aria-label="Switch to light theme"
+            >
+              <span class="material-symbols-outlined material-symbols--btn" aria-hidden="true" data-theme-icon>light_mode</span>
+            </button>
+          </section>
+        </div>
+      </header>
+      <div class="dashboard-main mdc-top-app-bar--fixed-adjust">
+        <div id="dashboard-error-bar" class="dashboard-error-bar" hidden role="alert">
+          <p class="dashboard-error-bar__message"></p>
+          <button type="button" class="dashboard-error-bar__dismiss" aria-label="Dismiss">
+            <span class="material-symbols-outlined material-symbols--btn" aria-hidden="true">close</span>
+          </button>
+        </div>
+        <main id="dashboard-panels">
+          <section
+            class="dashboard-panel"
+            data-panel="home"
+            id="panel-home"
+            aria-labelledby="panel-home-heading"
+          >
+            <h2 id="panel-home-heading" class="mdc-typography--headline5">Home</h2>
+          </section>
+          <section
+            class="dashboard-panel"
+            data-panel="collections"
+            id="panel-collections"
+            hidden
+            aria-labelledby="panel-collections-heading"
+          >
+            <div class="dashboard-collections-layout">
+              <div class="dashboard-collections-sidebar-column">
+                <p id="panel-collections-heading" class="dashboard-collections-panel-label">
+                  <strong>Collections:</strong>
+                </p>
+                <div class="dashboard-collections-sidebar">
+                  <nav data-collections-nav aria-labelledby="panel-collections-heading"></nav>
+                </div>
+              </div>
+              <div class="dashboard-collections-detail" data-collections-detail aria-live="polite"></div>
+            </div>
+          </section>
+          <section
+            class="dashboard-panel"
+            data-panel="query"
+            id="panel-query"
+            hidden
+            aria-labelledby="panel-query-heading"
+          >
+            <h2 id="panel-query-heading" class="mdc-typography--headline5">Query</h2>
+          </section>
+        </main>
+      </div>
+      <footer class="dashboard-site-footer" role="contentinfo">
+        <p class="dashboard-site-footer-text">Copyright © 2026 Amgix</p>
+      </footer>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

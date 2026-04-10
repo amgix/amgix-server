@@ -300,6 +300,19 @@ class QueueInfo(BaseModel):
     total: int = Field(..., description="Total number of queue entries")
 
 
+class CollectionStatsResponse(BaseModel):
+    """
+    Persisted index statistics for a collection (encoder-maintained counts) and queue counts.
+    """
+    doc_count: int = Field(..., description="Number of documents reflected in collection stats")
+    queue: QueueInfo = Field(..., description="Counts of documents in each queue state")
+
+    model_config = {
+        "populate_by_name": True,
+        "extra": "forbid",
+    }
+
+
 class SearchResult(Document):
     """
     A search result containing document information and its relevance score.

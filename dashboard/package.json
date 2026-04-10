@@ -1,0 +1,26 @@
+{
+  "name": "dashboard",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@types/jquery": "^4.0.0",
+    "@types/node": "^25.6.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.8"
+  },
+  "dependencies": {
+    "@fontsource/material-symbols-outlined": "^5.2.40",
+    "@fontsource/roboto": "^5.2.10",
+    "@material/top-app-bar": "^14.0.0",
+    "@material/typography": "^14.0.0",
+    "chart.js": "^4.5.1",
+    "jquery": "^4.0.0",
+    "material-components-web": "^14.0.0"
+  }
+}

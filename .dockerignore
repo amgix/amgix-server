@@ -13,6 +13,7 @@ venv/
 .DS_Store
 Thumbs.db
 dist/
+dashboard/node_modules/
 *.egg-info/
 data/
 

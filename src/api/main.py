@@ -3,12 +3,14 @@ from __future__ import annotations
 import os
 import logging
 import asyncio
+import pathlib
 from typing import List
 from contextlib import asynccontextmanager
 import uuid
 
 from fastapi import FastAPI, HTTPException, Path, Request, APIRouter
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from typing import Annotated
 import traceback
 
@@ -16,7 +18,14 @@ import traceback
 from src.core.common.bunny_talk import BunnyTalk
 from src.core.common.lock_manager import LockService, LockClient
 from src.core.common.logging_config import configure_logging
-from src.core.models.document import Document, DocumentStatusResponse, QueueDocument, QueueInfo, SearchResult
+from src.core.models.document import (
+    CollectionStatsResponse,
+    Document,
+    DocumentStatusResponse,
+    QueueDocument,
+    QueueInfo,
+    SearchResult,
+)
 from src.core.models.vector import CollectionConfig, CollectionConfigInternal, VectorConfigInternal, SearchQuery, SearchQueryWithVectors, ModelValidationResponse
 from src.core.models.vector import VectorData
 from src.core.common import (
@@ -83,6 +92,7 @@ _database = None
 # Lazy initialization of BunnyTalk
 _bunny_talk = None
 
+DASHBOARD_STATIC_DIR = pathlib.Path(__file__).resolve().parent / "dashboard"
 
 
 @asynccontextmanager
@@ -382,6 +392,37 @@ async def get_collection_config(collection_name: CollectionName) -> CollectionCo
     real_collection_name = get_real_collection_name(collection_name)
     collection_config = await _database.get_collection_info(real_collection_name)
     return collection_config
+
+
+@shared_router.get("/collections/{collection_name}/stats", operation_id="get_collection_stats")
+async def get_collection_stats(collection_name: CollectionName) -> CollectionStatsResponse:
+    """Get persisted collection statistics and queue counts.
+
+    Returns document counts maintained by the indexing pipeline (not a live physical count),
+    plus queue entry counts by state (same data as ``GET .../queue/info``).
+
+    Args:
+        collection_name: The name of the collection.
+
+    Returns:
+        A `CollectionStatsResponse` with `doc_count` and `queue`.
+
+    Raises:
+        HTTPException: 404 if the collection does not exist.
+    """
+    real_collection_name = get_real_collection_name(collection_name)
+
+    # Calling this just to throw 404 if the collection doesn't exist
+    await _database.get_collection_info_internal(real_collection_name)
+    
+    stats, queue_info = await asyncio.gather(
+        _database.get_collection_stats(real_collection_name),
+        _database.get_queue_info(real_collection_name),
+    )
+    doc_count = stats.get("doc_count", 0)
+    if not isinstance(doc_count, int):
+        doc_count = int(doc_count)
+    return CollectionStatsResponse(doc_count=doc_count, queue=queue_info)
 
 
 @shared_router.get("/collections/{collection_name}/exists", operation_id="collection_exists")
@@ -708,4 +749,10 @@ v1_api.include_router(shared_router)
 # -------------------------
 # app.include_router(root_api, tags=["Amgix"])  # /collections, /collections/{name}/documents, etc.
 app.include_router(v1_api, tags=["Amgix"])    # /v1/collections, /v1/collections/{name}/documents, etc.
+
+app.mount(
+    "/dashboard",
+    StaticFiles(directory=str(DASHBOARD_STATIC_DIR), html=True),
+    name="dashboard",
+)
 

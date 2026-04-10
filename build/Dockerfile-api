@@ -1,3 +1,36 @@
+FROM node:22-bookworm-slim AS dashboard-builder
+
+ARG AMGIX_VERSION
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    python3 \
+    python3-pip \
+    default-jre-headless \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY src/api/requirements.txt /tmp/api-requirements.txt
+RUN pip install --no-cache-dir --break-system-packages -r /tmp/api-requirements.txt
+
+WORKDIR /workspace
+
+COPY dashboard/package.json dashboard/package-lock.json ./dashboard/
+RUN cd dashboard && npm ci
+
+RUN npm install -g @openapitools/openapi-generator-cli@2.31.1
+
+COPY src ./src
+COPY dashboard ./dashboard
+
+ENV PYTHONPATH=/workspace \
+    AMGIX_VERSION=${AMGIX_VERSION}
+
+RUN mkdir -p '/workspace/src/api/dashboard'
+RUN bash /workspace/dashboard/client/generate-client.sh
+
+WORKDIR /workspace/dashboard
+RUN npm run build
+
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -19,6 +52,8 @@ ENV AMGIX_VERSION=${AMGIX_VERSION}
 
 COPY src /app/src
 
+COPY --from=dashboard-builder /workspace/dashboard/dist/ /app/src/api/dashboard/
+
 COPY build/run-api.sh /app/run-api.sh
 RUN chmod +x /app/run-api.sh
 
@@ -34,5 +69,3 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl --silent --fail --max-time 3 http://localhost:8234/v1/health/check || exit 1
 
 ENTRYPOINT ["/app/run-api.sh"]
-
-

@@ -1,0 +1,24 @@
+generatorName: typescript-fetch
+# OpenAPI 3.1 from FastAPI (export_openapi.py), downgraded to 3.0 for openapi-generator.
+# generate-client.sh passes -i with a temp file; inputSpec is for manual runs only.
+inputSpec: ./openapi-30.local.json
+outputDir: ./src
+
+inlineSchemaNameMappings:
+  Location_inner: ValidationErrorLocItem
+
+additionalProperties:
+  modelPropertyNaming: snake_case
+  packageName: amgix_client
+  projectName: amgix-client
+  packageVersion: 1.2.0-dash
+  packageUrl: https://github.com/amgix/amgix-client-typescript
+  basePath: "http://localhost:8234"
+  host: "localhost:8234"
+  generateSourceCodeOnly: false
+
+globalProperties:
+  apiTests: false
+  modelTests: false
+  apiDocs: false
+  modelDocs: false
