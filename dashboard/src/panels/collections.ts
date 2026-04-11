@@ -283,11 +283,17 @@ function buildVectorsSection(config: CollectionConfig, collectionName: string): 
   )
 }
 
+const DOC_STATS_PIE_KINDS = ['indexed', 'queued', 'requeued', 'failed'] as const
+
 function statRow(kind: string, label: string, value: number): JQuery<HTMLTableRowElement> {
-  return $('<tr>', { 'data-stat': kind }).append(
+  const $tr = $('<tr>', { 'data-stat': kind }).append(
     $('<th>', { scope: 'row', text: label }),
     $('<td>', { 'data-stat-value': '1', text: formatInt(value) }),
   ) as JQuery<HTMLTableRowElement>
+  if ((DOC_STATS_PIE_KINDS as readonly string[]).includes(kind)) {
+    $tr.toggleClass('dashboard-collections-doc-stats-stat--inactive', value === 0)
+  }
+  return $tr
 }
 
 function queueTotalRateRow(): JQuery<HTMLTableRowElement> {
@@ -337,6 +343,7 @@ function applyQueueTotalRateToDom(
   if (trend === 'none' || rate === null) {
     $icon.addClass('dashboard-collections-queue-rate-icon--hidden').text('')
     $val.text(DASH)
+    $row.removeClass('dashboard-collections-queue-rate-row--nonzero')
     return
   }
   $val.text(`${formatQueueRateMagnitude(rate)} /s`)
@@ -347,6 +354,7 @@ function applyQueueTotalRateToDom(
   } else {
     $icon.text('horizontal_rule').addClass('dashboard-collections-queue-rate-icon--flat')
   }
+  $row.toggleClass('dashboard-collections-queue-rate-row--nonzero', Math.abs(rate) > 1e-9)
 }
 
 function applyCollectionStatsToDom(
@@ -361,6 +369,9 @@ function applyCollectionStatsToDom(
   }
   const set = (kind: string, n: number) => {
     $root.find(`tr[data-stat="${kind}"] td[data-stat-value]`).text(formatInt(n))
+    if ((DOC_STATS_PIE_KINDS as readonly string[]).includes(kind)) {
+      $root.find(`tr[data-stat="${kind}"]`).toggleClass('dashboard-collections-doc-stats-stat--inactive', n === 0)
+    }
   }
   set('indexed', docCount)
   set('queued', queueInfo.queued)
@@ -671,17 +682,10 @@ export class CollectionsPanel extends DashboardPanel {
 
       const $actionButtons = $('<div>', { class: 'dashboard-collections-doc-stats-actions' })
 
-      const mkAction = (
-        label: string,
-        variant: 'default' | 'danger',
-        iconName: string,
-      ): JQuery<HTMLButtonElement> => {
+      const mkAction = (label: string, iconName: string): JQuery<HTMLButtonElement> => {
         const $btn = $('<button>', {
           type: 'button',
-          class:
-            variant === 'danger'
-              ? 'dashboard-collections-stats-action dashboard-collections-stats-action--danger'
-              : 'dashboard-collections-stats-action',
+          class: 'dashboard-collections-stats-action',
         }) as JQuery<HTMLButtonElement>
         $btn.append(
           $('<span>', {
@@ -694,9 +698,9 @@ export class CollectionsPanel extends DashboardPanel {
         return $btn
       }
 
-      const $btnEmpty = mkAction('Empty', 'default', 'delete_sweep')
-      const $btnDeleteQueue = mkAction('Delete Queue', 'default', 'playlist_remove')
-      const $btnDelete = mkAction('Delete', 'danger', 'delete_forever')
+      const $btnEmpty = mkAction('Empty', 'delete_sweep')
+      const $btnDeleteQueue = mkAction('Delete Queue', 'playlist_remove')
+      const $btnDelete = mkAction('Delete', 'delete_forever')
 
       const setActionsBusy = (busy: boolean): void => {
         $actionButtons.find('button').prop('disabled', busy)

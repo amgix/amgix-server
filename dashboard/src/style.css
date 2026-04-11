@@ -683,20 +683,6 @@ body {
   cursor: not-allowed;
 }
 
-.dashboard-collections-stats-action--danger {
-  background: color-mix(in srgb, #dc2626 10%, var(--bg));
-  color: #b91c1c;
-  border-color: color-mix(in srgb, #dc2626 35%, var(--border));
-}
-
-:root[data-theme='dark'] .dashboard-collections-stats-action--danger {
-  color: #f87171;
-}
-
-.dashboard-collections-stats-action--danger:hover:not(:disabled) {
-  background: color-mix(in srgb, #dc2626 18%, var(--bg));
-}
-
 .dashboard-collections-doc-stats-row {
   display: flex;
   flex-wrap: wrap;
@@ -749,11 +735,47 @@ body {
   vertical-align: top;
 }
 
+/* Match pie segment colors (see pieChartPalette in collections.ts). */
+.dashboard-collections-doc-stats-table tbody tr[data-stat='indexed'] th,
+.dashboard-collections-doc-stats-table tbody tr[data-stat='indexed'] td {
+  color: var(--chart-pie-indexed);
+  font-weight: 500;
+}
+
+.dashboard-collections-doc-stats-table tbody tr[data-stat='queued'] th,
+.dashboard-collections-doc-stats-table tbody tr[data-stat='queued'] td {
+  color: var(--chart-pie-queued);
+  font-weight: 500;
+}
+
+.dashboard-collections-doc-stats-table tbody tr[data-stat='requeued'] th,
+.dashboard-collections-doc-stats-table tbody tr[data-stat='requeued'] td {
+  color: var(--chart-pie-requeued);
+  font-weight: 500;
+}
+
+.dashboard-collections-doc-stats-table tbody tr[data-stat='failed'] th,
+.dashboard-collections-doc-stats-table tbody tr[data-stat='failed'] td {
+  color: var(--chart-pie-failed);
+  font-weight: 500;
+}
+
+/* Zero counts: same pie color as non-zero rows, drawn at 75% opacity. */
+.dashboard-collections-doc-stats-table tbody tr.dashboard-collections-doc-stats-stat--inactive th,
+.dashboard-collections-doc-stats-table tbody tr.dashboard-collections-doc-stats-stat--inactive td {
+  opacity: 0.6;
+}
+
 .dashboard-collections-doc-stats-table tbody tr.dashboard-collections-doc-stats-total th,
 .dashboard-collections-doc-stats-table tbody tr.dashboard-collections-doc-stats-total td {
   font-weight: 700;
   color: var(--text);
   border-bottom: none;
+}
+
+.dashboard-collections-doc-stats-table tbody tr[data-stat='queue-total-rate'].dashboard-collections-queue-rate-row--nonzero th,
+.dashboard-collections-doc-stats-table tbody tr[data-stat='queue-total-rate'].dashboard-collections-queue-rate-row--nonzero td {
+  font-weight: 700;
 }
 
 .dashboard-collections-queue-rate-wrap {
