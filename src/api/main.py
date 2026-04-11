@@ -18,6 +18,7 @@ import traceback
 from src.core.common.bunny_talk import BunnyTalk
 from src.core.common.lock_manager import LockService, LockClient
 from src.core.common.logging_config import configure_logging
+from src.core.models.cluster import ClusterView, MetricsPayload
 from src.core.models.document import (
     CollectionStatsResponse,
     Document,
@@ -133,6 +134,34 @@ _rabbitmq_broker_version: str | None = None
 DASHBOARD_STATIC_DIR = pathlib.Path(__file__).resolve().parent / "dashboard"
 
 
+_ENCODER_LEADER_QUEUE = "embed-leader"
+_API_REPORT_INTERVAL_S = 10
+
+
+async def _report_to_leader_loop() -> None:
+    while True:
+        try:
+            await _bunny_talk.talk(
+                routing_key=_ENCODER_LEADER_QUEUE,
+                payload=MetricsPayload(
+                    probe=False,
+                    hostname=HOSTNAME,
+                    role='api',
+                    metrics={},
+                    loaded_models=[],
+                    load_models=False,
+                    at_capacity=False,
+                    free_ram_gb=None,
+                    gpu_support=False,
+                    gpu_available=False,
+                ),
+                start_trace=True,
+            )
+        except Exception as e:
+            logger.debug(f"API: Could not report to encoder leader: {e}")
+        await asyncio.sleep(_API_REPORT_INTERVAL_S)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan event handler for database connection on startup."""
@@ -160,10 +189,18 @@ async def lifespan(app: FastAPI):
         await _database.configure()
 
     await _database.check_features()
-  
+
+    reporter_task = asyncio.create_task(_report_to_leader_loop())
+
     yield
 
     logger.info(f"Stopping {APP_NAME} API")
+
+    reporter_task.cancel()
+    try:
+        await reporter_task
+    except asyncio.CancelledError:
+        pass
 
     # Cleanup on shutdown
     if _bunny_talk:
@@ -317,6 +354,28 @@ async def readiness_check() -> ReadyResponse:
     if ready:
         return JSONResponse(status_code=200, content=body.model_dump())
     return JSONResponse(status_code=HTTP_STATUS_PARTIAL_READY, content=body.model_dump())
+
+
+@shared_router.get("/cluster/view", operation_id="cluster_view")
+async def cluster_view() -> ClusterView:
+    """Return the current cluster view from the encoder leader.
+
+    Queries the leader in real time over AMQP. Returns an empty ClusterView
+    if there is no active encoder leader.
+    """
+    try:
+        result = await _bunny_talk.rpc(
+            _ENCODER_LEADER_QUEUE,
+            payload=MetricsPayload(probe=False, query_view=True, hostname=HOSTNAME),
+            return_type=ClusterView,
+            timeout=2.0,
+        )
+        if isinstance(result, ClusterView):
+            return result
+        return ClusterView()
+    except Exception as e:
+        logger.warning(f"cluster_view: failed to reach leader: {e}")
+        return ClusterView()
 
 
 # Collections

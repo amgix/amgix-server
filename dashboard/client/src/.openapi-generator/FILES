@@ -2,6 +2,7 @@ apis/AmgixApi.ts
 apis/index.ts
 index.ts
 models/BulkUploadRequest.ts
+models/ClusterView.ts
 models/CollectionConfig.ts
 models/CollectionExistsResponse.ts
 models/CollectionStatsResponse.ts
@@ -13,6 +14,7 @@ models/DocumentStatusResponse.ts
 models/HTTPValidationError.ts
 models/MetadataFilter.ts
 models/MetadataIndex.ts
+models/NodeView.ts
 models/OkResponse.ts
 models/QueueInfo.ts
 models/ReadyResponse.ts
@@ -23,8 +25,10 @@ models/ValidationError.ts
 models/ValidationErrorLocItem.ts
 models/Vector.ts
 models/VectorConfig.ts
+models/VectorMetrics.ts
 models/VectorScore.ts
 models/VectorSearchWeight.ts
 models/VersionResponse.ts
+models/WindowMetrics.ts
 models/index.ts
 runtime.ts

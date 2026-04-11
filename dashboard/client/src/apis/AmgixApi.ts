@@ -16,6 +16,7 @@
 import * as runtime from '../runtime';
 import type {
   BulkUploadRequest,
+  ClusterView,
   CollectionConfig,
   CollectionExistsResponse,
   CollectionStatsResponse,
@@ -33,6 +34,8 @@ import type {
 import {
     BulkUploadRequestFromJSON,
     BulkUploadRequestToJSON,
+    ClusterViewFromJSON,
+    ClusterViewToJSON,
     CollectionConfigFromJSON,
     CollectionConfigToJSON,
     CollectionExistsResponseFromJSON,
@@ -133,6 +136,45 @@ export interface UpsertDocumentsBulkRequest {
  * 
  */
 export class AmgixApi extends runtime.BaseAPI {
+
+    /**
+     * Creates request options for clusterView without sending the request
+     */
+    async clusterViewRequestOpts(): Promise<runtime.RequestOpts> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+
+        let urlPath = `/v1/cluster/view`;
+
+        return {
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     * Return the current cluster view from the encoder leader.  Queries the leader in real time over AMQP. Returns an empty ClusterView if there is no active encoder leader.
+     * Cluster View
+     */
+    async clusterViewRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ClusterView>> {
+        const requestOptions = await this.clusterViewRequestOpts();
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) => ClusterViewFromJSON(jsonValue));
+    }
+
+    /**
+     * Return the current cluster view from the encoder leader.  Queries the leader in real time over AMQP. Returns an empty ClusterView if there is no active encoder leader.
+     * Cluster View
+     */
+    async clusterView(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ClusterView> {
+        const response = await this.clusterViewRaw(initOverrides);
+        return await response.value();
+    }
 
     /**
      * Creates request options for collectionExists without sending the request

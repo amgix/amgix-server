@@ -349,6 +349,67 @@ body {
   color: var(--chart-pie-failed);
 }
 
+.dashboard-home-cluster-table {
+  margin-top: 1.25rem;
+}
+
+.dashboard-home-cluster-table .dashboard-home-cluster-colhead th {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: left;
+  padding: 0.35rem 1rem 0.25rem 0;
+  color: color-mix(in srgb, var(--text) 85%, var(--bg));
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+.dashboard-home-cluster-table .dashboard-home-cluster-colhead th:nth-child(n + 4) {
+  text-align: center;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+
+.dashboard-home-cluster-table tbody strong {
+  font-weight: 600;
+}
+
+.dashboard-home-cluster-table tbody td {
+  padding: 0.15rem 1rem 0.15rem 0;
+}
+
+.dashboard-home-cluster-table tbody td:nth-child(n + 4) {
+  text-align: center;
+  padding: 0.15rem 0.5rem;
+}
+
+.dashboard-home-cluster-table .dashboard-home-cluster-colhead th:nth-child(8),
+.dashboard-home-cluster-table .dashboard-home-cluster-colhead th:nth-child(9),
+.dashboard-home-cluster-table .dashboard-home-cluster-colhead th:nth-child(10),
+.dashboard-home-cluster-table tbody td:nth-child(8),
+.dashboard-home-cluster-table tbody td:nth-child(9),
+.dashboard-home-cluster-table tbody td:nth-child(10) {
+  text-align: right;
+}
+
+.dashboard-home-cluster-table .dashboard-home-cluster-placeholder {
+  color: color-mix(in srgb, var(--text) 65%, var(--bg));
+  font-style: italic;
+}
+
+.dashboard-home-cluster-footnotes {
+  margin-top: 0.6rem;
+  max-width: 42rem;
+  font-size: 0.8125rem;
+  line-height: 1.0;
+  color: color-mix(in srgb, var(--text) 72%, var(--bg));
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.dashboard-home-cluster-footnotes p {
+  margin: 0;
+}
+
 .dashboard-collections-layout {
   display: flex;
   align-items: flex-start;

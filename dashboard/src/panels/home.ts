@@ -1,10 +1,37 @@
-import { ResponseError, type AmgixApi, type ReadyResponse } from '@amgix/amgix-client'
+import {
+  ResponseError,
+  type AmgixApi,
+  type ClusterView,
+  type NodeView,
+  type ReadyResponse,
+} from '@amgix/amgix-client'
 import $ from 'jquery'
 
 import { hideDashboardError, showDashboardError } from '../error-bar'
 import { DashboardPanel } from './panel-base'
 
 const HOME_READY_POLL_MS = 10_000
+
+/** Cluster table embedding columns use this rolling window (seconds). */
+const CLUSTER_METRICS_WINDOW_SEC = 60
+
+function buildClusterNodesFootnotes(): JQuery<HTMLElement> {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return $('<div>', { class: 'dashboard-home-cluster-footnotes' }).append(
+    $('<p>', { text: '* Current encoder leader.' }),
+    $('<p>', {
+      text:
+        'Batches: total embed batches in that window on this node.',
+    }),
+    $('<p>', {
+      text: `Rate/s: embed batches per second over the last ${w}s.`,
+    }),
+    $('<p>', {
+      text:
+        'Avg ms: mean wall time per batch in that window, weighted by batch count per vector type.',
+    }),
+  )
+}
 
 type HomeReadinessKey = 'database' | 'rabbitmq' | 'index' | 'query'
 
@@ -63,6 +90,129 @@ function readinessLabel(ok: boolean): string {
   return ok ? 'Ready' : 'Not ready'
 }
 
+function formatLastSeen(unixSeconds: number): string {
+  const delta = Math.max(0, Math.floor(Date.now() / 1000 - unixSeconds))
+  return `${delta}s`
+}
+
+function formatLoadModelsCell(node: NodeView): string {
+  if (!node.load_models) {
+    return 'No'
+  }
+  const n = (node.loaded_models ?? []).length
+  return `Yes (${n})`
+}
+
+function formatGpuStatus(node: NodeView): string {
+  if (!node.gpu_support) {
+    return 'n/a'
+  }
+  if (node.gpu_available) {
+    return 'Yes'
+  }
+  return 'Undetected'
+}
+
+function formatGbForCell(n: number): string {
+  const s = n.toFixed(1)
+  return s.endsWith('.0') ? String(Math.round(n)) : s
+}
+
+function formatRamFreeTotalGb(node: NodeView): string {
+  if (node.role === 'api') {
+    return ''
+  }
+  if (!node.load_models) {
+    return '-'
+  }
+  const free = node.free_ram_gb
+  const total = node.total_ram_gb
+  if (free == null || total == null || !Number.isFinite(free) || !Number.isFinite(total)) {
+    return ''
+  }
+  return `${formatGbForCell(free)} / ${formatGbForCell(total)}`
+}
+
+function formatVramFreeTotalGb(node: NodeView): string {
+  if (node.role === 'api') {
+    return ''
+  }
+  if (!node.load_models) {
+    return '-'
+  }
+  const free = node.free_vram_gb
+  const total = node.total_vram_gb
+  if (free == null || total == null || !Number.isFinite(free) || !Number.isFinite(total)) {
+    return 'n/a'
+  }
+  return `${formatGbForCell(free)} / ${formatGbForCell(total)}`
+}
+
+const clusterMetricsWindowKey = String(CLUSTER_METRICS_WINDOW_SEC)
+
+function formatClusterRpsCell(rps: number): string {
+  if (!Number.isFinite(rps)) {
+    return ''
+  }
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 0 }).format(rps)
+}
+
+function formatClusterAvgMsCell(ms: number): string {
+  if (!Number.isFinite(ms)) {
+    return ''
+  }
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 0 }).format(ms)
+}
+
+/** Sum batch rates (API field rps) and batch counts across vector types; latency is n-weighted avg over the window. */
+function formatEmbeddingMetricsCells60s(node: NodeView): { rps: string; avgMs: string; requests: string } {
+  const list = node.metrics ?? []
+  let sawWindow = false
+  let totalN = 0
+  let sumRps = 0
+  let weightedMs = 0
+  for (const vm of list) {
+    const wm = vm.windows?.[clusterMetricsWindowKey]
+    if (wm == null) {
+      continue
+    }
+    sawWindow = true
+    const n = Number(wm.n)
+    const rps = wm.rps
+    const avgMs = wm.avg_ms
+    if (Number.isFinite(rps)) {
+      sumRps += rps
+    }
+    if (Number.isFinite(n) && n > 0) {
+      const ni = Math.trunc(n)
+      totalN += ni
+      if (Number.isFinite(avgMs)) {
+        weightedMs += avgMs * ni
+      }
+    }
+  }
+  if (!sawWindow) {
+    return { rps: '', avgMs: '', requests: '' }
+  }
+  return {
+    rps: formatClusterRpsCell(sumRps),
+    avgMs: totalN > 0 ? formatClusterAvgMsCell(weightedMs / totalN) : '',
+    requests: String(totalN),
+  }
+}
+
+function sortClusterNodeEntries(nodes: { [key: string]: NodeView }): Array<[string, NodeView]> {
+  const entries = Object.entries(nodes)
+  entries.sort((a, b) => {
+    const byRole = a[1].role.localeCompare(b[1].role, undefined, { sensitivity: 'base' })
+    if (byRole !== 0) {
+      return byRole
+    }
+    return a[0].localeCompare(b[0], undefined, { sensitivity: 'base' })
+  })
+  return entries
+}
+
 function $readinessStatus(ok: boolean, readinessKey: HomeReadinessKey): JQuery<HTMLElement> {
   return $('<span>', {
     class: ok ? 'dashboard-home-status dashboard-home-status--ready' : 'dashboard-home-status dashboard-home-status--not-ready',
@@ -90,6 +240,63 @@ export class HomePanel extends DashboardPanel {
     }
   }
 
+  private applyClusterViewToDom($root: JQuery<HTMLElement>, view: ClusterView | null): void {
+    const $tbody = $root.find('[data-home-cluster-tbody]')
+    if (!$tbody.length) {
+      return
+    }
+    $tbody.empty()
+    const nodes = view?.nodes
+    if (view == null || nodes === undefined) {
+      $tbody.append(
+        $('<tr>').append(
+          $('<td>', {
+            class: 'dashboard-home-cluster-placeholder',
+            colspan: 11,
+            text: 'Cluster view unavailable.',
+          }),
+        ),
+      )
+      return
+    }
+    if (Object.keys(nodes).length === 0) {
+      $tbody.append(
+        $('<tr>').append(
+          $('<td>', {
+            class: 'dashboard-home-cluster-placeholder',
+            colspan: 11,
+            text: 'No nodes in cluster view.',
+          }),
+        ),
+      )
+      return
+    }
+    for (const [hostname, node] of sortClusterNodeEntries(nodes)) {
+      const m = formatEmbeddingMetricsCells60s(node)
+      const $nodeTd = $('<td>', { class: 'dashboard-home-v' })
+      if (node.is_leader) {
+        $nodeTd.append($('<strong>', { text: `${hostname}*` }))
+      } else {
+        $nodeTd.text(hostname)
+      }
+      $tbody.append(
+        $('<tr>').append(
+          $('<td>', { class: 'dashboard-home-v', text: node.role }),
+          $nodeTd,
+          $('<td>', { class: 'dashboard-home-v', text: formatLoadModelsCell(node) }),
+          $('<td>', { class: 'dashboard-home-v', text: node.at_capacity ? 'Yes' : 'No' }),
+          $('<td>', { class: 'dashboard-home-v', text: formatGpuStatus(node) }),
+          $('<td>', { class: 'dashboard-home-v', text: formatRamFreeTotalGb(node) }),
+          $('<td>', { class: 'dashboard-home-v', text: formatVramFreeTotalGb(node) }),
+          $('<td>', { class: 'dashboard-home-v', text: m.requests }),
+          $('<td>', { class: 'dashboard-home-v', text: m.rps }),
+          $('<td>', { class: 'dashboard-home-v', text: m.avgMs }),
+          $('<td>', { class: 'dashboard-home-v', text: formatLastSeen(node.last_seen) }),
+        ),
+      )
+    }
+  }
+
   private applyReadinessToDom($root: JQuery<HTMLElement>, ready: ReadyResponse): void {
     const keys: HomeReadinessKey[] = ['database', 'rabbitmq', 'index', 'query']
     for (const key of keys) {
@@ -104,13 +311,23 @@ export class HomePanel extends DashboardPanel {
     }
   }
 
-  private async pollReadiness($root: JQuery<HTMLElement>, generation: number): Promise<void> {
+  private async pollHomeRefresh(api: AmgixApi, $root: JQuery<HTMLElement>, generation: number): Promise<void> {
     if (generation !== this.readyPollGeneration) {
       return
     }
     if ($('#panel-home').prop('hidden')) {
       return
     }
+    let clusterView: ClusterView | null = null
+    try {
+      clusterView = await api.clusterView()
+    } catch {
+      clusterView = null
+    }
+    if (generation !== this.readyPollGeneration) {
+      return
+    }
+    this.applyClusterViewToDom($root, clusterView)
     try {
       const ready = await fetchReadiness()
       if (generation !== this.readyPollGeneration) {
@@ -130,7 +347,11 @@ export class HomePanel extends DashboardPanel {
     $root.empty().append($('<p>', { class: 'dashboard-home-loading', text: 'Loading…' }))
 
     try {
-      const [info, ready] = await Promise.all([api.systemInfo(), fetchReadiness()])
+      const [info, ready, clusterView] = await Promise.all([
+        api.systemInfo(),
+        fetchReadiness(),
+        api.clusterView().catch((): null => null),
+      ])
       if (generation !== this.readyPollGeneration) {
         return
       }
@@ -178,12 +399,43 @@ export class HomePanel extends DashboardPanel {
         ),
       )
 
-      $root.empty().append(
-        $('<table>', { class: 'dashboard-home-table' }).append($thead, $tbody),
-      )
+      const $systemTable = $('<table>', { class: 'dashboard-home-table' }).append($thead, $tbody)
+
+      const $clusterThead = $('<thead>')
+        .append(
+          $('<tr>').append(
+            $('<th>', {
+              class: 'dashboard-home-table-heading',
+              colspan: 11,
+              text: 'Cluster Nodes',
+            }),
+          ),
+        )
+        .append(
+          $('<tr>', { class: 'dashboard-home-cluster-colhead' }).append(
+            $('<th>', { text: 'Role' }),
+            $('<th>', { text: 'Node' }),
+            $('<th>', { text: 'Models' }),
+            $('<th>', { text: 'Capacity' }),
+            $('<th>', { text: 'GPU' }),
+            $('<th>', { text: 'RAM (free/total, GB)' }),
+            $('<th>', { text: 'VRAM (free/total, GB)' }),
+            $('<th>', { text: 'Batches' }),
+            $('<th>', { text: 'Rate/s' }),
+            $('<th>', { text: 'Avg ms' }),
+            $('<th>', { text: 'Last seen' }),
+          ),
+        )
+
+      const $clusterTable = $('<table>', {
+        class: 'dashboard-home-table dashboard-home-cluster-table',
+      }).append($clusterThead, $('<tbody>', { attr: { 'data-home-cluster-tbody': '' } }))
+
+      $root.empty().append($systemTable, $clusterTable, buildClusterNodesFootnotes())
+      this.applyClusterViewToDom($root, clusterView)
 
       this.readyPollTimer = window.setInterval(() => {
-        void this.pollReadiness($root, generation)
+        void this.pollHomeRefresh(api, $root, generation)
       }, HOME_READY_POLL_MS)
     } catch (err) {
       if (generation !== this.readyPollGeneration) {

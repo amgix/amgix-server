@@ -1,6 +1,7 @@
 /* tslint:disable */
 /* eslint-disable */
 export * from './BulkUploadRequest';
+export * from './ClusterView';
 export * from './CollectionConfig';
 export * from './CollectionExistsResponse';
 export * from './CollectionStatsResponse';
@@ -12,6 +13,7 @@ export * from './DocumentStatusResponse';
 export * from './HTTPValidationError';
 export * from './MetadataFilter';
 export * from './MetadataIndex';
+export * from './NodeView';
 export * from './OkResponse';
 export * from './QueueInfo';
 export * from './ReadyResponse';
@@ -22,6 +24,8 @@ export * from './ValidationError';
 export * from './ValidationErrorLocItem';
 export * from './Vector';
 export * from './VectorConfig';
+export * from './VectorMetrics';
 export * from './VectorScore';
 export * from './VectorSearchWeight';
 export * from './VersionResponse';
+export * from './WindowMetrics';

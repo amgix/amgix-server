@@ -18,6 +18,7 @@ from src.core.common.bunny_talk import BunnyTalk
 from src.core.database.base import DatabaseBase
 from src.core.common.enums import VectorType
 from typing import Dict, List, Tuple, Type, Union, Optional
+from src.core.models.cluster import ClusterView, MetricsPayload, NodeView, VectorMetrics, WindowMetrics
 from .encoder_base import EncoderBase
 
 
@@ -55,12 +56,14 @@ LEADER_QUEUE_NAME = "embed-leader"
 # Metrics aggregation windows in seconds
 METRIC_WINDOWS = [5, 30, 60, 300]
 METRICS_LOOP_INTERVAL_SECONDS = 5
+METRICS_NODE_EXPIRY_SECONDS = 30
 TARGET_AVAILABLITY_PCT = 5 # percentage of total capacity
 
 def _parse_load_models(value: str) -> bool:
     return value.lower() in ("true", "1", "yes")
 
 AMGIX_LOAD_MODELS = _parse_load_models(os.getenv("AMGIX_LOAD_MODELS", "true"))
+AMGIX_ENCODER_ROLE = os.getenv("AMGIX_ENCODER_ROLE", "all")
 
 # Memory reserve configuration - parse once at module load
 def _parse_memory_limit(value: str) -> Optional[Tuple[float, bool]]:
@@ -141,12 +144,16 @@ class EmbedRouterService(EncoderBase):
 
         self.load_models = AMGIX_LOAD_MODELS
 
+        self._free_ram_gb: float = 0.0
+        self._free_vram_gb: Optional[float] = None
+
         self._at_model_capacity(force_check=True)
 
         # Per-model metrics storage
         # { model_key: deque[tuple[float, float]] }  # (timestamp, service_ms)
         self._metrics: Dict[str, deque] = {}
         self._cluster_metrics: Dict[str, Dict[Tuple[VectorType, str, str], Dict]] = {}
+        self._cluster_view: Dict[str, NodeView] = {}
 
         self.model_locks: defaultdict[str, RWLock] = defaultdict(RWLock)
         self.model_load_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -440,7 +447,9 @@ class EmbedRouterService(EncoderBase):
             else:
                 # Get current free memory (the only dynamic part)
                 free_ram_gb, free_vram_gb = _get_free_memory(self.logger)
-                
+                self._free_ram_gb = free_ram_gb
+                self._free_vram_gb = free_vram_gb
+
                 # Check RAM reserve
                 ram_violation = _check_memory_reserve(RAM_RESERVE_CONFIG, free_ram_gb, TOTAL_RAM_GB)
                 
@@ -619,48 +628,85 @@ class EmbedRouterService(EncoderBase):
         except Exception as e:
             self.logger.error(f"Router: Error handling node signal (load: {load}, model_key: {model_key}): {e}")
 
-    async def _metrics_signal(self, 
-                probe: bool,
-                hostname: str,  
-                metrics: Dict[str, Dict[str, Dict[str, Union[float, int]]]],
-                loaded_models: List[Tuple[str, float]],
-                load_models: bool,
-                at_capacity: bool
-                ) -> None:
-        """Accumulate metrics from workers."""
+    async def _metrics_signal(self, payload: MetricsPayload) -> Optional[ClusterView]:
+        """Accumulate metrics from workers; returns ClusterView snapshot when query_view=True."""
 
-        if probe:
-            return
+        if payload.probe:
+            return None
 
-        # Store metrics per hostname with timestamp
-        # metrics now contains only the snapshots data
-        self._cluster_metrics[hostname] = {
-            'metrics': {ast.literal_eval(k): v for k, v in metrics.items()},
-            'loaded_models': [
-                (ast.literal_eval(model_key), load_timestamp)
-                for model_key, load_timestamp in loaded_models
-            ],
-            'load_models': bool(load_models),
-            'capacity': 0 if at_capacity else 1 if len(loaded_models) > 0 else 2,
-            'last_seen': time.time()
-        }
-        
-        # Log summary of what we received
-        self.logger.debug(f"Router: Received metrics from {hostname} (load_models={load_models}): metrics: {len(metrics)}, models: {len(loaded_models)}, capacity: {self._cluster_metrics[hostname]['capacity']}")
-        self.logger.debug(f"Router:     models: {[model_key for model_key, _ in loaded_models]}")
+        if payload.query_view:
+            if HOSTNAME in self._cluster_view:
+                self._cluster_view[HOSTNAME].is_leader = True
+            return ClusterView(nodes=dict(self._cluster_view))
+
+        hostname = payload.hostname
+        now = time.time()
+
+        if payload.role != "api":
+            self._cluster_metrics[hostname] = {
+                'metrics': {ast.literal_eval(k): v for k, v in payload.metrics.items()},
+                'loaded_models': [
+                    (ast.literal_eval(model_key), load_timestamp)
+                    for model_key, load_timestamp in payload.loaded_models
+                ],
+                'load_models': bool(payload.load_models),
+                'capacity': 0 if payload.at_capacity else 1 if len(payload.loaded_models) > 0 else 2,
+                'last_seen': now,
+            }
+            self.logger.debug(
+                f"Router: Received metrics from {hostname} (load_models={payload.load_models}): "
+                f"metrics: {len(payload.metrics)}, models: {len(payload.loaded_models)}, "
+                f"capacity: {self._cluster_metrics[hostname]['capacity']}"
+            )
+
+        loaded_model_keys = {model_key_str for model_key_str, _ in payload.loaded_models}
+        all_metric_keys = loaded_model_keys | payload.metrics.keys()
+
+        vector_metrics = []
+        loaded_model_strings = []
+        for model_key_str in all_metric_keys:
+            model_type, model_name, revision = ast.literal_eval(model_key_str)
+            raw_windows = payload.metrics.get(model_key_str, {})
+            windows = {int(win): WindowMetrics(**data) for win, data in raw_windows.items()}
+            vector_metrics.append(VectorMetrics(type=model_type, model=model_name, revision=revision, windows=windows))
+            if model_key_str in loaded_model_keys and model_name:
+                label = f"{model_name}:{revision}" if revision else model_name
+                loaded_model_strings.append(label)
+
+        self._cluster_view[hostname] = NodeView(
+            role=payload.role,
+            load_models=payload.load_models,
+            at_capacity=payload.at_capacity,
+            last_seen=now,
+            gpu_support=payload.gpu_support,
+            gpu_available=payload.gpu_available,
+            total_ram_gb=payload.total_ram_gb,
+            free_ram_gb=payload.free_ram_gb,
+            total_vram_gb=payload.total_vram_gb,
+            free_vram_gb=payload.free_vram_gb,
+            loaded_models=sorted(loaded_model_strings),
+            metrics=vector_metrics,
+        )
 
     def _cleanup_stale_metrics(self) -> None:
         """Remove metrics from hosts that haven't reported in a while."""
-        cutoff_time = time.time() - (METRICS_LOOP_INTERVAL_SECONDS * 2)
-        
-        stale_hosts = [
+        now = time.time()
+
+        stale_encoder = [
             hostname for hostname, data in self._cluster_metrics.items()
-            if data['last_seen'] < cutoff_time
+            if data['last_seen'] < now - METRICS_NODE_EXPIRY_SECONDS
         ]
-        
-        for hostname in stale_hosts:
+        for hostname in stale_encoder:
             del self._cluster_metrics[hostname]
-            self.logger.info(f"Router: Expired metrics for {hostname} (stale)")
+            self.logger.info(f"Router: Expired encoder metrics for {hostname} (stale)")
+
+        stale_view = [
+            hostname for hostname, data in self._cluster_view.items()
+            if data.last_seen < now - METRICS_NODE_EXPIRY_SECONDS
+        ]
+        for hostname in stale_view:
+            del self._cluster_view[hostname]
+            self.logger.info(f"Router: Expired cluster view for {hostname} (stale)")
 
     async def _metrics_loop(self) -> None:
         """Send metrics to leader."""
@@ -675,12 +721,7 @@ class EmbedRouterService(EncoderBase):
                     # try to send a probe to the leader (even if it's us)
                     await self.bunny_talk.talk(
                         routing_key=LEADER_QUEUE_NAME,
-                        probe=True,
-                        hostname=HOSTNAME,
-                        metrics=dict(),
-                        loaded_models=list(),
-                        load_models=self.load_models,
-                        at_capacity=False,
+                        payload=MetricsPayload(probe=True, hostname=HOSTNAME),
                         start_trace=True
                     )
                     try_leader = False
@@ -717,20 +758,27 @@ class EmbedRouterService(EncoderBase):
                         for model_key, (queue, consumer_tag, load_timestamp) in self.local_models.items()
                     ]
 
+                payload = MetricsPayload(
+                    probe=False,
+                    hostname=HOSTNAME,
+                    role=AMGIX_ENCODER_ROLE,
+                    metrics=processed_metrics,
+                    loaded_models=loaded_models,
+                    load_models=self.load_models,
+                    at_capacity=self._at_model_capacity(),
+                    total_ram_gb=round(TOTAL_RAM_GB, 2),
+                    free_ram_gb=round(self._free_ram_gb, 2),
+                    total_vram_gb=round(TOTAL_VRAM_GB, 2) if TOTAL_VRAM_GB is not None else None,
+                    free_vram_gb=round(self._free_vram_gb, 2) if self._free_vram_gb is not None else None,
+                    gpu_support=PYNVML_AVAILABLE,
+                    gpu_available=GPU_HANDLE is not None,
+                )
                 if self.leader:
-                    # no need for round trip, just call our own handler
-                    await self._metrics_signal(False, HOSTNAME, processed_metrics, 
-                                    loaded_models, self.load_models, self._at_model_capacity())
+                    await self._metrics_signal(payload)
                 else:
-                    # send it over the pipe
                     await self.bunny_talk.talk(
                         routing_key=LEADER_QUEUE_NAME,
-                        probe=False,
-                        hostname=HOSTNAME,
-                        metrics=processed_metrics,
-                        loaded_models=loaded_models,
-                        load_models=self.load_models,
-                        at_capacity=self._at_model_capacity(),
+                        payload=payload,
                         start_trace=True
                     )
             except Exception as e:
