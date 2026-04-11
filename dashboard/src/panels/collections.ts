@@ -416,6 +416,10 @@ export class CollectionsPanel extends DashboardPanel {
     $detail: JQuery<HTMLElement>,
     preferName: string | null,
   ): Promise<void> {
+    this.clearStatsPoll()
+    this.destroyQueuePieChart()
+    this.queueTotalSample = null
+
     $nav.empty()
     $detail.empty().text('Loading collections…')
 
@@ -584,7 +588,14 @@ export class CollectionsPanel extends DashboardPanel {
         ]
         this.queuePieChart.update('none')
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof ResponseError && err.response.status === 404) {
+        if (generation !== this.statsPollGeneration) {
+          return
+        }
+        void this.loadCollectionsNav(api, $nav, $detail, null)
+        return
+      }
       // Ignore transient poll failures; next tick retries.
     }
   }
