@@ -390,6 +390,10 @@ class DatabaseBase(ABC):
             else:
                 raise RuntimeError("Failed to probe database features")
 
+    def get_cached_database_info(self) -> Optional[DatabaseInfo]:
+        """Return version/features from the last successful ``probe()`` (no I/O)."""
+        return self._db_info_locked
+
     def get_sys_collection_name(self, collection_type: 'DatabaseBase.SysCollectionType') -> str:
         """
         Generate a system collection name.

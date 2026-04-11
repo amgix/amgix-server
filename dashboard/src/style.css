@@ -287,6 +287,68 @@ body {
   color: var(--text);
 }
 
+.dashboard-home {
+  margin-top: 0;
+}
+
+.dashboard-home-loading {
+  margin: 0;
+  color: color-mix(in srgb, var(--text) 75%, var(--bg));
+}
+
+.dashboard-home-table {
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  line-height: 1.25;
+  width: auto;
+  max-width: 100%;
+}
+
+.dashboard-home-table .dashboard-home-table-heading {
+  padding: 0 0 0.35rem 0;
+  font-size: 1rem;
+  font-weight: 600;
+  text-align: left;
+  color: color-mix(in srgb, var(--text) 92%, var(--bg));
+  vertical-align: bottom;
+}
+
+.dashboard-home-table td {
+  padding: 0.06rem 0;
+  vertical-align: top;
+}
+
+.dashboard-home-table .dashboard-home-k {
+  padding-right: 1.2rem;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--text) 88%, var(--bg));
+  white-space: nowrap;
+}
+
+.dashboard-home-table .dashboard-home-v {
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard-home-table .dashboard-home-r {
+  padding-left: 0.75rem;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.dashboard-home-status {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dashboard-home-status--ready {
+  color: var(--chart-pie-indexed);
+}
+
+.dashboard-home-status--not-ready {
+  color: var(--chart-pie-failed);
+}
+
 .dashboard-collections-layout {
   display: flex;
   align-items: flex-start;

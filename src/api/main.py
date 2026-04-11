@@ -4,7 +4,7 @@ import os
 import logging
 import asyncio
 import pathlib
-from typing import List
+from typing import Dict, List
 from contextlib import asynccontextmanager
 import uuid
 
@@ -33,7 +33,11 @@ from src.core.common import (
     APP_NAME, MAX_BULK_UPLOAD, MAX_COLLECTION_NAME_LENGTH,
     RPC_TIMEOUT_SECONDS,APP_PREFIX
 )
-from src.core.database.common import get_connected_database, validate_metadata_types, AmgixValidationError
+from src.core.database.common import (
+    get_connected_database,
+    validate_metadata_types,
+    AmgixValidationError,
+)
 from src.core.database.base import AmgixNotFound
 from pydantic import Field, BaseModel
 from starlette.concurrency import run_in_threadpool
@@ -69,6 +73,38 @@ class VersionResponse(BaseModel):
     version: str
 
 
+def _database_kind_label(connection_string: str) -> str:
+    """Short product label from the DB URL scheme (no host or credentials exposed)."""
+    scheme = connection_string.split("://", 1)[0].lower() if "://" in connection_string else ""
+    known = {
+        "qdrant": "Qdrant",
+        "mariadb": "MariaDB",
+        "postgresql": "PostgreSQL",
+        "postgres": "PostgreSQL",
+    }
+    if scheme in known:
+        return known[scheme]
+    return scheme.capitalize() if scheme else "Database"
+
+
+class SystemInfoResponse(BaseModel):
+    amgix_version: str = Field(..., description="API / deployment version string")
+    database_kind: str = Field(
+        ...,
+        description="Database product derived from configured URL scheme (no connection string)",
+    )
+    database_version: str = Field(..., description="Version reported by the database backend after probe")
+    database_features: Dict[str, bool] = Field(
+        ...,
+        description="Feature flags detected at probe time (e.g. dense vector support)",
+    )
+    rabbitmq_version: str = Field(
+        ...,
+        description="AMQP broker version from Connection.Start server_properties (e.g. RabbitMQ)",
+    )
+    collection_count: int = Field(..., description="Number of user collections", ge=0)
+
+
 class CollectionExistsResponse(BaseModel):
     exists: bool
 
@@ -91,6 +127,8 @@ _database = None
 
 # Lazy initialization of BunnyTalk
 _bunny_talk = None
+# Filled at startup from BunnyTalk.get_broker_version() (AMQP server_properties).
+_rabbitmq_broker_version: str | None = None
 
 DASHBOARD_STATIC_DIR = pathlib.Path(__file__).resolve().parent / "dashboard"
 
@@ -98,12 +136,14 @@ DASHBOARD_STATIC_DIR = pathlib.Path(__file__).resolve().parent / "dashboard"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan event handler for database connection on startup."""
-    global _database, _bunny_talk
+    global _database, _bunny_talk, _rabbitmq_broker_version
 
     logger.info(f"Starting {APP_NAME} API v{AMGIX_VERSION}")
 
     # Initialize BunnyTalk for RPC calls
     _bunny_talk = await BunnyTalk.create(logger, AMGIX_AMQP_URL)
+    _rabbitmq_broker_version = _bunny_talk.get_broker_version()
+    logger.info(f"RabbitMQ broker version: {_rabbitmq_broker_version or 'unknown'}")
 
     # Create and start lock service
     logger.info("Starting lock service...")
@@ -182,6 +222,26 @@ async def version() -> VersionResponse:
         A `VersionResponse` object with the system version.
     """
     return VersionResponse(version=AMGIX_VERSION)
+
+
+@shared_router.get("/system/info", operation_id="system_info")
+async def system_info() -> SystemInfoResponse:
+    """Summarize deployment and infrastructure (no connection URLs)."""
+    cached = _database.get_cached_database_info()
+    db_version = cached.version if cached else "unknown"
+    db_features = dict(cached.features) if cached else {}
+    real_names = await _database.list_collections()
+    collection_count = len(real_names)
+    rmq_version = _rabbitmq_broker_version or "unknown"
+    return SystemInfoResponse(
+        amgix_version=AMGIX_VERSION,
+        database_kind=_database_kind_label(_database.connection_string),
+        database_version=db_version,
+        database_features=db_features,
+        rabbitmq_version=rmq_version,
+        collection_count=collection_count,
+    )
+
 
 @shared_router.get("/health/check", operation_id="health_check")
 async def health() -> OkResponse:

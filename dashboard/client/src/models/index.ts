@@ -17,6 +17,7 @@ export * from './QueueInfo';
 export * from './ReadyResponse';
 export * from './SearchQuery';
 export * from './SearchResult';
+export * from './SystemInfoResponse';
 export * from './ValidationError';
 export * from './ValidationErrorLocItem';
 export * from './Vector';

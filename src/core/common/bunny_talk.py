@@ -119,6 +119,33 @@ class BunnyTalk:
             f"{prefix} trace_id: {trace_id_var.get()}, trace_chain: {trace_chain_var.get()}, trace_meta: {trace_meta_var.get()}"
         )
 
+    def get_broker_version(self) -> Optional[str]:
+        """Return the AMQP broker version from Connection.Start ``server_properties`` (e.g. RabbitMQ).
+
+        Uses the underlying :class:`aiormq.connection.Connection` on the robust transport
+        (``robust_connection.transport.connection.server_properties``), i.e. the broker
+        ``version`` field from the Connection.Start handshake (as in blocking clients'
+        ``connection.server_properties['version']``).
+        """
+        conn = self.connection
+        if conn.is_closed:
+            return None
+        transport = conn.transport
+        if transport is None:
+            return None
+        under = transport.connection
+        props = getattr(under, "server_properties", None)
+        if not props:
+            return None
+        raw = props.get("version")
+        if raw is None:
+            raw = props.get(b"version")
+        if raw is None:
+            return None
+        if isinstance(raw, (bytes, bytearray, memoryview)):
+            return bytes(raw).decode("utf-8", errors="replace")
+        return str(raw)
+
     @classmethod
     async def create(cls, logger: Logger, amqp_url: str, max_retries: int = 10, retry_delay: float = 5.0):
         """Create BunnyTalk with retry logic for RabbitMQ startup."""
