@@ -384,9 +384,11 @@ body {
 .dashboard-home-cluster-table .dashboard-home-cluster-colhead th:nth-child(8),
 .dashboard-home-cluster-table .dashboard-home-cluster-colhead th:nth-child(9),
 .dashboard-home-cluster-table .dashboard-home-cluster-colhead th:nth-child(10),
+.dashboard-home-cluster-table .dashboard-home-cluster-colhead th:nth-child(11),
 .dashboard-home-cluster-table tbody td:nth-child(8),
 .dashboard-home-cluster-table tbody td:nth-child(9),
-.dashboard-home-cluster-table tbody td:nth-child(10) {
+.dashboard-home-cluster-table tbody td:nth-child(10),
+.dashboard-home-cluster-table tbody td:nth-child(11) {
   text-align: right;
 }
 

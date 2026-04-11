@@ -19,17 +19,10 @@ function buildClusterNodesFootnotes(): JQuery<HTMLElement> {
   const w = CLUSTER_METRICS_WINDOW_SEC
   return $('<div>', { class: 'dashboard-home-cluster-footnotes' }).append(
     $('<p>', { text: '* Current encoder leader.' }),
-    $('<p>', {
-      text:
-        'Batches: total embed batches in that window on this node.',
-    }),
-    $('<p>', {
-      text: `Rate/s: embed batches per second over the last ${w}s.`,
-    }),
-    $('<p>', {
-      text:
-        'Avg ms: mean wall time per batch in that window, weighted by batch count per vector type.',
-    }),
+    $('<p>', { text: 'Batches: total embed batches in that window on this node.' }),
+    $('<p>', { text: `Rate/s: embed batches per second over the last ${w}s.` }),
+    $('<p>', { text: 'Avg ms: mean local inference time per batch, weighted by batch count per vector type.' }),
+    $('<p>', { text: 'E2E ms: mean end-to-end time per batch including routing; only reported on originating nodes.' }),
   )
 }
 
@@ -164,13 +157,15 @@ function formatClusterAvgMsCell(ms: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 0 }).format(ms)
 }
 
-/** Sum batch rates (API field rps) and batch counts across vector types; latency is n-weighted avg over the window. */
-function formatEmbeddingMetricsCells60s(node: NodeView): { rps: string; avgMs: string; requests: string } {
+/** Sum batch rates and counts across vector types; latency fields are n-weighted averages over the window. */
+function formatEmbeddingMetricsCells60s(node: NodeView): { rps: string; avgMs: string; e2eAvgMs: string; requests: string } {
   const list = node.metrics ?? []
   let sawWindow = false
   let totalN = 0
   let sumRps = 0
   let weightedMs = 0
+  let weightedE2eMs = 0
+  let e2eN = 0
   for (const vm of list) {
     const wm = vm.windows?.[clusterMetricsWindowKey]
     if (wm == null) {
@@ -189,14 +184,20 @@ function formatEmbeddingMetricsCells60s(node: NodeView): { rps: string; avgMs: s
       if (Number.isFinite(avgMs)) {
         weightedMs += avgMs * ni
       }
+      const e2e = (wm as unknown as Record<string, unknown>)['e2e_avg_ms'] as number | null | undefined
+      if (e2e != null && Number.isFinite(e2e)) {
+        weightedE2eMs += e2e * ni
+        e2eN += ni
+      }
     }
   }
   if (!sawWindow) {
-    return { rps: '', avgMs: '', requests: '' }
+    return { rps: '', avgMs: '', e2eAvgMs: '', requests: '' }
   }
   return {
     rps: formatClusterRpsCell(sumRps),
     avgMs: totalN > 0 ? formatClusterAvgMsCell(weightedMs / totalN) : '',
+    e2eAvgMs: e2eN > 0 ? formatClusterAvgMsCell(weightedE2eMs / e2eN) : '',
     requests: String(totalN),
   }
 }
@@ -252,7 +253,7 @@ export class HomePanel extends DashboardPanel {
         $('<tr>').append(
           $('<td>', {
             class: 'dashboard-home-cluster-placeholder',
-            colspan: 11,
+            colspan: 12,
             text: 'Cluster view unavailable.',
           }),
         ),
@@ -264,7 +265,7 @@ export class HomePanel extends DashboardPanel {
         $('<tr>').append(
           $('<td>', {
             class: 'dashboard-home-cluster-placeholder',
-            colspan: 11,
+            colspan: 12,
             text: 'No nodes in cluster view.',
           }),
         ),
@@ -291,6 +292,7 @@ export class HomePanel extends DashboardPanel {
           $('<td>', { class: 'dashboard-home-v', text: m.requests }),
           $('<td>', { class: 'dashboard-home-v', text: m.rps }),
           $('<td>', { class: 'dashboard-home-v', text: m.avgMs }),
+          $('<td>', { class: 'dashboard-home-v', text: m.e2eAvgMs }),
           $('<td>', { class: 'dashboard-home-v', text: formatLastSeen(node.last_seen) }),
         ),
       )
@@ -406,7 +408,7 @@ export class HomePanel extends DashboardPanel {
           $('<tr>').append(
             $('<th>', {
               class: 'dashboard-home-table-heading',
-              colspan: 11,
+              colspan: 12,
               text: 'Cluster Nodes',
             }),
           ),
@@ -423,6 +425,7 @@ export class HomePanel extends DashboardPanel {
             $('<th>', { text: 'Batches' }),
             $('<th>', { text: 'Rate/s' }),
             $('<th>', { text: 'Avg ms' }),
+            $('<th>', { text: 'E2E ms' }),
             $('<th>', { text: 'Last seen' }),
           ),
         )

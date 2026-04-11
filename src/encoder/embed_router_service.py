@@ -218,7 +218,7 @@ class EmbedRouterService(EncoderBase):
                             # yes, just embed locally
                             self.logger.debug(f"Router: known model {model_key}. Embedding locally.")
 
-                            result = self.embed(vector_config, docs)
+                            result = self.embed(model_key, vector_config, docs)
 
                         else:
                             # get model specific queue name
@@ -281,6 +281,7 @@ class EmbedRouterService(EncoderBase):
                                     raise e
             else:
                 result = self.embed(
+                    model_key,
                     vector_config,
                     docs,
                     avgdls=avgdls,
@@ -293,21 +294,20 @@ class EmbedRouterService(EncoderBase):
 
         finally:
             end_ns = time.monotonic_ns()
-            service_ms = (end_ns - start_ns) / 1_000_000.0
+            e2e_ms = (end_ns - start_ns) / 1_000_000.0
 
-            # update metrics, for direct calls from vectorizer
             if hops == 0:
-                self._update_metrics(model_key, service_ms)
+                self._update_metrics(model_key, inference_ms=None, e2e_ms=e2e_ms)
 
         return result
 
-    def _update_metrics(self, model_key: str, service_ms: float) -> None:
-        """Update per-model metrics by adding new sample data."""
+    def _update_metrics(self, model_key: str, inference_ms: Optional[float], e2e_ms: Optional[float]) -> None:
+        """Record a single sample. Pass inference_ms when serving locally, e2e_ms when originating."""
         try:
             now_s = time.time()
             if model_key not in self._metrics:
                 self._metrics[model_key] = deque()
-            self._metrics[model_key].append((now_s, service_ms))
+            self._metrics[model_key].append((now_s, inference_ms, e2e_ms))
         except Exception as e:
             self.logger.error(f"Router: Error updating metrics for {model_key}: {e}")
 
@@ -320,7 +320,7 @@ class EmbedRouterService(EncoderBase):
         keys_to_delete = []
 
         for model_key, samples in self._metrics.items():
-            
+
             # Prune old data
             while samples and samples[0][0] < cutoff:
                 samples.popleft()
@@ -335,34 +335,48 @@ class EmbedRouterService(EncoderBase):
             for win in METRIC_WINDOWS:
                 win_cut = now_s - win
                 count = 0
-                total_ms = 0.0
-                
-                for ts, ms in reversed(samples):
+                total_inference_ms = 0.0
+                inference_count = 0
+                total_e2e_ms = 0.0
+                e2e_count = 0
+
+                for ts, inference_ms, e2e_ms in reversed(samples):
                     if ts < win_cut:
                         break
                     count += 1
-                    total_ms += ms
-                
+                    if inference_ms is not None:
+                        total_inference_ms += inference_ms
+                        inference_count += 1
+                    if e2e_ms is not None:
+                        total_e2e_ms += e2e_ms
+                        e2e_count += 1
+
                 rps = count / win if win > 0 else 0.0
-                avg_ms = (total_ms / count) if count > 0 else 0.0
-                snapshots[str(win)] = {'rps': rps, 'avg_ms': avg_ms, 'n': count}
-            
+                avg_ms = (total_inference_ms / inference_count) if inference_count > 0 else 0.0
+                snap: Dict[str, Union[float, int]] = {'rps': rps, 'avg_ms': avg_ms, 'n': count}
+                if e2e_count > 0:
+                    snap['e2e_avg_ms'] = total_e2e_ms / e2e_count
+                snapshots[str(win)] = snap
+
             processed_metrics[model_key] = snapshots
-        
+
         # Remove empty deques after iteration
         for key in keys_to_delete:
             del self._metrics[key]
-        
+
         return processed_metrics
 
     def embed(
         self,
+        model_key: str,
         vector_config: VectorConfigInternal,
         docs: List[str],
         avgdls: Optional[List[float]] = None,
         trigram_weight: float = WMTR_DEFAULT_TRIGRAM_WEIGHT,
     ) -> Union[List[List[float]], List[Tuple[List[int], List[float]]]]:
         """Embed a list of documents using the specified vector type."""
+
+        start_ns = time.monotonic_ns()
 
         if VectorType.is_dense(vector_config.type):
             result = self._embed_dense_model(vector_config, docs)
@@ -373,6 +387,9 @@ class EmbedRouterService(EncoderBase):
                 avgdls=avgdls,
                 trigram_weight=trigram_weight,
             )
+
+        inference_ms = (time.monotonic_ns() - start_ns) / 1_000_000.0
+        self._update_metrics(model_key, inference_ms=inference_ms, e2e_ms=None)
 
         return result
 
@@ -473,13 +490,13 @@ class EmbedRouterService(EncoderBase):
         async with self.model_load_locks[model_key]:
             if model_key in self.local_models:
                 self.logger.debug(f"Router: {model_key} was loaded locally while waiting. Embedding locally.")
-                return self.embed(vector_config, docs)
+                return self.embed(model_key, vector_config, docs)
 
             # Use distributed lock to prevent multiple workers from loading the same model
             async with self.lock_client.acquire(f"{queue_name}", timeout=RPC_TIMEOUT_SECONDS):
                 if model_key in self.local_models:
                     self.logger.debug(f"Router: {model_key} was loaded locally while waiting for distributed lock. Embedding locally.")
-                    return self.embed(vector_config, docs)
+                    return self.embed(model_key, vector_config, docs)
 
                 # Double-check if someone else loaded the model while we were waiting for the lock
                 try:
@@ -515,7 +532,7 @@ class EmbedRouterService(EncoderBase):
                         # Still no route, we can safely load the model
                         self.logger.debug(f"Router: Confirmed no one has {model_key}. Loading locally.")
                         
-                    result = self.embed(vector_config, docs)
+                    result = self.embed(model_key, vector_config, docs)
 
                     # successfully embedded, we can start listening for requests for this model
                     self.logger.debug(f"Router: Listening for requests for model {model_key}.")

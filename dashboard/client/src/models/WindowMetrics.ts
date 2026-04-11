@@ -26,7 +26,7 @@ export interface WindowMetrics {
      */
     rps: number;
     /**
-     * Average embedding latency in milliseconds over this window
+     * Average local inference latency in milliseconds over this window
      * @type {number}
      * @memberof WindowMetrics
      */
@@ -37,6 +37,12 @@ export interface WindowMetrics {
      * @memberof WindowMetrics
      */
     n: number;
+    /**
+     * Average end-to-end latency in milliseconds (originating node only; null on pure serving nodes)
+     * @type {number}
+     * @memberof WindowMetrics
+     */
+    e2e_avg_ms?: number;
 }
 
 /**
@@ -62,6 +68,7 @@ export function WindowMetricsFromJSONTyped(json: any, ignoreDiscriminator: boole
         'rps': json['rps'],
         'avg_ms': json['avg_ms'],
         'n': json['n'],
+        'e2e_avg_ms': json['e2e_avg_ms'] == null ? undefined : json['e2e_avg_ms'],
     };
 }
 
@@ -79,6 +86,7 @@ export function WindowMetricsToJSONTyped(value?: WindowMetrics | null, ignoreDis
         'rps': value['rps'],
         'avg_ms': value['avg_ms'],
         'n': value['n'],
+        'e2e_avg_ms': value['e2e_avg_ms'],
     };
 }
 

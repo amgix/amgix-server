@@ -23,8 +23,9 @@ class MetricsPayload(BaseModel):
 class WindowMetrics(BaseModel):
     """Embedding throughput and latency stats for a single time window."""
     rps: float = Field(..., description="Requests per second over this window")
-    avg_ms: float = Field(..., description="Average embedding latency in milliseconds over this window")
+    avg_ms: float = Field(..., description="Average local inference latency in milliseconds over this window")
     n: int = Field(..., description="Number of requests observed in this window")
+    e2e_avg_ms: Optional[float] = Field(default=None, description="Average end-to-end latency in milliseconds (originating node only; null on pure serving nodes)")
 
 
 class VectorMetrics(BaseModel):
