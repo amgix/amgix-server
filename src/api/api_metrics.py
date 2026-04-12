@@ -34,6 +34,13 @@ def record_api_http_request(request: Request, duration_ms: float) -> None:
         _rolling.record_avg((ms_key,), duration_ms)
 
 
+def _record_api_http_status_errors(status_code: int) -> None:
+    if 400 <= status_code <= 499:
+        _rolling.record_rate(("api_error_4xx",))
+    elif status_code >= 500:
+        _rolling.record_rate(("api_error_5xx",))
+
+
 def snapshot_as_node_metric_series() -> list[NodeMetricSeries]:
     return [
         NodeMetricSeries(
@@ -48,8 +55,15 @@ def snapshot_as_node_metric_series() -> list[NodeMetricSeries]:
 class ApiMetricsMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         t0 = time.perf_counter_ns()
+        response: Response | None = None
         try:
-            return await call_next(request)
+            response = await call_next(request)
+            return response
+        except Exception:
+            _rolling.record_rate(("api_error_5xx",))
+            raise
         finally:
             elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
             record_api_http_request(request, elapsed_ms)
+            if response is not None:
+                _record_api_http_status_errors(response.status_code)

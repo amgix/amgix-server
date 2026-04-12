@@ -728,21 +728,10 @@ body {
   text-align: right;
 }
 
-.dashboard-home-cluster-table--encoders .dashboard-home-cluster-colhead th:nth-child(11) {
-  text-align: center;
-}
-
-.dashboard-home-cluster-table--api .dashboard-home-cluster-colhead th:nth-child(n + 3):not(:last-child),
-.dashboard-home-cluster-table--api tbody td:nth-child(n + 3):not(:last-child) {
+.dashboard-home-cluster-table--api .dashboard-home-cluster-colhead th:nth-child(n + 3),
+.dashboard-home-cluster-table--api tbody td:nth-child(n + 3) {
   text-align: right;
   padding: 0.15rem 0.5rem;
-}
-
-.dashboard-home-cluster-table--api .dashboard-home-cluster-colhead th:last-child,
-.dashboard-home-cluster-table--api tbody td:last-child {
-  text-align: center;
-  padding-left: 0.5rem;
-  padding-right: 0.5rem;
 }
 
 .dashboard-home-cluster-table .dashboard-home-cluster-placeholder {

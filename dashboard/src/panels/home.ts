@@ -171,6 +171,11 @@ function clusterApiSearchMsColumnHelpText(): string {
   return `Mean latency in ms for search requests, over the last ${w}s.`
 }
 
+function clusterApiErrPerSecColumnHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `HTTP 4xx and 5xx responses per second from this API process, combined, over the last ${w}s.`
+}
+
 type HomeReadinessKey = 'database' | 'rabbitmq' | 'index' | 'query'
 
 function formatRequestError(context: string, err: unknown): string {
@@ -226,11 +231,6 @@ function formatRabbitmqSummary(info: { rabbitmq_version: string }): string {
 
 function readinessLabel(ok: boolean): string {
   return ok ? 'Ready' : 'Not ready'
-}
-
-function formatLastSeen(unixSeconds: number): string {
-  const delta = Math.max(0, Math.floor(Date.now() / 1000 - unixSeconds))
-  return `${delta}s`
 }
 
 function formatLoadModelsCell(node: NodeView): string {
@@ -295,6 +295,25 @@ function formatApiAvgMsCell(list: NodeMetricSeries[], msKey: string): string {
   return formatClusterAvgMsCell(v)
 }
 
+function formatApiHttpErrorsRateCell(list: NodeMetricSeries[]): string {
+  let sum = 0
+  let saw = false
+  for (const name of ['api_error_4xx', 'api_error_5xx'] as const) {
+    const ws = getMetricWindowSampleByFirstKey(list, name)
+    if (ws != null) {
+      const v = Number(ws.value)
+      if (Number.isFinite(v)) {
+        sum += v
+        saw = true
+      }
+    }
+  }
+  if (!saw) {
+    return ''
+  }
+  return formatClusterRpsCell(sum)
+}
+
 function formatApiMetricsCells(node: NodeView): {
   allReq: string
   allMs: string
@@ -306,6 +325,7 @@ function formatApiMetricsCells(node: NodeView): {
   bulkMs: string
   searchReq: string
   searchMs: string
+  errPerSec: string
 } {
   const list = node.metrics ?? []
   return {
@@ -319,6 +339,7 @@ function formatApiMetricsCells(node: NodeView): {
     bulkMs: formatApiAvgMsCell(list, 'api_bulk_upload_ms'),
     searchReq: formatApiRateCell(list, 'api_search'),
     searchMs: formatApiAvgMsCell(list, 'api_search_ms'),
+    errPerSec: formatApiHttpErrorsRateCell(list),
   }
 }
 
@@ -631,16 +652,26 @@ type ApiMetricsHistoryPoint = {
   searchMs: number | null
   ingestRps: number | null
   ingestMs: number | null
+  errRps: number | null
 }
 
-function aggregateApiChartMetrics(view: ClusterView | null): Omit<ApiMetricsHistoryPoint, 't'> {
-  const empty: Omit<ApiMetricsHistoryPoint, 't'> = {
+/** Cluster-wide API aggregates; err4xx/err5xx are for Cluster Info, errRps is their sum (chart). */
+type AggregateApiChartMetrics = Omit<ApiMetricsHistoryPoint, 't'> & {
+  err4xxRps: number | null
+  err5xxRps: number | null
+}
+
+function aggregateApiChartMetrics(view: ClusterView | null): AggregateApiChartMetrics {
+  const empty: AggregateApiChartMetrics = {
     allRps: null,
     allMs: null,
     searchRps: null,
     searchMs: null,
     ingestRps: null,
     ingestMs: null,
+    errRps: null,
+    err4xxRps: null,
+    err5xxRps: null,
   }
   if (view == null || view.nodes == null) {
     return empty
@@ -657,6 +688,10 @@ function aggregateApiChartMetrics(view: ClusterView | null): Omit<ApiMetricsHist
   let sawIngestRps = false
   let ingestMsSumVN = 0
   let ingestMsSumN = 0
+  let sumErr4xx = 0
+  let sawErr4xx = false
+  let sumErr5xx = 0
+  let sawErr5xx = false
 
   for (const node of Object.values(view.nodes)) {
     if (node.role !== 'api') {
@@ -724,8 +759,26 @@ function aggregateApiChartMetrics(view: ClusterView | null): Omit<ApiMetricsHist
         }
       }
     }
+
+    const ws4 = getMetricWindowSampleByFirstKey(list, 'api_error_4xx')
+    if (ws4 != null) {
+      const v = Number(ws4.value)
+      if (Number.isFinite(v)) {
+        sumErr4xx += v
+        sawErr4xx = true
+      }
+    }
+    const ws5 = getMetricWindowSampleByFirstKey(list, 'api_error_5xx')
+    if (ws5 != null) {
+      const v = Number(ws5.value)
+      if (Number.isFinite(v)) {
+        sumErr5xx += v
+        sawErr5xx = true
+      }
+    }
   }
 
+  const sawAnyErr = sawErr4xx || sawErr5xx
   return {
     allRps: sawAllRps ? sumAllRps : null,
     allMs: allMsSumN > 0 ? allMsSumVN / allMsSumN : null,
@@ -733,6 +786,9 @@ function aggregateApiChartMetrics(view: ClusterView | null): Omit<ApiMetricsHist
     searchMs: searchMsSumN > 0 ? searchMsSumVN / searchMsSumN : null,
     ingestRps: sawIngestRps ? sumIngestRps : null,
     ingestMs: ingestMsSumN > 0 ? ingestMsSumVN / ingestMsSumN : null,
+    err4xxRps: sawErr4xx ? sumErr4xx : null,
+    err5xxRps: sawErr5xx ? sumErr5xx : null,
+    errRps: sawAnyErr ? sumErr4xx + sumErr5xx : null,
   }
 }
 
@@ -772,6 +828,7 @@ function loadApiMetricsHistoryFromStorage(cutoff: number): ApiMetricsHistoryPoin
           searchMs: raw.searchMs,
           ingestRps: raw.ingestRps,
           ingestMs: raw.ingestMs,
+          errRps: raw.errRps ?? null,
         })
       }
     }
@@ -1526,6 +1583,7 @@ export class HomePanel extends DashboardPanel {
       searchMs: agg.searchMs,
       ingestRps: agg.ingestRps,
       ingestMs: agg.ingestMs,
+      errRps: agg.errRps,
     })
     while (this.apiMetricsHistory.length > 0 && this.apiMetricsHistory[0]!.t < cutoff) {
       this.apiMetricsHistory.shift()
@@ -1536,6 +1594,7 @@ export class HomePanel extends DashboardPanel {
 
     /** Same hues for All / Search / Ingest on both requests and latency charts. */
     const apiGroupColors = ['#8b5cf6', '#38bdf8', '#f59e0b']
+    const apiErrorsReqColor = '#dc2626'
 
     const line = (label: string, color: string, pick: (pt: ApiMetricsHistoryPoint) => number) => ({
       label,
@@ -1555,6 +1614,7 @@ export class HomePanel extends DashboardPanel {
       line('All', apiGroupColors[0]!, (pt) => yNum(pt.allRps)),
       line('Search', apiGroupColors[1]!, (pt) => yNum(pt.searchRps)),
       line('Ingest', apiGroupColors[2]!, (pt) => yNum(pt.ingestRps)),
+      line('Err/s', apiErrorsReqColor, (pt) => yNum(pt.errRps)),
     ]
 
     const datasetsMs = [
@@ -1658,6 +1718,8 @@ export class HomePanel extends DashboardPanel {
       $root.find('[data-home-cluster-info="api-rps"]').text(dash)
       $root.find('[data-home-cluster-info="api-ms"]').text(dash)
       $root.find('[data-home-cluster-info="infer-ms"]').text(dash)
+      $root.find('[data-home-cluster-info="api-err-4xx"]').text(dash)
+      $root.find('[data-home-cluster-info="api-err-5xx"]').text(dash)
       return
     }
     const { api: apiNodeEntries, encoders: encoderNodeEntries } = partitionApiAndEncoderNodes(nodes)
@@ -1679,9 +1741,21 @@ export class HomePanel extends DashboardPanel {
     const thr = aggregateClusterThroughput(view)
     const $inferMs = $root.find('[data-home-cluster-info="infer-ms"]')
     if (thr.globalAvgMs != null && Number.isFinite(thr.globalAvgMs)) {
-      $inferMs.text(`${formatClusterAvgMsCell(thr.globalAvgMs)} ms`)
+      $inferMs.text(`${formatClusterAvgMsCell(thr.globalAvgMs)} ms/doc`)
     } else {
       $inferMs.text(dash)
+    }
+    const $err4 = $root.find('[data-home-cluster-info="api-err-4xx"]')
+    if (apiAgg.err4xxRps != null && Number.isFinite(apiAgg.err4xxRps)) {
+      $err4.text(`${formatClusterRpsCell(apiAgg.err4xxRps)} /s`)
+    } else {
+      $err4.text(dash)
+    }
+    const $err5 = $root.find('[data-home-cluster-info="api-err-5xx"]')
+    if (apiAgg.err5xxRps != null && Number.isFinite(apiAgg.err5xxRps)) {
+      $err5.text(`${formatClusterRpsCell(apiAgg.err5xxRps)} /s`)
+    } else {
+      $err5.text(dash)
     }
   }
 
@@ -1695,7 +1769,7 @@ export class HomePanel extends DashboardPanel {
 
   private applyClusterTablesAndChartsToDom($root: JQuery<HTMLElement>, view: ClusterView | null): void {
     const CLUSTER_API_COLSPAN = 13
-    const CLUSTER_ENCODER_COLSPAN = 11
+    const CLUSTER_ENCODER_COLSPAN = 10
     const $apiTbody = $root.find('[data-home-api-cluster-tbody]')
     const $encTbody = $root.find('[data-home-cluster-tbody]')
     if (!$apiTbody.length && !$encTbody.length) {
@@ -1795,7 +1869,7 @@ export class HomePanel extends DashboardPanel {
               $('<td>', { class: 'dashboard-home-v', text: apiM.bulkMs }),
               $('<td>', { class: 'dashboard-home-v', text: apiM.searchReq }),
               $('<td>', { class: 'dashboard-home-v', text: apiM.searchMs }),
-              $('<td>', { class: 'dashboard-home-v', text: formatLastSeen(node.last_seen) }),
+              $('<td>', { class: 'dashboard-home-v', text: apiM.errPerSec }),
             ),
           )
         }
@@ -1833,7 +1907,6 @@ export class HomePanel extends DashboardPanel {
               $('<td>', { class: 'dashboard-home-v', text: m.avgMs }),
               $('<td>', { class: 'dashboard-home-v', text: m.e2eAvgMs }),
               $('<td>', { class: 'dashboard-home-v', text: m.errPerSec }),
-              $('<td>', { class: 'dashboard-home-v', text: formatLastSeen(node.last_seen) }),
             ),
           )
         }
@@ -1971,6 +2044,8 @@ export class HomePanel extends DashboardPanel {
         clusterInfoRow('Global RPS', 'api-rps'),
         clusterInfoRow('Avg Latency', 'api-ms'),
         clusterInfoRow('Avg Inference Latency', 'infer-ms'),
+        clusterInfoRow('4xx Errors', 'api-err-4xx'),
+        clusterInfoRow('5xx Errors', 'api-err-5xx'),
       )
       const $clusterInfoTable = $('<table>', { class: 'dashboard-home-table' }).append(
         $clusterInfoThead,
@@ -2037,7 +2112,7 @@ export class HomePanel extends DashboardPanel {
             clusterThWithHelp('Bulk ms', clusterApiBulkMsColumnHelpText()),
             clusterThWithHelp('Srch/s', clusterApiSearchReqColumnHelpText()),
             clusterThWithHelp('Srch ms', clusterApiSearchMsColumnHelpText()),
-            $('<th>', { text: 'Last seen' }),
+            clusterThWithHelp('Err/s', clusterApiErrPerSecColumnHelpText()),
           ),
         )
 
@@ -2123,7 +2198,7 @@ export class HomePanel extends DashboardPanel {
           $('<tr>').append(
             $('<th>', {
               class: 'dashboard-home-table-heading',
-              colspan: 11,
+              colspan: 10,
               text: 'Encoder nodes',
             }),
           ),
@@ -2140,7 +2215,6 @@ export class HomePanel extends DashboardPanel {
             clusterThWithHelp('Infer ms', clusterInferMsColumnHelpText()),
             clusterThWithHelp('Routed ms', clusterPipeMsColumnHelpText()),
             clusterThWithHelp('Err/s', clusterErrPerSecColumnHelpText()),
-            $('<th>', { text: 'Last seen' }),
           ),
         )
 
