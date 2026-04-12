@@ -299,37 +299,120 @@ body {
   margin-top: 0;
 }
 
-.dashboard-home-top-row {
+.dashboard-home-top-band {
   display: flex;
+  flex-direction: row;
   flex-wrap: wrap;
   align-items: flex-start;
-  gap: 1rem 1.5rem;
+  justify-content: flex-start;
+  gap: 1rem 2rem;
   width: 100%;
   box-sizing: border-box;
 }
 
-.dashboard-home-system-block {
+.dashboard-home-top-band .dashboard-home-system-block {
   flex: 0 1 auto;
   min-width: 0;
-}
-
-.dashboard-home-top-row .dashboard-home-cluster-metrics {
-  margin-top: 0;
-  flex: 1 1 280px;
-  min-width: min(100%, 280px);
+  width: auto;
   max-width: 100%;
 }
 
+.dashboard-home-cluster-info {
+  flex: 0 0 auto;
+  margin-left: auto;
+  box-sizing: border-box;
+}
+
+.dashboard-home-cluster-info .dashboard-home-k {
+  text-align: right;
+  padding-right: 0.65rem;
+  white-space: nowrap;
+}
+
+.dashboard-home-cluster-info .dashboard-home-v {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 720px) {
-  .dashboard-home-top-row {
+  .dashboard-home-top-band {
     flex-direction: column;
   }
 
-  .dashboard-home-top-row .dashboard-home-cluster-metrics {
-    flex: none;
+  .dashboard-home-cluster-info {
+    margin-left: 0;
     width: 100%;
-    min-width: 0;
   }
+
+  .dashboard-home-cluster-info .dashboard-home-table {
+    margin-left: 0;
+  }
+
+  .dashboard-home-cluster-info .dashboard-home-k,
+  .dashboard-home-cluster-info .dashboard-home-v {
+    text-align: left;
+  }
+
+  .dashboard-home-cluster-info .dashboard-home-k {
+    padding-right: 1.2rem;
+  }
+}
+
+.dashboard-home-system-block {
+  box-sizing: border-box;
+}
+
+.dashboard-home-metrics-shell {
+  margin-top: 1.25rem;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.dashboard-home-metrics-tablist {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.25rem 0.5rem;
+  margin-bottom: 0.15rem;
+  padding-bottom: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 12%, var(--chart-cluster-border));
+}
+
+.dashboard-home-metrics-tab {
+  font: inherit;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  margin: 0 0 -1px;
+  padding: 0.4rem 0.75rem;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 7px 7px 0 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 65%, var(--bg));
+  cursor: pointer;
+}
+
+.dashboard-home-metrics-tab:hover {
+  color: color-mix(in srgb, var(--text) 86%, var(--bg));
+  background: color-mix(in srgb, var(--text) 5%, var(--chart-cluster-surface));
+}
+
+.dashboard-home-metrics-tab[aria-selected='true'] {
+  color: color-mix(in srgb, var(--text) 92%, var(--bg));
+  font-weight: 600;
+  border-bottom-color: color-mix(in srgb, var(--chart-pie-indexed) 80%, var(--text));
+  background: color-mix(in srgb, var(--text) 4%, var(--chart-cluster-surface));
+}
+
+.dashboard-home-metrics-tab:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--chart-pie-indexed) 55%, var(--text));
+  outline-offset: 2px;
+}
+
+/* Tab panels use .dashboard-home-cluster-tables { display: flex }, which beats UA [hidden] display:none. */
+.dashboard-home-metrics-tab-panel[hidden] {
+  display: none !important;
 }
 
 .dashboard-home-loading {
@@ -352,6 +435,10 @@ body {
   text-align: left;
   color: color-mix(in srgb, var(--text) 92%, var(--bg));
   vertical-align: bottom;
+}
+
+.dashboard-home-cluster-info .dashboard-home-table .dashboard-home-table-heading {
+  text-align: right;
 }
 
 .dashboard-home-table td {
@@ -396,6 +483,20 @@ body {
   max-width: 100%;
 }
 
+.dashboard-home-api-charts-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 1rem;
+  width: 100%;
+  align-items: stretch;
+}
+
+.dashboard-home-api-charts-row > .dashboard-home-cluster-metrics {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
 .dashboard-home-cluster-chart-inner {
   position: relative;
   display: flex;
@@ -416,6 +517,34 @@ body {
   align-items: center;
   min-height: 1rem;
   margin: -0.1rem 0 0;
+}
+
+.dashboard-home-cluster-chart-hint-row--with-title {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.dashboard-home-cluster-chart-hint-spacer {
+  width: 0;
+  min-width: 0;
+  justify-self: start;
+}
+
+.dashboard-home-cluster-chart-title {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.2;
+  color: color-mix(in srgb, var(--text) 92%, var(--bg));
+  min-width: 0;
+  text-align: center;
+  justify-self: center;
+}
+
+.dashboard-home-cluster-chart-hint-row--with-title .dashboard-home-cluster-help {
+  justify-self: end;
 }
 
 .dashboard-home-cluster-help {
@@ -457,7 +586,11 @@ body {
   min-width: 0;
 }
 
-.dashboard-home-cluster-colhead .dashboard-home-cluster-th-with-help:nth-child(n + 8):nth-child(-n + 11) .dashboard-home-cluster-th-inner {
+.dashboard-home-cluster-table--encoders .dashboard-home-cluster-colhead .dashboard-home-cluster-th-with-help:nth-child(n + 6):nth-child(-n + 10) .dashboard-home-cluster-th-inner {
+  justify-content: flex-end;
+}
+
+.dashboard-home-cluster-table--api .dashboard-home-cluster-colhead .dashboard-home-cluster-th-with-help .dashboard-home-cluster-th-inner {
   justify-content: flex-end;
 }
 
@@ -515,6 +648,41 @@ body {
   font-weight: 700;
 }
 
+.dashboard-home-cluster-chart-legend--inline {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  gap: 0.2rem 1rem;
+}
+
+.dashboard-home-cluster-chart-legend--inline .dashboard-home-cluster-chart-legend-item {
+  align-items: center;
+  flex-shrink: 0;
+  max-width: none;
+}
+
+.dashboard-home-cluster-chart-legend--inline .dashboard-home-cluster-chart-legend-swatch {
+  margin-top: 0;
+}
+
+.dashboard-home-cluster-chart-legend--inline .dashboard-home-cluster-chart-legend-label {
+  flex:0 1 auto;
+  white-space: nowrap;
+}
+
+.dashboard-home-cluster-tables {
+  margin-top: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.dashboard-home-cluster-tables .dashboard-home-cluster-table {
+  margin-top: 0;
+}
+
 .dashboard-home-cluster-table {
   margin-top: 1.25rem;
 }
@@ -547,15 +715,34 @@ body {
   padding: 0.15rem 0.5rem;
 }
 
-.dashboard-home-cluster-table .dashboard-home-cluster-colhead th:nth-child(8),
-.dashboard-home-cluster-table .dashboard-home-cluster-colhead th:nth-child(9),
-.dashboard-home-cluster-table .dashboard-home-cluster-colhead th:nth-child(10),
-.dashboard-home-cluster-table .dashboard-home-cluster-colhead th:nth-child(11),
-.dashboard-home-cluster-table tbody td:nth-child(8),
-.dashboard-home-cluster-table tbody td:nth-child(9),
-.dashboard-home-cluster-table tbody td:nth-child(10),
-.dashboard-home-cluster-table tbody td:nth-child(11) {
+.dashboard-home-cluster-table--encoders .dashboard-home-cluster-colhead th:nth-child(6),
+.dashboard-home-cluster-table--encoders .dashboard-home-cluster-colhead th:nth-child(7),
+.dashboard-home-cluster-table--encoders .dashboard-home-cluster-colhead th:nth-child(8),
+.dashboard-home-cluster-table--encoders .dashboard-home-cluster-colhead th:nth-child(9),
+.dashboard-home-cluster-table--encoders .dashboard-home-cluster-colhead th:nth-child(10),
+.dashboard-home-cluster-table--encoders tbody td:nth-child(6),
+.dashboard-home-cluster-table--encoders tbody td:nth-child(7),
+.dashboard-home-cluster-table--encoders tbody td:nth-child(8),
+.dashboard-home-cluster-table--encoders tbody td:nth-child(9),
+.dashboard-home-cluster-table--encoders tbody td:nth-child(10) {
   text-align: right;
+}
+
+.dashboard-home-cluster-table--encoders .dashboard-home-cluster-colhead th:nth-child(11) {
+  text-align: center;
+}
+
+.dashboard-home-cluster-table--api .dashboard-home-cluster-colhead th:nth-child(n + 3):not(:last-child),
+.dashboard-home-cluster-table--api tbody td:nth-child(n + 3):not(:last-child) {
+  text-align: right;
+  padding: 0.15rem 0.5rem;
+}
+
+.dashboard-home-cluster-table--api .dashboard-home-cluster-colhead th:last-child,
+.dashboard-home-cluster-table--api tbody td:last-child {
+  text-align: center;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
 }
 
 .dashboard-home-cluster-table .dashboard-home-cluster-placeholder {

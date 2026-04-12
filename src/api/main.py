@@ -15,6 +15,7 @@ from typing import Annotated
 import traceback
 
 
+from src.api.api_metrics import ApiMetricsMiddleware, snapshot_as_node_metric_series
 from src.core.common.bunny_talk import BunnyTalk
 from src.core.common.lock_manager import LockService, LockClient
 from src.core.common.logging_config import configure_logging
@@ -147,7 +148,7 @@ async def _report_to_leader_loop() -> None:
                     probe=False,
                     hostname=HOSTNAME,
                     role='api',
-                    metrics=[],
+                    metrics=snapshot_as_node_metric_series(),
                     loaded_models=[],
                     load_models=False,
                     at_capacity=False,
@@ -868,6 +869,8 @@ v1_api.include_router(shared_router)
 # -------------------------
 # app.include_router(root_api, tags=["Amgix"])  # /collections, /collections/{name}/documents, etc.
 app.include_router(v1_api, tags=["Amgix"])    # /v1/collections, /v1/collections/{name}/documents, etc.
+
+app.add_middleware(ApiMetricsMiddleware)
 
 app.mount(
     "/dashboard",

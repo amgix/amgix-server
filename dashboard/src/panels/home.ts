@@ -17,6 +17,7 @@ import {
   PointElement,
   Tooltip,
   type ChartConfiguration,
+  type ChartOptions,
   type Scale,
   type Tick,
 } from 'chart.js'
@@ -28,6 +29,11 @@ import { DashboardPanel } from './panel-base'
 Chart.register(LineController, LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend)
 
 const HOME_READY_POLL_MS = 10_000
+
+const HOME_METRICS_TAB_API_ID = 'dashboard-home-metrics-tab-api'
+const HOME_METRICS_TAB_ENCODER_ID = 'dashboard-home-metrics-tab-encoder'
+const HOME_METRICS_PANEL_API_ID = 'dashboard-home-metrics-panel-api'
+const HOME_METRICS_PANEL_ENCODER_ID = 'dashboard-home-metrics-panel-encoder'
 
 /** Cluster table embedding columns use this rolling window (seconds). */
 const CLUSTER_METRICS_WINDOW_SEC = 30
@@ -57,6 +63,7 @@ function buildClusterChartEvenXTicks(min: number, max: number, count: number): T
 
 /** Survives full page reload; same origin only. */
 const CLUSTER_CHART_STORAGE_KEY = 'amgix.dashboard.clusterThroughputHistory.v1'
+const CLUSTER_API_CHART_STORAGE_KEY = 'amgix.dashboard.apiMetricsHistory.v1'
 
 function clusterHelpIcon(tip: string): JQuery<HTMLElement> {
   return $('<button>', {
@@ -81,32 +88,87 @@ function clusterThWithHelp(label: string, tip: string): JQuery<HTMLElement> {
 
 function clusterBatchesColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Embed requests that started on this node, sample count in the last ${w}s.`
+  return `Number of embed requests that originated on this node in the last ${w}s.`
 }
 
 function clusterRateColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Documents embedded per second that started on this node, over the last ${w}s.`
+  return `Documents embedded per second, originating on this node, over the last ${w}s.`
 }
 
 function clusterInferMsColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Local model inference time per document (weighted by document count per model), over the last ${w}s.`
+  return `Local model inference time per document, in ms, over the last ${w}s.`
 }
 
 function clusterPipeMsColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `End-to-end time per document from this node (including RPC to other encoders), over the last ${w}s.`
+  return `Routed inference time per document, in ms, as seen by the originating encoder (includes RPC if the request was forwarded to another node), over the last ${w}s.`
 }
 
 function clusterErrPerSecColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Failed embed requests that started on this node, per second, over the last ${w}s.`
+  return `Failed embed requests per second, originating on this node, over the last ${w}s.`
 }
 
 function clusterChartHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Cluster-wide inference and pipeline latency over time, per document, ${w}s rolling window.`
+  return `Inference and routed latency per document over time, ${w}s rolling window.`
+}
+
+function clusterApiChartHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `API request rate and mean latency over time. All traffic, search, and ingestion (async + sync + bulk), ${w}s rolling window per poll.`
+}
+
+function clusterApiAllReqColumnHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `All HTTP requests per second handled by this API process, over the last ${w}s.`
+}
+
+function clusterApiAllMsColumnHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Mean latency in ms for all HTTP requests on this API process, over the last ${w}s.`
+}
+
+function clusterApiAsyncReqColumnHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Async single-document uploads per second (POST …/documents), over the last ${w}s.`
+}
+
+function clusterApiAsyncMsColumnHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Mean latency in ms for async single-document uploads, over the last ${w}s.`
+}
+
+function clusterApiSyncReqColumnHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Sync single-document uploads per second (POST …/documents/sync), over the last ${w}s.`
+}
+
+function clusterApiSyncMsColumnHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Mean latency in ms for sync single-document uploads, over the last ${w}s.`
+}
+
+function clusterApiBulkReqColumnHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Bulk upload requests per second (POST …/documents/bulk), over the last ${w}s.`
+}
+
+function clusterApiBulkMsColumnHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Mean latency in ms for bulk upload requests, over the last ${w}s.`
+}
+
+function clusterApiSearchReqColumnHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Search requests per second (POST …/search), over the last ${w}s.`
+}
+
+function clusterApiSearchMsColumnHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Mean latency in ms for search requests, over the last ${w}s.`
 }
 
 type HomeReadinessKey = 'database' | 'rabbitmq' | 'index' | 'query'
@@ -189,40 +251,6 @@ function formatGpuStatus(node: NodeView): string {
   return 'Undetected'
 }
 
-function formatGbForCell(n: number): string {
-  return n.toFixed(1)
-}
-
-function formatRamFreeTotalGb(node: NodeView): string {
-  if (node.role === 'api') {
-    return ''
-  }
-  if (!node.load_models) {
-    return '-'
-  }
-  const free = node.free_ram_gb
-  const total = node.total_ram_gb
-  if (free == null || total == null || !Number.isFinite(free) || !Number.isFinite(total)) {
-    return ''
-  }
-  return `${formatGbForCell(free)} / ${formatGbForCell(total)}`
-}
-
-function formatVramFreeTotalGb(node: NodeView): string {
-  if (node.role === 'api') {
-    return ''
-  }
-  if (!node.load_models) {
-    return '-'
-  }
-  const free = node.free_vram_gb
-  const total = node.total_vram_gb
-  if (free == null || total == null || !Number.isFinite(free) || !Number.isFinite(total)) {
-    return 'n/a'
-  }
-  return `${formatGbForCell(free)} / ${formatGbForCell(total)}`
-}
-
 const clusterMetricsWindowKey = String(CLUSTER_METRICS_WINDOW_SEC)
 
 function getNodeMetricWindowSample(s: NodeMetricSeries): WindowSample | undefined {
@@ -231,6 +259,67 @@ function getNodeMetricWindowSample(s: NodeMetricSeries): WindowSample | undefine
     return undefined
   }
   return w[clusterMetricsWindowKey] ?? w[CLUSTER_METRICS_WINDOW_SEC]
+}
+
+function getMetricWindowSampleByFirstKey(list: NodeMetricSeries[], name: string): WindowSample | undefined {
+  for (const s of list) {
+    if (s.key[0] === name) {
+      return getNodeMetricWindowSample(s)
+    }
+  }
+  return undefined
+}
+
+function formatApiRateCell(list: NodeMetricSeries[], rateKey: string): string {
+  const ws = getMetricWindowSampleByFirstKey(list, rateKey)
+  if (ws == null) {
+    return ''
+  }
+  const v = Number(ws.value)
+  if (!Number.isFinite(v)) {
+    return ''
+  }
+  return formatClusterRpsCell(v)
+}
+
+function formatApiAvgMsCell(list: NodeMetricSeries[], msKey: string): string {
+  const ws = getMetricWindowSampleByFirstKey(list, msKey)
+  if (ws == null) {
+    return ''
+  }
+  const n = Number(ws.n)
+  const v = Number(ws.value)
+  if (!Number.isFinite(n) || n <= 0 || !Number.isFinite(v)) {
+    return ''
+  }
+  return formatClusterAvgMsCell(v)
+}
+
+function formatApiMetricsCells(node: NodeView): {
+  allReq: string
+  allMs: string
+  asyncReq: string
+  asyncMs: string
+  syncReq: string
+  syncMs: string
+  bulkReq: string
+  bulkMs: string
+  searchReq: string
+  searchMs: string
+} {
+  const list = node.metrics ?? []
+  return {
+    allReq: formatApiRateCell(list, 'api_requests'),
+    allMs: formatApiAvgMsCell(list, 'api_request_ms'),
+    asyncReq: formatApiRateCell(list, 'api_async_upload'),
+    asyncMs: formatApiAvgMsCell(list, 'api_async_upload_ms'),
+    syncReq: formatApiRateCell(list, 'api_sync_upload'),
+    syncMs: formatApiAvgMsCell(list, 'api_sync_upload_ms'),
+    bulkReq: formatApiRateCell(list, 'api_bulk_upload'),
+    bulkMs: formatApiAvgMsCell(list, 'api_bulk_upload_ms'),
+    searchReq: formatApiRateCell(list, 'api_search'),
+    searchMs: formatApiAvgMsCell(list, 'api_search_ms'),
+  }
 }
 
 /** Stable merge key for dimensions key[1..3] (vector type, model, revision). */
@@ -290,6 +379,20 @@ function clusterChartLegendParts(
     return { labelStem: `${baseLabel}: `, valuePart: '-' }
   }
   return { labelStem: `${baseLabel}: `, valuePart: `${formatClusterAvgMsCell(y)} ms` }
+}
+
+function clusterApiChartLegendPartsRps(
+  baseLabel: string,
+  data: ReadonlyArray<{ y?: number | null }>,
+): { labelStem: string; valuePart: string | null } {
+  const y = latestFiniteSeriesY(data)
+  if (y == null) {
+    return { labelStem: baseLabel, valuePart: null }
+  }
+  if (y === 0) {
+    return { labelStem: `${baseLabel}: `, valuePart: '-' }
+  }
+  return { labelStem: `${baseLabel}: `, valuePart: `${formatClusterRpsCell(y)} /s` }
 }
 
 /**
@@ -487,16 +590,206 @@ function aggregateClusterThroughput(view: ClusterView | null): ClusterThroughput
   }
 }
 
-function sortClusterNodeEntries(nodes: { [key: string]: NodeView }): Array<[string, NodeView]> {
-  const entries = Object.entries(nodes)
-  entries.sort((a, b) => {
+function sortApiNodeEntries(entries: Array<[string, NodeView]>): Array<[string, NodeView]> {
+  const copy = [...entries]
+  copy.sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }))
+  return copy
+}
+
+function sortEncoderNodeEntries(entries: Array<[string, NodeView]>): Array<[string, NodeView]> {
+  const copy = [...entries]
+  copy.sort((a, b) => {
     const byRole = a[1].role.localeCompare(b[1].role, undefined, { sensitivity: 'base' })
     if (byRole !== 0) {
       return byRole
     }
     return a[0].localeCompare(b[0], undefined, { sensitivity: 'base' })
   })
-  return entries
+  return copy
+}
+
+function partitionApiAndEncoderNodes(
+  nodes: { [key: string]: NodeView },
+): { api: Array<[string, NodeView]>; encoders: Array<[string, NodeView]> } {
+  const api: Array<[string, NodeView]> = []
+  const encoders: Array<[string, NodeView]> = []
+  for (const entry of Object.entries(nodes)) {
+    if (entry[1].role === 'api') {
+      api.push(entry)
+    } else {
+      encoders.push(entry)
+    }
+  }
+  return { api: sortApiNodeEntries(api), encoders: sortEncoderNodeEntries(encoders) }
+}
+
+type ApiMetricsHistoryPoint = {
+  t: number
+  allRps: number | null
+  allMs: number | null
+  searchRps: number | null
+  searchMs: number | null
+  ingestRps: number | null
+  ingestMs: number | null
+}
+
+function aggregateApiChartMetrics(view: ClusterView | null): Omit<ApiMetricsHistoryPoint, 't'> {
+  const empty: Omit<ApiMetricsHistoryPoint, 't'> = {
+    allRps: null,
+    allMs: null,
+    searchRps: null,
+    searchMs: null,
+    ingestRps: null,
+    ingestMs: null,
+  }
+  if (view == null || view.nodes == null) {
+    return empty
+  }
+  let sumAllRps = 0
+  let sawAllRps = false
+  let allMsSumVN = 0
+  let allMsSumN = 0
+  let sumSearchRps = 0
+  let sawSearchRps = false
+  let searchMsSumVN = 0
+  let searchMsSumN = 0
+  let sumIngestRps = 0
+  let sawIngestRps = false
+  let ingestMsSumVN = 0
+  let ingestMsSumN = 0
+
+  for (const node of Object.values(view.nodes)) {
+    if (node.role !== 'api') {
+      continue
+    }
+    const list = node.metrics ?? []
+
+    const wsAllR = getMetricWindowSampleByFirstKey(list, 'api_requests')
+    if (wsAllR != null) {
+      const v = Number(wsAllR.value)
+      if (Number.isFinite(v)) {
+        sumAllRps += v
+        sawAllRps = true
+      }
+    }
+    const wsAllM = getMetricWindowSampleByFirstKey(list, 'api_request_ms')
+    if (wsAllM != null) {
+      const v = Number(wsAllM.value)
+      const n = Number(wsAllM.n)
+      if (Number.isFinite(v) && Number.isFinite(n) && n > 0) {
+        const ni = Math.trunc(n)
+        allMsSumVN += v * ni
+        allMsSumN += ni
+      }
+    }
+
+    const wsSr = getMetricWindowSampleByFirstKey(list, 'api_search')
+    if (wsSr != null) {
+      const v = Number(wsSr.value)
+      if (Number.isFinite(v)) {
+        sumSearchRps += v
+        sawSearchRps = true
+      }
+    }
+    const wsSm = getMetricWindowSampleByFirstKey(list, 'api_search_ms')
+    if (wsSm != null) {
+      const v = Number(wsSm.value)
+      const n = Number(wsSm.n)
+      if (Number.isFinite(v) && Number.isFinite(n) && n > 0) {
+        const ni = Math.trunc(n)
+        searchMsSumVN += v * ni
+        searchMsSumN += ni
+      }
+    }
+
+    for (const rk of ['api_async_upload', 'api_sync_upload', 'api_bulk_upload'] as const) {
+      const ws = getMetricWindowSampleByFirstKey(list, rk)
+      if (ws != null) {
+        const v = Number(ws.value)
+        if (Number.isFinite(v)) {
+          sumIngestRps += v
+          sawIngestRps = true
+        }
+      }
+    }
+    for (const mk of ['api_async_upload_ms', 'api_sync_upload_ms', 'api_bulk_upload_ms'] as const) {
+      const ws = getMetricWindowSampleByFirstKey(list, mk)
+      if (ws != null) {
+        const v = Number(ws.value)
+        const n = Number(ws.n)
+        if (Number.isFinite(v) && Number.isFinite(n) && n > 0) {
+          const ni = Math.trunc(n)
+          ingestMsSumVN += v * ni
+          ingestMsSumN += ni
+        }
+      }
+    }
+  }
+
+  return {
+    allRps: sawAllRps ? sumAllRps : null,
+    allMs: allMsSumN > 0 ? allMsSumVN / allMsSumN : null,
+    searchRps: sawSearchRps ? sumSearchRps : null,
+    searchMs: searchMsSumN > 0 ? searchMsSumVN / searchMsSumN : null,
+    ingestRps: sawIngestRps ? sumIngestRps : null,
+    ingestMs: ingestMsSumN > 0 ? ingestMsSumVN / ingestMsSumN : null,
+  }
+}
+
+type ApiChartStoredPayload = {
+  v: 1
+  points: ApiMetricsHistoryPoint[]
+}
+
+function loadApiMetricsHistoryFromStorage(cutoff: number): ApiMetricsHistoryPoint[] | null {
+  try {
+    const s = localStorage.getItem(CLUSTER_API_CHART_STORAGE_KEY)
+    if (s == null || s === '') {
+      return null
+    }
+    const parsed = JSON.parse(s) as unknown
+    if (!parsed || typeof parsed !== 'object') {
+      return null
+    }
+    const p = parsed as Partial<ApiChartStoredPayload>
+    if (p.v !== 1 || !Array.isArray(p.points)) {
+      return null
+    }
+    const points: ApiMetricsHistoryPoint[] = []
+    for (const item of p.points) {
+      if (
+        item != null &&
+        typeof item === 'object' &&
+        typeof (item as ApiMetricsHistoryPoint).t === 'number' &&
+        Number.isFinite((item as ApiMetricsHistoryPoint).t)
+      ) {
+        const raw = item as ApiMetricsHistoryPoint
+        points.push({
+          t: raw.t,
+          allRps: raw.allRps,
+          allMs: raw.allMs,
+          searchRps: raw.searchRps,
+          searchMs: raw.searchMs,
+          ingestRps: raw.ingestRps,
+          ingestMs: raw.ingestMs,
+        })
+      }
+    }
+    const filtered = points.filter((pt) => pt.t >= cutoff)
+    filtered.sort((a, b) => a.t - b.t)
+    return filtered
+  } catch {
+    return null
+  }
+}
+
+function saveApiMetricsHistoryToStorage(points: ApiMetricsHistoryPoint[]): void {
+  try {
+    const payload: ApiChartStoredPayload = { v: 1, points }
+    localStorage.setItem(CLUSTER_API_CHART_STORAGE_KEY, JSON.stringify(payload))
+  } catch {
+    // ignore
+  }
 }
 
 function readClusterChartThemeColors(): { grid: string; tick: string } {
@@ -529,6 +822,104 @@ function clusterChartDevicePixelRatio(): number {
   }
   const d = window.devicePixelRatio
   return d != null && d > 0 ? d : 1
+}
+
+function buildApiMetricsChartOptions(
+  cutoff: number,
+  now: number,
+  gridColor: string,
+  tickColor: string,
+  chartFont: ReturnType<typeof readClusterChartFont>,
+  yAxisTitle: string,
+  latencyTooltip: boolean,
+): ChartOptions<'line'> {
+  return {
+    color: tickColor,
+    devicePixelRatio: clusterChartDevicePixelRatio(),
+    font: {
+      family: chartFont.family,
+      size: chartFont.tickPx,
+    },
+    parsing: false,
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'nearest', axis: 'x', intersect: false },
+    plugins: {
+      legend: {
+        display: false,
+      },
+      tooltip: {
+        titleFont: { family: chartFont.family, size: chartFont.tooltipPx },
+        bodyFont: { family: chartFont.family, size: chartFont.tooltipPx },
+        callbacks: {
+          title(items) {
+            const raw = items[0]?.parsed.x
+            if (typeof raw !== 'number') {
+              return ''
+            }
+            return new Date(raw).toLocaleString()
+          },
+          label(ctx) {
+            const v = ctx.parsed.y
+            const lab = ctx.dataset.label ?? ''
+            if (typeof v !== 'number') {
+              return lab
+            }
+            if (latencyTooltip) {
+              return `${lab}: ${formatClusterAvgMsCell(v)} ms`
+            }
+            return `${lab}: ${formatClusterRpsCell(v)} /s`
+          },
+        },
+      },
+    },
+    scales: {
+      x: {
+        type: 'linear',
+        min: cutoff,
+        max: now,
+        afterBuildTicks: (axis: Scale) => {
+          axis.ticks = buildClusterChartEvenXTicks(
+            Number(axis.min),
+            Number(axis.max),
+            CLUSTER_CHART_X_TICK_COUNT,
+          )
+        },
+        grid: { color: gridColor },
+        ticks: {
+          autoSkip: false,
+          color: tickColor,
+          font: { family: chartFont.family, size: chartFont.tickPx },
+          callback: (tickValue) => {
+            const n = typeof tickValue === 'number' ? tickValue : Number(tickValue)
+            if (!Number.isFinite(n)) {
+              return ''
+            }
+            return new Date(n).toLocaleTimeString(undefined, {
+              hour: '2-digit',
+              minute: '2-digit',
+            })
+          },
+        },
+      },
+      y: {
+        type: 'linear',
+        position: 'left',
+        beginAtZero: true,
+        title: {
+          display: true,
+          text: yAxisTitle,
+          color: tickColor,
+          font: { family: chartFont.family, size: chartFont.titlePx, weight: 600 },
+        },
+        ticks: {
+          color: tickColor,
+          font: { family: chartFont.family, size: chartFont.tickPx },
+        },
+        grid: { color: gridColor },
+      },
+    },
+  }
 }
 
 function clusterLineColors(count: number): string[] {
@@ -691,6 +1082,9 @@ export class HomePanel extends DashboardPanel {
   private clusterThroughputChart: Chart<'line'> | null = null
   private clusterThroughputHistory: ClusterThroughputHistoryPoint[] = []
   private clusterSeriesLabels = new Map<string, string>()
+  private apiMetricsRequestsChart: Chart<'line'> | null = null
+  private apiMetricsLatenciesChart: Chart<'line'> | null = null
+  private apiMetricsHistory: ApiMetricsHistoryPoint[] = []
 
   init(api: AmgixApi): void {
     const $root = $('#panel-home [data-home-root]')
@@ -705,9 +1099,106 @@ export class HomePanel extends DashboardPanel {
       window.clearInterval(this.readyPollTimer)
       this.readyPollTimer = null
     }
+    this.destroyApiMetricsChart()
     this.destroyClusterThroughputChart()
     this.clusterThroughputHistory = []
     this.clusterSeriesLabels.clear()
+    this.apiMetricsHistory = []
+  }
+
+  private destroyApiMetricsChart(): void {
+    this.apiMetricsRequestsChart?.destroy()
+    this.apiMetricsRequestsChart = null
+    this.apiMetricsLatenciesChart?.destroy()
+    this.apiMetricsLatenciesChart = null
+  }
+
+  private syncSingleYAxisApiMetricsChartTheme(
+    ch: Chart<'line'>,
+    cutoff: number,
+    now: number,
+    gridColor: string,
+    tickColor: string,
+    chartFont: ReturnType<typeof readClusterChartFont>,
+    yAxisTitle: string,
+  ): void {
+    const xScale = ch.options.scales?.x
+    if (xScale && typeof xScale === 'object' && 'min' in xScale && 'max' in xScale) {
+      ;(xScale as { min?: number; max?: number }).min = cutoff
+      ;(xScale as { min?: number; max?: number }).max = now
+    }
+    ch.options.color = tickColor
+    if (ch.options.font && typeof ch.options.font === 'object') {
+      const f = ch.options.font as { family?: string; size?: number }
+      f.family = chartFont.family
+      f.size = chartFont.tickPx
+    }
+    const tip = ch.options.plugins?.tooltip
+    if (tip && typeof tip === 'object') {
+      const t = tip as {
+        titleFont?: { family?: string; size?: number }
+        bodyFont?: { family?: string; size?: number }
+      }
+      if (t.titleFont) {
+        t.titleFont.family = chartFont.family
+        t.titleFont.size = chartFont.tooltipPx
+      }
+      if (t.bodyFont) {
+        t.bodyFont.family = chartFont.family
+        t.bodyFont.size = chartFont.tooltipPx
+      }
+    }
+    const xs = ch.options.scales?.x
+    if (xs && typeof xs === 'object') {
+      const gx = (xs as { grid?: { color?: string }; ticks?: { color?: string; font?: { family?: string; size?: number } } }).grid
+      if (gx) {
+        gx.color = gridColor
+      }
+      const tx = (xs as { ticks?: { color?: string; font?: { family?: string; size?: number } } }).ticks
+      if (tx) {
+        tx.color = tickColor
+        if (tx.font) {
+          tx.font.family = chartFont.family
+          tx.font.size = chartFont.tickPx
+        }
+      }
+    }
+    const ys = ch.options.scales?.y
+    if (ys && typeof ys === 'object') {
+      const gy = (ys as { grid?: { color?: string }; ticks?: { color?: string; font?: { family?: string; size?: number } }; title?: { color?: string; text?: string; font?: { family?: string; size?: number; weight?: number } } }).grid
+      if (gy) {
+        gy.color = gridColor
+      }
+      const ty = (ys as { ticks?: { color?: string; font?: { family?: string; size?: number } } }).ticks
+      if (ty) {
+        ty.color = tickColor
+        if (ty.font) {
+          ty.font.family = chartFont.family
+          ty.font.size = chartFont.tickPx
+        }
+      }
+      const ysWithTitle = ys as {
+        title?: { display?: boolean; text?: string; color?: string; font?: { family?: string; size?: number; weight?: number } }
+      }
+      if (!ysWithTitle.title) {
+        ysWithTitle.title = {}
+      }
+      ysWithTitle.title.display = true
+      ysWithTitle.title.text = yAxisTitle
+      ysWithTitle.title.color = tickColor
+      if (ysWithTitle.title.font) {
+        ysWithTitle.title.font.family = chartFont.family
+        ysWithTitle.title.font.size = chartFont.titlePx
+        ysWithTitle.title.font.weight = 600
+      } else {
+        ysWithTitle.title.font = { family: chartFont.family, size: chartFont.titlePx, weight: 600 }
+      }
+    }
+    const sc = ch.options.scales as Record<string, unknown> | undefined
+    if (sc?.y1 !== undefined) {
+      delete sc.y1
+    }
+    ch.update('none')
   }
 
   private destroyClusterThroughputChart(): void {
@@ -792,7 +1283,7 @@ export class HomePanel extends DashboardPanel {
       spanGaps: false,
     }
     const e2eMsDataset = {
-      label: 'Pipeline Latency',
+      label: 'Routed Latency',
       data: this.clusterThroughputHistory.map((pt) => ({
         x: pt.t,
         y: typeof pt.e2eMs === 'number' && Number.isFinite(pt.e2eMs) ? pt.e2eMs : 0,
@@ -990,66 +1481,365 @@ export class HomePanel extends DashboardPanel {
     }
   }
 
+  private refreshApiMetricsChart($root: JQuery<HTMLElement>, view: ClusterView | null): void {
+    const $reqCanvas = $root.find('[data-home-api-requests-metrics-chart]')
+    const reqCanvas = $reqCanvas.get(0) as HTMLCanvasElement | undefined
+    const $reqWrap = $root.find('[data-home-api-requests-chart-wrap]')
+    const $reqCanvasWrap = $root.find('[data-home-api-requests-chart-canvas-wrap]')
+    const $reqLegendUl = $root.find('[data-home-api-requests-chart-legend]')
+
+    const $latCanvas = $root.find('[data-home-api-latencies-metrics-chart]')
+    const latCanvas = $latCanvas.get(0) as HTMLCanvasElement | undefined
+    const $latWrap = $root.find('[data-home-api-latencies-chart-wrap]')
+    const $latCanvasWrap = $root.find('[data-home-api-latencies-chart-canvas-wrap]')
+    const $latLegendUl = $root.find('[data-home-api-latencies-chart-legend]')
+
+    if (
+      !reqCanvas ||
+      !latCanvas ||
+      !$reqWrap.length ||
+      !$reqCanvasWrap.length ||
+      !$reqLegendUl.length ||
+      !$latWrap.length ||
+      !$latCanvasWrap.length ||
+      !$latLegendUl.length
+    ) {
+      return
+    }
+
+    const agg = aggregateApiChartMetrics(view)
+    const now = Date.now()
+    const cutoff = now - CLUSTER_CHART_HISTORY_MS
+
+    if (this.apiMetricsHistory.length === 0) {
+      const restored = loadApiMetricsHistoryFromStorage(cutoff)
+      if (restored != null && restored.length > 0) {
+        this.apiMetricsHistory = restored
+      }
+    }
+
+    this.apiMetricsHistory.push({
+      t: now,
+      allRps: agg.allRps,
+      allMs: agg.allMs,
+      searchRps: agg.searchRps,
+      searchMs: agg.searchMs,
+      ingestRps: agg.ingestRps,
+      ingestMs: agg.ingestMs,
+    })
+    while (this.apiMetricsHistory.length > 0 && this.apiMetricsHistory[0]!.t < cutoff) {
+      this.apiMetricsHistory.shift()
+    }
+    saveApiMetricsHistoryToStorage(this.apiMetricsHistory)
+
+    const yNum = (v: number | null) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+
+    /** Same hues for All / Search / Ingest on both requests and latency charts. */
+    const apiGroupColors = ['#8b5cf6', '#38bdf8', '#f59e0b']
+
+    const line = (label: string, color: string, pick: (pt: ApiMetricsHistoryPoint) => number) => ({
+      label,
+      data: this.apiMetricsHistory.map((pt) => ({ x: pt.t, y: pick(pt) })),
+      borderColor: color,
+      backgroundColor: color,
+      borderWidth: 2,
+      fill: false,
+      tension: 0.4,
+      pointRadius: 0,
+      pointHoverRadius: 5,
+      pointHitRadius: 12,
+      spanGaps: false,
+    })
+
+    const datasetsRps = [
+      line('All', apiGroupColors[0]!, (pt) => yNum(pt.allRps)),
+      line('Search', apiGroupColors[1]!, (pt) => yNum(pt.searchRps)),
+      line('Ingest', apiGroupColors[2]!, (pt) => yNum(pt.ingestRps)),
+    ]
+
+    const datasetsMs = [
+      line('All', apiGroupColors[0]!, (pt) => yNum(pt.allMs)),
+      line('Search', apiGroupColors[1]!, (pt) => yNum(pt.searchMs)),
+      line('Ingest', apiGroupColors[2]!, (pt) => yNum(pt.ingestMs)),
+    ]
+
+    $reqCanvasWrap.css('height', '150px')
+    $latCanvasWrap.css('height', '150px')
+
+    const { grid: gridColor, tick: tickColor } = readClusterChartThemeColors()
+    const chartFont = readClusterChartFont()
+
+    const legendItemsRps = datasetsRps.map((ds) => ({
+      color: String(ds.borderColor ?? '#888'),
+      ...clusterApiChartLegendPartsRps(String(ds.label ?? ''), ds.data as Array<{ y?: number | null }>),
+    }))
+    const legendItemsMs = datasetsMs.map((ds) => ({
+      color: String(ds.borderColor ?? '#888'),
+      ...clusterChartLegendParts(String(ds.label ?? ''), ds.data as Array<{ y?: number | null }>),
+    }))
+    renderClusterChartHtmlLegend($reqLegendUl, legendItemsRps, tickColor)
+    renderClusterChartHtmlLegend($latLegendUl, legendItemsMs, tickColor)
+
+    if (this.apiMetricsRequestsChart == null) {
+      const ctx = reqCanvas.getContext('2d')
+      if (!ctx) {
+        return
+      }
+      this.apiMetricsRequestsChart = new Chart(ctx, {
+        type: 'line',
+        data: { datasets: datasetsRps },
+        options: buildApiMetricsChartOptions(cutoff, now, gridColor, tickColor, chartFont, 'Req/s', false),
+      })
+    } else {
+      const ch = this.apiMetricsRequestsChart
+      ch.data.datasets = datasetsRps as typeof ch.data.datasets
+      this.syncSingleYAxisApiMetricsChartTheme(ch, cutoff, now, gridColor, tickColor, chartFont, 'Req/s')
+    }
+
+    if (this.apiMetricsLatenciesChart == null) {
+      const ctx = latCanvas.getContext('2d')
+      if (!ctx) {
+        return
+      }
+      this.apiMetricsLatenciesChart = new Chart(ctx, {
+        type: 'line',
+        data: { datasets: datasetsMs },
+        options: buildApiMetricsChartOptions(
+          cutoff,
+          now,
+          gridColor,
+          tickColor,
+          chartFont,
+          'Milliseconds',
+          true,
+        ),
+      })
+    } else {
+      const ch = this.apiMetricsLatenciesChart
+      ch.data.datasets = datasetsMs as typeof ch.data.datasets
+      this.syncSingleYAxisApiMetricsChartTheme(ch, cutoff, now, gridColor, tickColor, chartFont, 'Milliseconds')
+    }
+  }
+
+  private activateHomeMetricsTab($root: JQuery<HTMLElement>, panel: 'api' | 'encoder'): void {
+    const $apiPanel = $root.find('[data-home-metrics-tab-panel="api"]')
+    const $encPanel = $root.find('[data-home-metrics-tab-panel="encoder"]')
+    const $btnApi = $root.find('[data-home-metrics-tab="api"]')
+    const $btnEnc = $root.find('[data-home-metrics-tab="encoder"]')
+    if (!$apiPanel.length || !$encPanel.length || !$btnApi.length || !$btnEnc.length) {
+      return
+    }
+    const showApi = panel === 'api'
+    $btnApi.attr('aria-selected', showApi ? 'true' : 'false')
+    $btnEnc.attr('aria-selected', showApi ? 'false' : 'true')
+    $btnApi.attr('tabindex', showApi ? '0' : '-1')
+    $btnEnc.attr('tabindex', showApi ? '-1' : '0')
+    $apiPanel.prop('hidden', !showApi)
+    $encPanel.prop('hidden', showApi)
+    window.requestAnimationFrame(() => {
+      if (showApi) {
+        this.apiMetricsRequestsChart?.resize()
+        this.apiMetricsLatenciesChart?.resize()
+      } else {
+        this.clusterThroughputChart?.resize()
+      }
+    })
+  }
+
+  private applyClusterInfoToDom($root: JQuery<HTMLElement>, view: ClusterView | null): void {
+    if (!$root.find('[data-home-cluster-info]').length) {
+      return
+    }
+    const dash = '\u2014'
+    const nodes = view?.nodes
+    if (view == null || nodes === undefined) {
+      $root.find('[data-home-cluster-info="api-nodes"]').text(dash)
+      $root.find('[data-home-cluster-info="encoder-nodes"]').text(dash)
+      $root.find('[data-home-cluster-info="api-rps"]').text(dash)
+      $root.find('[data-home-cluster-info="api-ms"]').text(dash)
+      $root.find('[data-home-cluster-info="infer-ms"]').text(dash)
+      return
+    }
+    const { api: apiNodeEntries, encoders: encoderNodeEntries } = partitionApiAndEncoderNodes(nodes)
+    $root.find('[data-home-cluster-info="api-nodes"]').text(String(apiNodeEntries.length))
+    $root.find('[data-home-cluster-info="encoder-nodes"]').text(String(encoderNodeEntries.length))
+    const apiAgg = aggregateApiChartMetrics(view)
+    const $apiRps = $root.find('[data-home-cluster-info="api-rps"]')
+    if (apiAgg.allRps != null && Number.isFinite(apiAgg.allRps)) {
+      $apiRps.text(formatClusterRpsCell(apiAgg.allRps))
+    } else {
+      $apiRps.text(dash)
+    }
+    const $apiMs = $root.find('[data-home-cluster-info="api-ms"]')
+    if (apiAgg.allMs != null && Number.isFinite(apiAgg.allMs)) {
+      $apiMs.text(`${formatClusterAvgMsCell(apiAgg.allMs)} ms`)
+    } else {
+      $apiMs.text(dash)
+    }
+    const thr = aggregateClusterThroughput(view)
+    const $inferMs = $root.find('[data-home-cluster-info="infer-ms"]')
+    if (thr.globalAvgMs != null && Number.isFinite(thr.globalAvgMs)) {
+      $inferMs.text(`${formatClusterAvgMsCell(thr.globalAvgMs)} ms`)
+    } else {
+      $inferMs.text(dash)
+    }
+  }
+
   private applyClusterViewToDom($root: JQuery<HTMLElement>, view: ClusterView | null): void {
-    const $tbody = $root.find('[data-home-cluster-tbody]')
-    if (!$tbody.length) {
+    try {
+      this.applyClusterTablesAndChartsToDom($root, view)
+    } finally {
+      this.applyClusterInfoToDom($root, view)
+    }
+  }
+
+  private applyClusterTablesAndChartsToDom($root: JQuery<HTMLElement>, view: ClusterView | null): void {
+    const CLUSTER_API_COLSPAN = 13
+    const CLUSTER_ENCODER_COLSPAN = 11
+    const $apiTbody = $root.find('[data-home-api-cluster-tbody]')
+    const $encTbody = $root.find('[data-home-cluster-tbody]')
+    if (!$apiTbody.length && !$encTbody.length) {
+      this.refreshApiMetricsChart($root, view)
       this.refreshClusterThroughputChart($root, view)
       return
     }
-    $tbody.empty()
+    $apiTbody.empty()
+    $encTbody.empty()
     const nodes = view?.nodes
     if (view == null || nodes === undefined) {
-      $tbody.append(
-        $('<tr>').append(
-          $('<td>', {
-            class: 'dashboard-home-cluster-placeholder',
-            colspan: 13,
-            text: 'Cluster view unavailable.',
-          }),
-        ),
-      )
+      if ($apiTbody.length) {
+        $apiTbody.append(
+          $('<tr>').append(
+            $('<td>', {
+              class: 'dashboard-home-cluster-placeholder',
+              colspan: CLUSTER_API_COLSPAN,
+              text: 'Cluster view unavailable.',
+            }),
+          ),
+        )
+      }
+      if ($encTbody.length) {
+        $encTbody.append(
+          $('<tr>').append(
+            $('<td>', {
+              class: 'dashboard-home-cluster-placeholder',
+              colspan: CLUSTER_ENCODER_COLSPAN,
+              text: 'Cluster view unavailable.',
+            }),
+          ),
+        )
+      }
+      this.refreshApiMetricsChart($root, view)
       this.refreshClusterThroughputChart($root, view)
       return
     }
     if (Object.keys(nodes).length === 0) {
-      $tbody.append(
-        $('<tr>').append(
-          $('<td>', {
-            class: 'dashboard-home-cluster-placeholder',
-            colspan: 13,
-            text: 'No nodes in cluster view.',
-          }),
-        ),
-      )
+      if ($apiTbody.length) {
+        $apiTbody.append(
+          $('<tr>').append(
+            $('<td>', {
+              class: 'dashboard-home-cluster-placeholder',
+              colspan: CLUSTER_API_COLSPAN,
+              text: 'No API nodes in cluster view.',
+            }),
+          ),
+        )
+      }
+      if ($encTbody.length) {
+        $encTbody.append(
+          $('<tr>').append(
+            $('<td>', {
+              class: 'dashboard-home-cluster-placeholder',
+              colspan: CLUSTER_ENCODER_COLSPAN,
+              text: 'No encoder nodes in cluster view.',
+            }),
+          ),
+        )
+      }
+      this.refreshApiMetricsChart($root, view)
       this.refreshClusterThroughputChart($root, view)
       return
     }
-    for (const [hostname, node] of sortClusterNodeEntries(nodes)) {
-      const m = formatEmbeddingMetricsCells(node)
-      const $nodeTd = $('<td>', { class: 'dashboard-home-v' })
-      if (node.is_leader) {
-        $nodeTd.append($('<strong>', { text: `${hostname}*` }))
+    const { api: apiEntries, encoders: encoderEntries } = partitionApiAndEncoderNodes(nodes)
+    if ($apiTbody.length) {
+      if (apiEntries.length === 0) {
+        $apiTbody.append(
+          $('<tr>').append(
+            $('<td>', {
+              class: 'dashboard-home-cluster-placeholder',
+              colspan: CLUSTER_API_COLSPAN,
+              text: 'No API nodes in cluster view.',
+            }),
+          ),
+        )
       } else {
-        $nodeTd.text(hostname)
+        for (const [hostname, node] of apiEntries) {
+          const apiM = formatApiMetricsCells(node)
+          const $nodeTd = $('<td>', { class: 'dashboard-home-v' })
+          if (node.is_leader) {
+            $nodeTd.append($('<strong>', { text: `${hostname}*` }))
+          } else {
+            $nodeTd.text(hostname)
+          }
+          $apiTbody.append(
+            $('<tr>').append(
+              $('<td>', { class: 'dashboard-home-v', text: node.role }),
+              $nodeTd,
+              $('<td>', { class: 'dashboard-home-v', text: apiM.allReq }),
+              $('<td>', { class: 'dashboard-home-v', text: apiM.allMs }),
+              $('<td>', { class: 'dashboard-home-v', text: apiM.asyncReq }),
+              $('<td>', { class: 'dashboard-home-v', text: apiM.asyncMs }),
+              $('<td>', { class: 'dashboard-home-v', text: apiM.syncReq }),
+              $('<td>', { class: 'dashboard-home-v', text: apiM.syncMs }),
+              $('<td>', { class: 'dashboard-home-v', text: apiM.bulkReq }),
+              $('<td>', { class: 'dashboard-home-v', text: apiM.bulkMs }),
+              $('<td>', { class: 'dashboard-home-v', text: apiM.searchReq }),
+              $('<td>', { class: 'dashboard-home-v', text: apiM.searchMs }),
+              $('<td>', { class: 'dashboard-home-v', text: formatLastSeen(node.last_seen) }),
+            ),
+          )
+        }
       }
-      $tbody.append(
-        $('<tr>').append(
-          $('<td>', { class: 'dashboard-home-v', text: node.role }),
-          $nodeTd,
-          $('<td>', { class: 'dashboard-home-v', text: formatLoadModelsCell(node) }),
-          $('<td>', { class: 'dashboard-home-v', text: node.at_capacity ? 'Yes' : 'No' }),
-          $('<td>', { class: 'dashboard-home-v', text: formatGpuStatus(node) }),
-          $('<td>', { class: 'dashboard-home-v', text: formatRamFreeTotalGb(node) }),
-          $('<td>', { class: 'dashboard-home-v', text: formatVramFreeTotalGb(node) }),
-          $('<td>', { class: 'dashboard-home-v', text: m.requests }),
-          $('<td>', { class: 'dashboard-home-v', text: m.rps }),
-          $('<td>', { class: 'dashboard-home-v', text: m.avgMs }),
-          $('<td>', { class: 'dashboard-home-v', text: m.e2eAvgMs }),
-          $('<td>', { class: 'dashboard-home-v', text: m.errPerSec }),
-          $('<td>', { class: 'dashboard-home-v', text: formatLastSeen(node.last_seen) }),
-        ),
-      )
     }
+    if ($encTbody.length) {
+      if (encoderEntries.length === 0) {
+        $encTbody.append(
+          $('<tr>').append(
+            $('<td>', {
+              class: 'dashboard-home-cluster-placeholder',
+              colspan: CLUSTER_ENCODER_COLSPAN,
+              text: 'No encoder nodes in cluster view.',
+            }),
+          ),
+        )
+      } else {
+        for (const [hostname, node] of encoderEntries) {
+          const m = formatEmbeddingMetricsCells(node)
+          const $nodeTd = $('<td>', { class: 'dashboard-home-v' })
+          if (node.is_leader) {
+            $nodeTd.append($('<strong>', { text: `${hostname}*` }))
+          } else {
+            $nodeTd.text(hostname)
+          }
+          $encTbody.append(
+            $('<tr>').append(
+              $('<td>', { class: 'dashboard-home-v', text: node.role }),
+              $nodeTd,
+              $('<td>', { class: 'dashboard-home-v', text: formatLoadModelsCell(node) }),
+              $('<td>', { class: 'dashboard-home-v', text: node.at_capacity ? 'Yes' : 'No' }),
+              $('<td>', { class: 'dashboard-home-v', text: formatGpuStatus(node) }),
+              $('<td>', { class: 'dashboard-home-v', text: m.requests }),
+              $('<td>', { class: 'dashboard-home-v', text: m.rps }),
+              $('<td>', { class: 'dashboard-home-v', text: m.avgMs }),
+              $('<td>', { class: 'dashboard-home-v', text: m.e2eAvgMs }),
+              $('<td>', { class: 'dashboard-home-v', text: m.errPerSec }),
+              $('<td>', { class: 'dashboard-home-v', text: formatLastSeen(node.last_seen) }),
+            ),
+          )
+        }
+      }
+    }
+    this.refreshApiMetricsChart($root, view)
     this.refreshClusterThroughputChart($root, view)
   }
 
@@ -1158,19 +1948,61 @@ export class HomePanel extends DashboardPanel {
       const $systemTable = $('<table>', { class: 'dashboard-home-table' }).append($thead, $tbody)
       const $systemBlock = $('<div>', { class: 'dashboard-home-system-block' }).append($systemTable)
 
+      const clusterInfoRow = (label: string, key: string) =>
+        $('<tr>').append(
+          $('<td>', { class: 'dashboard-home-k', text: `${label}:` }),
+          $('<td>', {
+            class: 'dashboard-home-v',
+            attr: { 'data-home-cluster-info': key },
+          }),
+        )
+      const $clusterInfoThead = $('<thead>').append(
+        $('<tr>').append(
+          $('<th>', {
+            class: 'dashboard-home-table-heading',
+            colspan: 2,
+            text: 'Cluster Info',
+          }),
+        ),
+      )
+      const $clusterInfoTbody = $('<tbody>').append(
+        clusterInfoRow('API Nodes', 'api-nodes'),
+        clusterInfoRow('Encoder Nodes', 'encoder-nodes'),
+        clusterInfoRow('Global RPS', 'api-rps'),
+        clusterInfoRow('Avg Latency', 'api-ms'),
+        clusterInfoRow('Avg Inference Latency', 'infer-ms'),
+      )
+      const $clusterInfoTable = $('<table>', { class: 'dashboard-home-table' }).append(
+        $clusterInfoThead,
+        $clusterInfoTbody,
+      )
+      const $clusterInfoBlock = $('<div>', { class: 'dashboard-home-cluster-info' }).append($clusterInfoTable)
+
+      const $topBand = $('<div>', { class: 'dashboard-home-top-band' }).append($systemBlock, $clusterInfoBlock)
+
       const $clusterChartSection = $('<section>', { class: 'dashboard-home-cluster-metrics' }).append(
         $('<div>', {
           class: 'dashboard-home-cluster-chart-inner',
           attr: { 'data-home-cluster-chart-wrap': '' },
         }).append(
-          $('<div>', { class: 'dashboard-home-cluster-chart-hint-row' }).append(clusterHelpIcon(clusterChartHelpText())),
+          $('<div>', {
+            class:
+              'dashboard-home-cluster-chart-hint-row dashboard-home-cluster-chart-hint-row--with-title',
+          }).append(
+            $('<span>', {
+              class: 'dashboard-home-cluster-chart-hint-spacer',
+              attr: { 'aria-hidden': 'true' },
+            }),
+            $('<span>', { class: 'dashboard-home-cluster-chart-title', text: 'Inference Latencies' }),
+            clusterHelpIcon(clusterChartHelpText()),
+          ),
           $('<div>', {
             class: 'dashboard-home-cluster-chart-canvas-wrap',
             attr: { 'data-home-cluster-chart-canvas-wrap': '' },
           }).append(
             $('<canvas>', {
               attr: { 'data-home-cluster-throughput-chart': '' },
-              'aria-label': `Cluster inference and pipeline latency over time, per document, ${CLUSTER_METRICS_WINDOW_SEC}s rolling window`,
+              'aria-label': `Cluster inference and routed latency over time, per document, ${CLUSTER_METRICS_WINDOW_SEC}s rolling window`,
             }),
           ),
           $('<ul>', {
@@ -1181,13 +2013,118 @@ export class HomePanel extends DashboardPanel {
         ),
       )
 
-      const $clusterThead = $('<thead>')
+      const $apiClusterThead = $('<thead>')
         .append(
           $('<tr>').append(
             $('<th>', {
               class: 'dashboard-home-table-heading',
               colspan: 13,
-              text: 'Cluster Nodes',
+              text: 'API nodes',
+            }),
+          ),
+        )
+        .append(
+          $('<tr>', { class: 'dashboard-home-cluster-colhead' }).append(
+            $('<th>', { text: 'Role' }),
+            $('<th>', { text: 'Node' }),
+            clusterThWithHelp('All/s', clusterApiAllReqColumnHelpText()),
+            clusterThWithHelp('All ms', clusterApiAllMsColumnHelpText()),
+            clusterThWithHelp('Async/s', clusterApiAsyncReqColumnHelpText()),
+            clusterThWithHelp('Async ms', clusterApiAsyncMsColumnHelpText()),
+            clusterThWithHelp('Sync/s', clusterApiSyncReqColumnHelpText()),
+            clusterThWithHelp('Sync ms', clusterApiSyncMsColumnHelpText()),
+            clusterThWithHelp('Bulk/s', clusterApiBulkReqColumnHelpText()),
+            clusterThWithHelp('Bulk ms', clusterApiBulkMsColumnHelpText()),
+            clusterThWithHelp('Srch/s', clusterApiSearchReqColumnHelpText()),
+            clusterThWithHelp('Srch ms', clusterApiSearchMsColumnHelpText()),
+            $('<th>', { text: 'Last seen' }),
+          ),
+        )
+
+      const $apiClusterTable = $('<table>', {
+        class: 'dashboard-home-table dashboard-home-cluster-table dashboard-home-cluster-table--api',
+      }).append($apiClusterThead, $('<tbody>', { attr: { 'data-home-api-cluster-tbody': '' } }))
+
+      const $apiChartsRow = $('<div>', { class: 'dashboard-home-api-charts-row' }).append(
+        $('<section>', { class: 'dashboard-home-cluster-metrics' }).append(
+          $('<div>', {
+            class: 'dashboard-home-cluster-chart-inner',
+            attr: { 'data-home-api-requests-chart-wrap': '' },
+          }).append(
+            $('<div>', {
+              class:
+                'dashboard-home-cluster-chart-hint-row dashboard-home-cluster-chart-hint-row--with-title',
+            }).append(
+              $('<span>', {
+                class: 'dashboard-home-cluster-chart-hint-spacer',
+                attr: { 'aria-hidden': 'true' },
+              }),
+              $('<span>', {
+                class: 'dashboard-home-cluster-chart-title',
+                text: 'Cluster API Requests',
+              }),
+              clusterHelpIcon(clusterApiChartHelpText()),
+            ),
+            $('<div>', {
+              class: 'dashboard-home-cluster-chart-canvas-wrap',
+              attr: { 'data-home-api-requests-chart-canvas-wrap': '' },
+            }).append(
+              $('<canvas>', {
+                attr: { 'data-home-api-requests-metrics-chart': '' },
+                'aria-label': `Cluster API request rate, ${CLUSTER_METRICS_WINDOW_SEC}s rolling window`,
+              }),
+            ),
+            $('<ul>', {
+              class: 'dashboard-home-cluster-chart-legend dashboard-home-cluster-chart-legend--inline',
+              attr: { 'data-home-api-requests-chart-legend': '' },
+              'aria-label': 'API requests chart series',
+            }),
+          ),
+        ),
+        $('<section>', { class: 'dashboard-home-cluster-metrics' }).append(
+          $('<div>', {
+            class: 'dashboard-home-cluster-chart-inner',
+            attr: { 'data-home-api-latencies-chart-wrap': '' },
+          }).append(
+            $('<div>', {
+              class:
+                'dashboard-home-cluster-chart-hint-row dashboard-home-cluster-chart-hint-row--with-title',
+            }).append(
+              $('<span>', {
+                class: 'dashboard-home-cluster-chart-hint-spacer',
+                attr: { 'aria-hidden': 'true' },
+              }),
+              $('<span>', {
+                class: 'dashboard-home-cluster-chart-title',
+                text: 'Cluster API Latencies',
+              }),
+              clusterHelpIcon(clusterApiChartHelpText()),
+            ),
+            $('<div>', {
+              class: 'dashboard-home-cluster-chart-canvas-wrap',
+              attr: { 'data-home-api-latencies-chart-canvas-wrap': '' },
+            }).append(
+              $('<canvas>', {
+                attr: { 'data-home-api-latencies-metrics-chart': '' },
+                'aria-label': `Cluster API mean latency, ${CLUSTER_METRICS_WINDOW_SEC}s rolling window`,
+              }),
+            ),
+            $('<ul>', {
+              class: 'dashboard-home-cluster-chart-legend dashboard-home-cluster-chart-legend--inline',
+              attr: { 'data-home-api-latencies-chart-legend': '' },
+              'aria-label': 'API latencies chart series',
+            }),
+          ),
+        ),
+      )
+
+      const $encoderClusterThead = $('<thead>')
+        .append(
+          $('<tr>').append(
+            $('<th>', {
+              class: 'dashboard-home-table-heading',
+              colspan: 11,
+              text: 'Encoder nodes',
             }),
           ),
         )
@@ -1198,23 +2135,107 @@ export class HomePanel extends DashboardPanel {
             $('<th>', { text: 'Models' }),
             $('<th>', { text: 'Capacity' }),
             $('<th>', { text: 'GPU' }),
-            $('<th>', { text: 'RAM (free/total, GB)' }),
-            $('<th>', { text: 'VRAM (free/total, GB)' }),
             clusterThWithHelp('Batches', clusterBatchesColumnHelpText()),
             clusterThWithHelp('Docs/s', clusterRateColumnHelpText()),
-            clusterThWithHelp('Infer ms/doc', clusterInferMsColumnHelpText()),
-            clusterThWithHelp('Pipe ms/doc', clusterPipeMsColumnHelpText()),
+            clusterThWithHelp('Infer ms', clusterInferMsColumnHelpText()),
+            clusterThWithHelp('Routed ms', clusterPipeMsColumnHelpText()),
             clusterThWithHelp('Err/s', clusterErrPerSecColumnHelpText()),
             $('<th>', { text: 'Last seen' }),
           ),
         )
 
-      const $clusterTable = $('<table>', {
-        class: 'dashboard-home-table dashboard-home-cluster-table',
-      }).append($clusterThead, $('<tbody>', { attr: { 'data-home-cluster-tbody': '' } }))
+      const $encoderClusterTable = $('<table>', {
+        class: 'dashboard-home-table dashboard-home-cluster-table dashboard-home-cluster-table--encoders',
+      }).append($encoderClusterThead, $('<tbody>', { attr: { 'data-home-cluster-tbody': '' } }))
 
-      const $topRow = $('<div>', { class: 'dashboard-home-top-row' }).append($systemBlock, $clusterChartSection)
-      $root.empty().append($topRow, $clusterTable)
+      const $btnApiMetrics = $('<button>', {
+        type: 'button',
+        role: 'tab',
+        class: 'dashboard-home-metrics-tab',
+        id: HOME_METRICS_TAB_API_ID,
+        text: 'API Metrics',
+        attr: {
+          'aria-selected': 'true',
+          'aria-controls': HOME_METRICS_PANEL_API_ID,
+          'data-home-metrics-tab': 'api',
+          tabindex: '0',
+        },
+      })
+      const $btnEncoderMetrics = $('<button>', {
+        type: 'button',
+        role: 'tab',
+        class: 'dashboard-home-metrics-tab',
+        id: HOME_METRICS_TAB_ENCODER_ID,
+        text: 'Encoder Metrics',
+        attr: {
+          'aria-selected': 'false',
+          'aria-controls': HOME_METRICS_PANEL_ENCODER_ID,
+          'data-home-metrics-tab': 'encoder',
+          tabindex: '-1',
+        },
+      })
+      const $metricsTabList = $('<div>', {
+        role: 'tablist',
+        class: 'dashboard-home-metrics-tablist',
+        'aria-label': 'Cluster metrics',
+      }).append($btnApiMetrics, $btnEncoderMetrics)
+
+      const $apiMetricsPanel = $('<div>', {
+        class: 'dashboard-home-cluster-tables dashboard-home-metrics-tab-panel',
+        id: HOME_METRICS_PANEL_API_ID,
+        role: 'tabpanel',
+        attr: {
+          'data-home-metrics-tab-panel': 'api',
+          'aria-labelledby': HOME_METRICS_TAB_API_ID,
+        },
+      }).append($apiChartsRow, $apiClusterTable)
+
+      const $encoderMetricsPanel = $('<div>', {
+        class: 'dashboard-home-cluster-tables dashboard-home-metrics-tab-panel',
+        id: HOME_METRICS_PANEL_ENCODER_ID,
+        role: 'tabpanel',
+        attr: {
+          'data-home-metrics-tab-panel': 'encoder',
+          'aria-labelledby': HOME_METRICS_TAB_ENCODER_ID,
+        },
+      }).append($clusterChartSection, $encoderClusterTable)
+
+      $encoderMetricsPanel.prop('hidden', true)
+
+      const $metricsShell = $('<div>', { class: 'dashboard-home-metrics-shell' }).append(
+        $metricsTabList,
+        $apiMetricsPanel,
+        $encoderMetricsPanel,
+      )
+
+      $btnApiMetrics.on('click', () => {
+        this.activateHomeMetricsTab($root, 'api')
+      })
+      $btnEncoderMetrics.on('click', () => {
+        this.activateHomeMetricsTab($root, 'encoder')
+      })
+      $metricsTabList.on('keydown', (e) => {
+        const key = e.key
+        if (key !== 'ArrowRight' && key !== 'ArrowLeft' && key !== 'Home' && key !== 'End') {
+          return
+        }
+        e.preventDefault()
+        const current = $btnApiMetrics.attr('aria-selected') === 'true' ? 'api' : 'encoder'
+        let next: 'api' | 'encoder'
+        if (key === 'Home') {
+          next = 'api'
+        } else if (key === 'End') {
+          next = 'encoder'
+        } else if (key === 'ArrowRight') {
+          next = current === 'api' ? 'encoder' : 'api'
+        } else {
+          next = current === 'encoder' ? 'api' : 'encoder'
+        }
+        this.activateHomeMetricsTab($root, next)
+        $root.find(`[data-home-metrics-tab="${next}"]`).get(0)?.focus()
+      })
+
+      $root.empty().append($topBand, $metricsShell)
       this.applyClusterViewToDom($root, clusterView)
 
       this.readyPollTimer = window.setInterval(() => {
