@@ -7,6 +7,7 @@ from .enums import *
 from .functions import *
 from .cache import AMGIXCache
 from .embed_router import EmbedRouter
+from .rolling_metrics import RollingMetrics
 
 __all__ = [
     # Constants
@@ -82,4 +83,5 @@ __all__ = [
     "AMGIXCache",
     "BunnyLock",
     "EmbedRouter",
+    "RollingMetrics",
 ]

@@ -147,7 +147,7 @@ async def _report_to_leader_loop() -> None:
                     probe=False,
                     hostname=HOSTNAME,
                     role='api',
-                    metrics={},
+                    metrics=[],
                     loaded_models=[],
                     load_models=False,
                     at_capacity=False,

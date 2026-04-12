@@ -13,13 +13,13 @@
  */
 
 import { mapValues } from '../runtime';
-import type { VectorMetrics } from './VectorMetrics';
+import type { NodeMetricSeries } from './NodeMetricSeries';
 import {
-    VectorMetricsFromJSON,
-    VectorMetricsFromJSONTyped,
-    VectorMetricsToJSON,
-    VectorMetricsToJSONTyped,
-} from './VectorMetrics';
+    NodeMetricSeriesFromJSON,
+    NodeMetricSeriesFromJSONTyped,
+    NodeMetricSeriesToJSON,
+    NodeMetricSeriesToJSONTyped,
+} from './NodeMetricSeries';
 
 /**
  * Snapshot of a single cluster node as last reported to the leader.
@@ -100,11 +100,11 @@ export interface NodeView {
      */
     loaded_models?: Array<string>;
     /**
-     * Per-vector-type embedding metrics for this node; empty for API nodes
-     * @type {Array<VectorMetrics>}
+     * Metric series for this node; empty for API nodes
+     * @type {Array<NodeMetricSeries>}
      * @memberof NodeView
      */
-    metrics?: Array<VectorMetrics>;
+    metrics?: Array<NodeMetricSeries>;
 }
 
 /**
@@ -142,7 +142,7 @@ export function NodeViewFromJSONTyped(json: any, ignoreDiscriminator: boolean): 
         'total_vram_gb': json['total_vram_gb'] == null ? undefined : json['total_vram_gb'],
         'free_vram_gb': json['free_vram_gb'] == null ? undefined : json['free_vram_gb'],
         'loaded_models': json['loaded_models'] == null ? undefined : json['loaded_models'],
-        'metrics': json['metrics'] == null ? undefined : ((json['metrics'] as Array<any>).map(VectorMetricsFromJSON)),
+        'metrics': json['metrics'] == null ? undefined : ((json['metrics'] as Array<any>).map(NodeMetricSeriesFromJSON)),
     };
 }
 
@@ -169,7 +169,7 @@ export function NodeViewToJSONTyped(value?: NodeView | null, ignoreDiscriminator
         'total_vram_gb': value['total_vram_gb'],
         'free_vram_gb': value['free_vram_gb'],
         'loaded_models': value['loaded_models'],
-        'metrics': value['metrics'] == null ? undefined : ((value['metrics'] as Array<any>).map(VectorMetricsToJSON)),
+        'metrics': value['metrics'] == null ? undefined : ((value['metrics'] as Array<any>).map(NodeMetricSeriesToJSON)),
     };
 }
 

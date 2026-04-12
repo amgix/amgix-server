@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 
@@ -8,8 +8,8 @@ class MetricsPayload(BaseModel):
     query_view: bool = False
     hostname: str
     role: Optional[str] = None
-    metrics: Optional[Dict[str, Dict[str, Dict[str, Union[float, int]]]]] = None
-    loaded_models: Optional[List[Tuple[str, float]]] = None
+    metrics: Optional[List["NodeMetricSeries"]] = None
+    loaded_models: Optional[List[Tuple[List[str], float]]] = None
     load_models: Optional[bool] = None
     at_capacity: Optional[bool] = None
     total_ram_gb: Optional[float] = None
@@ -20,22 +20,28 @@ class MetricsPayload(BaseModel):
     gpu_available: Optional[bool] = None
 
 
-class WindowMetrics(BaseModel):
-    """Embedding throughput and latency stats for a single time window."""
-    rps: float = Field(..., description="Requests per second over this window")
-    avg_ms: float = Field(..., description="Average local inference latency in milliseconds over this window")
-    n: int = Field(..., description="Number of requests observed in this window")
-    e2e_avg_ms: Optional[float] = Field(default=None, description="Average end-to-end latency in milliseconds (originating node only; null on pure serving nodes)")
+class WindowSample(BaseModel):
+    """Aggregated value and sample count for a single rolling window."""
+    value: float = Field(..., description="Aggregated value (rate/sec, average, or sum depending on the metric)")
+    n: int = Field(..., description="Number of samples in this window")
 
 
-class VectorMetrics(BaseModel):
-    """Metrics for a single vector type (or model) on a node."""
-    type: str = Field(..., description="Vector type (e.g. dense_model, sparse_model, wmtr, trigrams)")
-    model: Optional[str] = Field(default=None, description="Model name for transformer-based types; null for rule-based types")
-    revision: Optional[str] = Field(default=None, description="Model revision/commit hash; null if not specified or not applicable")
-    windows: Dict[int, WindowMetrics] = Field(
+class NodeMetricSeries(BaseModel):
+    """
+    One metric stream on a node with rolling-window snapshots.
+
+    key[0] is the metric name (e.g. 'batches', 'inference_ms', 'inference_origin_ms', 'hops').
+    key[1:] are optional dimensions (e.g. vector type, model name, revision).
+    windows are keyed by window size in seconds.
+    """
+    key: List[str] = Field(..., description="Compound key: [metric_name, *dimensions]")
+    windows: Dict[int, WindowSample] = Field(
         default_factory=dict,
-        description="Per-window metrics keyed by window size in seconds (5, 30, 60, 300)"
+        description="Rolling-window snapshots keyed by window size in seconds",
+    )
+    last_seen: Optional[float] = Field(
+        default=None,
+        description="UTC timestamp (time.time()) of the most recent sample for this series",
     )
 
 
@@ -56,9 +62,9 @@ class NodeView(BaseModel):
         default_factory=list,
         description="Names of models currently loaded on this node (format: name or name:revision)"
     )
-    metrics: List[VectorMetrics] = Field(
+    metrics: List[NodeMetricSeries] = Field(
         default_factory=list,
-        description="Per-vector-type embedding metrics for this node; empty for API nodes"
+        description="Metric series for this node; empty for API nodes",
     )
 
 

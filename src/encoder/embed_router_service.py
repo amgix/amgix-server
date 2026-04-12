@@ -1,24 +1,24 @@
-import ast
 import asyncio
 from logging import Logger
 import math
 import os
 import psutil
 import time
-from collections import defaultdict, deque
+from collections import defaultdict
 from aiorwlock import RWLock
 
 from aio_pika import RobustQueue
 from src.core.common.cache import AMGIXCache
 from src.core.common.constants import RPC_TIMEOUT_SECONDS, WMTR_DEFAULT_TRIGRAM_WEIGHT
 from src.core.common.embed_router import EmbedRouter
+from src.core.common.rolling_metrics import RollingMetrics
 from src.core.models.vector import VectorConfigInternal
 from src.core.vector import VectorBase, TrigramsVector, FullTextVector, WhiteSpaceVector, WMTRVector, DenseModelVector, SparseModelVector, CustomDenseVector, CustomSparseVector
 from src.core.common.bunny_talk import BunnyTalk
 from src.core.database.base import DatabaseBase
 from src.core.common.enums import VectorType
 from typing import Dict, List, Tuple, Type, Union, Optional
-from src.core.models.cluster import ClusterView, MetricsPayload, NodeView, VectorMetrics, WindowMetrics
+from src.core.models.cluster import ClusterView, MetricsPayload, NodeMetricSeries, NodeView, WindowSample
 from .encoder_base import EncoderBase
 
 
@@ -54,7 +54,11 @@ OPEN_EMBED_QUEUE_NAME = "embed-open"
 LEADER_QUEUE_NAME = "embed-leader"
 
 # Metrics aggregation windows in seconds
-METRIC_WINDOWS = [5, 30, 60, 300]
+METRIC_WINDOWS = [10, 30, 60]
+# Subset of METRIC_WINDOWS exposed in the cluster view API response
+CLUSTER_VIEW_WINDOWS = {30, 60}
+# How long a loaded model with zero traffic is kept before being unloaded
+MODEL_IDLE_GRACE_SECONDS = 300
 METRICS_LOOP_INTERVAL_SECONDS = 5
 METRICS_NODE_EXPIRY_SECONDS = 30
 TARGET_AVAILABLITY_PCT = 5 # percentage of total capacity
@@ -149,10 +153,8 @@ class EmbedRouterService(EncoderBase):
 
         self._at_model_capacity(force_check=True)
 
-        # Per-model metrics storage
-        # { model_key: deque[tuple[float, float]] }  # (timestamp, service_ms)
-        self._metrics: Dict[str, deque] = {}
-        self._cluster_metrics: Dict[str, Dict[Tuple[VectorType, str, str], Dict]] = {}
+        self._rolling = RollingMetrics(windows=METRIC_WINDOWS)
+        self._cluster_metrics: Dict[str, Dict[Tuple[str, str, str], Dict]] = {}
         self._cluster_view: Dict[str, NodeView] = {}
 
         self.model_locks: defaultdict[str, RWLock] = defaultdict(RWLock)
@@ -218,7 +220,7 @@ class EmbedRouterService(EncoderBase):
                             # yes, just embed locally
                             self.logger.debug(f"Router: known model {model_key}. Embedding locally.")
 
-                            result = self.embed(model_key, vector_config, docs)
+                            result = self.embed(model_key, vector_config, docs, hops)
 
                         else:
                             # get model specific queue name
@@ -284,6 +286,7 @@ class EmbedRouterService(EncoderBase):
                     model_key,
                     vector_config,
                     docs,
+                    hops,
                     avgdls=avgdls,
                     trigram_weight=trigram_weight,
                 )
@@ -297,80 +300,23 @@ class EmbedRouterService(EncoderBase):
             e2e_ms = (end_ns - start_ns) / 1_000_000.0
 
             if hops == 0:
-                self._update_metrics(model_key, inference_ms=None, e2e_ms=e2e_ms)
+                n_docs = len(docs)
+                self._rolling.record_rate(("batches_origin", *model_key))
+                self._rolling.record_rate(("docs_origin", *model_key), n_docs)
+                self._rolling.record_avg(("inference_origin_ms", *model_key), e2e_ms)
+                if n_docs > 0:
+                    self._rolling.record_avg(("inference_origin_ms_per_doc", *model_key), e2e_ms / n_docs)
+                if result is None:
+                    self._rolling.record_sum(("inference_origin_errors", *model_key))
 
         return result
 
-    def _update_metrics(self, model_key: str, inference_ms: Optional[float], e2e_ms: Optional[float]) -> None:
-        """Record a single sample. Pass inference_ms when serving locally, e2e_ms when originating."""
-        try:
-            now_s = time.time()
-            if model_key not in self._metrics:
-                self._metrics[model_key] = deque()
-            self._metrics[model_key].append((now_s, inference_ms, e2e_ms))
-        except Exception as e:
-            self.logger.error(f"Router: Error updating metrics for {model_key}: {e}")
-
-    def _get_metrics_snapshots(self) -> Dict[str, Dict[str, Dict[str, Union[float, int]]]]:
-        """Refresh and return current metrics snapshots for all models."""
-        now_s = time.time()
-        processed_metrics = {}
-
-        cutoff = now_s - max(METRIC_WINDOWS)
-        keys_to_delete = []
-
-        for model_key, samples in self._metrics.items():
-
-            # Prune old data
-            while samples and samples[0][0] < cutoff:
-                samples.popleft()
-
-            # Mark empty deques for deletion
-            if not samples:
-                keys_to_delete.append(model_key)
-                continue
-
-            # Recalculate snapshots for all windows
-            snapshots = {}
-            for win in METRIC_WINDOWS:
-                win_cut = now_s - win
-                count = 0
-                total_inference_ms = 0.0
-                inference_count = 0
-                total_e2e_ms = 0.0
-                e2e_count = 0
-
-                for ts, inference_ms, e2e_ms in reversed(samples):
-                    if ts < win_cut:
-                        break
-                    count += 1
-                    if inference_ms is not None:
-                        total_inference_ms += inference_ms
-                        inference_count += 1
-                    if e2e_ms is not None:
-                        total_e2e_ms += e2e_ms
-                        e2e_count += 1
-
-                rps = count / win if win > 0 else 0.0
-                avg_ms = (total_inference_ms / inference_count) if inference_count > 0 else 0.0
-                snap: Dict[str, Union[float, int]] = {'rps': rps, 'avg_ms': avg_ms, 'n': count}
-                if e2e_count > 0:
-                    snap['e2e_avg_ms'] = total_e2e_ms / e2e_count
-                snapshots[str(win)] = snap
-
-            processed_metrics[model_key] = snapshots
-
-        # Remove empty deques after iteration
-        for key in keys_to_delete:
-            del self._metrics[key]
-
-        return processed_metrics
-
     def embed(
         self,
-        model_key: str,
+        model_key: tuple[str, str, str],
         vector_config: VectorConfigInternal,
         docs: List[str],
+        hops: int,
         avgdls: Optional[List[float]] = None,
         trigram_weight: float = WMTR_DEFAULT_TRIGRAM_WEIGHT,
     ) -> Union[List[List[float]], List[Tuple[List[int], List[float]]]]:
@@ -388,8 +334,14 @@ class EmbedRouterService(EncoderBase):
                 trigram_weight=trigram_weight,
             )
 
+        n_docs = len(docs)
         inference_ms = (time.monotonic_ns() - start_ns) / 1_000_000.0
-        self._update_metrics(model_key, inference_ms=inference_ms, e2e_ms=None)
+        self._rolling.record_rate(("batches", *model_key))
+        self._rolling.record_rate(("docs", *model_key), n_docs)
+        self._rolling.record_avg(("inference_ms", *model_key), inference_ms)
+        if n_docs > 0:
+            self._rolling.record_avg(("inference_ms_per_doc", *model_key), inference_ms / n_docs)
+        self._rolling.record_avg(("hops", *model_key), hops)
 
         return result
 
@@ -437,10 +389,8 @@ class EmbedRouterService(EncoderBase):
             self.logger.warning(f"Failed to load trusted organizations: {e}. Using empty set.")
             return set()
 
-    def _get_model_key(self, vector_config: VectorConfigInternal) -> str:
-        """Get the key for the model as a tuple (type, model, revision)."""
-
-        return str((vector_config.type, vector_config.model, vector_config.revision))
+    def _get_model_key(self, vector_config: VectorConfigInternal) -> tuple[str, str, str]:
+        return (vector_config.type, vector_config.model or "", vector_config.revision or "")
 
     def _get_model_queue_name(self, vector_config: VectorConfigInternal) -> str:
         """Get the queue name for the model."""
@@ -477,9 +427,9 @@ class EmbedRouterService(EncoderBase):
 
         return self.at_capacity
 
-    async def _own_the_model(self, 
+    async def _own_the_model(self,
                             vector_config: VectorConfigInternal,
-                            model_key: str,
+                            model_key: tuple[str, str, str],
                             queue_name: str,
                             docs: List[str],
                             hops: int,
@@ -490,13 +440,13 @@ class EmbedRouterService(EncoderBase):
         async with self.model_load_locks[model_key]:
             if model_key in self.local_models:
                 self.logger.debug(f"Router: {model_key} was loaded locally while waiting. Embedding locally.")
-                return self.embed(model_key, vector_config, docs)
+                return self.embed(model_key, vector_config, docs, hops)
 
             # Use distributed lock to prevent multiple workers from loading the same model
             async with self.lock_client.acquire(f"{queue_name}", timeout=RPC_TIMEOUT_SECONDS):
                 if model_key in self.local_models:
                     self.logger.debug(f"Router: {model_key} was loaded locally while waiting for distributed lock. Embedding locally.")
-                    return self.embed(model_key, vector_config, docs)
+                    return self.embed(model_key, vector_config, docs, hops)
 
                 # Double-check if someone else loaded the model while we were waiting for the lock
                 try:
@@ -532,7 +482,7 @@ class EmbedRouterService(EncoderBase):
                         # Still no route, we can safely load the model
                         self.logger.debug(f"Router: Confirmed no one has {model_key}. Loading locally.")
                         
-                    result = self.embed(model_key, vector_config, docs)
+                    result = self.embed(model_key, vector_config, docs, hops)
 
                     # successfully embedded, we can start listening for requests for this model
                     self.logger.debug(f"Router: Listening for requests for model {model_key}.")
@@ -583,13 +533,15 @@ class EmbedRouterService(EncoderBase):
                 # clear the queue info
                 self.embed_open = None
 
-    async def _node_signal(self, load: bool, model_key: str) -> None:
+    async def _node_signal(self, load: bool, model_key: List[str]) -> None:
         """Listen for node signals."""
 
         try:
             self.logger.info(f"Router: Received node signal (load: {load}, model_key: {model_key})")
 
-            type, model, revision = ast.literal_eval(model_key)
+            type_str, model, revision_str = model_key
+            mk = (type_str, model, revision_str)
+            revision = revision_str or None
 
             if not model:
                 self.logger.error(f"Router: Signal received but no model name in model_key: {model_key}")
@@ -597,33 +549,33 @@ class EmbedRouterService(EncoderBase):
             
             if load:
                 if self.at_capacity:
-                    self.logger.info(f"Router: At capacity. Ignoring load signal for {model_key}.")
+                    self.logger.info(f"Router: At capacity. Ignoring load signal for {mk}.")
                     return
                 
-                config = VectorConfigInternal(name="dummy",type=type, model=model, revision=revision)
+                config = VectorConfigInternal(name="dummy", type=type_str, model=model, revision=revision)
                 queue_name = self._get_model_queue_name(config)
 
                 async with self.metrics_lock.writer:
-                    async with self.model_locks[model_key].writer:
-                        await self._own_the_model(config, model_key, queue_name, ["x"], 0, force_load=True)
+                    async with self.model_locks[mk].writer:
+                        await self._own_the_model(config, mk, queue_name, ["x"], 0, force_load=True)
 
-                self.logger.info(f"Router: Loaded model {model_key}.")
+                self.logger.info(f"Router: Loaded model {mk}.")
             else:
                 # Get the queue info and cancel consumer
-                if model_key not in self.local_models:
-                    self.logger.warning(f"Router: Model {model_key} not found in local_models. Skipping.")
+                if mk not in self.local_models:
+                    self.logger.warning(f"Router: Model {mk} not found in local_models. Skipping.")
                     return
 
                 async with self.metrics_lock.writer:
-                    async with self.model_locks[model_key].writer:
-                        queue, consumer_tag, _ = self.local_models[model_key]
+                    async with self.model_locks[mk].writer:
+                        queue, consumer_tag, _ = self.local_models[mk]
                         
                         # Cancel the consumer to stop listening for requests
-                        self.logger.debug(f"Router: Cancelling consumer for {model_key}")
+                        self.logger.debug(f"Router: Cancelling consumer for {mk}")
                         await self.bunny_talk.cancel_listener(queue, consumer_tag)
 
                         # Invalidate known_queues cache for this queue
-                        config = VectorConfigInternal(name="dummy", type=type, model=model, revision=revision)
+                        config = VectorConfigInternal(name="dummy", type=type_str, model=model, revision=revision)
                         queue_name = self._get_model_queue_name(config)
                         try:
                             del self.known_queues[queue_name]
@@ -631,10 +583,10 @@ class EmbedRouterService(EncoderBase):
                             self.logger.debug(f"Router: known_queues had no entry for {queue_name} during unload.")
 
                         # Unload the model from vector class cache
-                        self._instances[type].unload_model(model, revision)
+                        self._instances[type_str].unload_model(model, revision)
 
                         # Remove from local_models dict
-                        self.local_models.pop(model_key, None)
+                        self.local_models.pop(mk, None)
 
                         # if we are not at capacity, we need to start listening for requests on open queues
                         if not self._at_model_capacity(force_check=True):
@@ -659,34 +611,44 @@ class EmbedRouterService(EncoderBase):
         hostname = payload.hostname
         now = time.time()
 
+        loaded_models_list = payload.loaded_models or []
+        incoming_metrics = payload.metrics or []
+
         if payload.role != "api":
+            # Build _cluster_metrics in the shape rebalancing expects:
+            # {model_key_tuple: {str(win): {"rps": float, "n": int}}}
+            rebalance_metrics: Dict[tuple, Dict[str, Dict[str, float]]] = {}
+            model_last_seen: Dict[tuple, float] = {}
+            for series in incoming_metrics:
+                if series.key[0] == "batches_origin" and len(series.key) == 4:
+                    mk = tuple(series.key[1:])
+                    rebalance_metrics[mk] = {
+                        str(win): {"rps": sample.value, "n": sample.n}
+                        for win, sample in series.windows.items()
+                    }
+                    if series.last_seen is not None:
+                        model_last_seen[mk] = series.last_seen
             self._cluster_metrics[hostname] = {
-                'metrics': {ast.literal_eval(k): v for k, v in payload.metrics.items()},
+                'metrics': rebalance_metrics,
+                'model_last_seen': model_last_seen,
                 'loaded_models': [
-                    (ast.literal_eval(model_key), load_timestamp)
-                    for model_key, load_timestamp in payload.loaded_models
+                    (tuple(mk_list), load_timestamp)
+                    for mk_list, load_timestamp in loaded_models_list
                 ],
                 'load_models': bool(payload.load_models),
-                'capacity': 0 if payload.at_capacity else 1 if len(payload.loaded_models) > 0 else 2,
+                'capacity': 0 if payload.at_capacity else 1 if len(loaded_models_list) > 0 else 2,
                 'last_seen': now,
             }
             self.logger.debug(
                 f"Router: Received metrics from {hostname} (load_models={payload.load_models}): "
-                f"metrics: {len(payload.metrics)}, models: {len(payload.loaded_models)}, "
+                f"metrics: {len(incoming_metrics)}, models: {len(loaded_models_list)}, "
                 f"capacity: {self._cluster_metrics[hostname]['capacity']}"
             )
 
-        loaded_model_keys = {model_key_str for model_key_str, _ in payload.loaded_models}
-        all_metric_keys = loaded_model_keys | payload.metrics.keys()
-
-        vector_metrics = []
         loaded_model_strings = []
-        for model_key_str in all_metric_keys:
-            model_type, model_name, revision = ast.literal_eval(model_key_str)
-            raw_windows = payload.metrics.get(model_key_str, {})
-            windows = {int(win): WindowMetrics(**data) for win, data in raw_windows.items()}
-            vector_metrics.append(VectorMetrics(type=model_type, model=model_name, revision=revision, windows=windows))
-            if model_key_str in loaded_model_keys and model_name:
+        for mk_list, _ in loaded_models_list:
+            if len(mk_list) >= 3 and mk_list[1]:
+                model_name, revision = mk_list[1], mk_list[2]
                 label = f"{model_name}:{revision}" if revision else model_name
                 loaded_model_strings.append(label)
 
@@ -702,7 +664,10 @@ class EmbedRouterService(EncoderBase):
             total_vram_gb=payload.total_vram_gb,
             free_vram_gb=payload.free_vram_gb,
             loaded_models=sorted(loaded_model_strings),
-            metrics=vector_metrics,
+            metrics=[
+                NodeMetricSeries(key=s.key, windows={w: v for w, v in s.windows.items() if w in CLUSTER_VIEW_WINDOWS})
+                for s in incoming_metrics
+            ],
         )
 
     def _cleanup_stale_metrics(self) -> None:
@@ -766,12 +731,18 @@ class EmbedRouterService(EncoderBase):
 
             # 2. Send metrics to leader
             try:
-                # Get fresh snapshots for all models
-                processed_metrics = self._get_metrics_snapshots()
+                wire_metrics = [
+                    NodeMetricSeries(
+                        key=list(k),
+                        windows={win: WindowSample(value=d["value"], n=d["n"]) for win, d in windows.items()},
+                        last_seen=self._rolling.last_seen(k),
+                    )
+                    for k, windows in self._rolling.snapshot().items()
+                ]
 
                 async with self.metrics_lock.reader:
                     loaded_models = [
-                        (model_key, load_timestamp)
+                        (list(model_key), load_timestamp)
                         for model_key, (queue, consumer_tag, load_timestamp) in self.local_models.items()
                     ]
 
@@ -779,7 +750,7 @@ class EmbedRouterService(EncoderBase):
                     probe=False,
                     hostname=HOSTNAME,
                     role=AMGIX_ENCODER_ROLE,
-                    metrics=processed_metrics,
+                    metrics=wire_metrics,
                     loaded_models=loaded_models,
                     load_models=self.load_models,
                     at_capacity=self._at_model_capacity(),
@@ -814,11 +785,11 @@ class EmbedRouterService(EncoderBase):
         start_ns = time.monotonic_ns()
         self.logger.debug(f"Router: Rebalancing models --------------------------------")
 
-        async def _send_signal(hostname: str, model_key: Tuple[VectorType, str, str], load: bool) -> None:
+        async def _send_signal(hostname: str, model_key: tuple[str, str, str], load: bool) -> None:
             node_queue_name = f"{NODE_QUEUE_PREFIX}-{hostname}"
             try:
                 self.logger.debug(f"Router: Sending signal to {hostname} for {model_key}: load={load}")
-                await self.bunny_talk.talk(node_queue_name, load=load, model_key=str(model_key), start_trace=True)
+                await self.bunny_talk.talk(node_queue_name, load=load, model_key=list(model_key), start_trace=True)
             except Exception as e:
                 self.logger.warning(f"Router: Failed to send signal to {hostname} for {model_key} (load={load}): {e}")
 
@@ -845,31 +816,44 @@ class EmbedRouterService(EncoderBase):
                         for model_tuple in host_data['loaded_models'] if host_data['loaded_models'])
 
         max_window = max(METRIC_WINDOWS)
+
+        # Aggregate batches_origin RPS and last_seen cluster-wide per model key.
+        # Index nodes record RPS but have no loaded models; query nodes load models but don't
+        # originate requests. We must sum across all nodes to get total demand per model.
+        cluster_rps: dict[tuple, dict[str, float]] = {}
+        cluster_last_seen: dict[tuple, float] = {}
+        for host_data in self._cluster_metrics.values():
+            for mk, windows in host_data['metrics'].items():
+                if mk not in cluster_rps:
+                    cluster_rps[mk] = {}
+                for win_str, d in windows.items():
+                    cluster_rps[mk][win_str] = cluster_rps[mk].get(win_str, 0.0) + d.get('rps', 0.0)
+            for mk, ts in host_data.get('model_last_seen', {}).items():
+                if ts > cluster_last_seen.get(mk, 0.0):
+                    cluster_last_seen[mk] = ts
+
         total_rps = 0.0
         
         models = {}
         for model_key in model_list:
+            metrics = cluster_rps.get(model_key, {})
+
+            # Weighted RPS across all windows (shorter windows get higher weight)
+            weighted_rps = 0.0
+            for window in METRIC_WINDOWS:
+                window_rps = metrics.get(str(window), 0.0)
+                weight = max_window / window
+                weighted_rps += window_rps * weight
+
             models[model_key] = {
                 'hosts': sorted([(k, v['capacity'], model_tuple[1]) for k, v in self._cluster_metrics.items() 
                                for model_tuple in v['loaded_models']
                                if model_tuple[0] == model_key], key=lambda x: x[1]),
                 'host_count': 0,
-                'weighted_rps': 0.0,
+                'weighted_rps': weighted_rps,
                 'proportion': 0.0,
             }
-
-            for host in self._cluster_metrics.keys():
-                metrics = self._cluster_metrics[host]['metrics'].get(model_key, {})
-
-                # Weighted RPS across all windows (shorter windows get higher weight)
-                weighted_rps = 0.0
-                for window in METRIC_WINDOWS:
-                    window_rps = metrics.get(str(window), {}).get('rps', 0.0)
-                    weight = max_window / window  # 600/5, 600/30, etc.
-                    weighted_rps += window_rps * weight
-                
-                models[model_key]['weighted_rps'] += weighted_rps
-                total_rps += weighted_rps
+            total_rps += weighted_rps
 
         # Track best candidates for ST family
         best_add_st = None
@@ -903,16 +887,20 @@ class EmbedRouterService(EncoderBase):
                     second_best_remove_score_st = remove_score
 
         # unload models that have no rps
+        current_time = time.time()
         for model_key, data in [(k, v) for k, v in models.items() if v['weighted_rps'] == 0]:
+            last_active = cluster_last_seen.get(model_key, 0.0)
+            idle_seconds = current_time - last_active
+            if idle_seconds <= MODEL_IDLE_GRACE_SECONDS:
+                continue
             if data['host_count'] > 1:
                 hostname = data['hosts'][0][0]
-                self.logger.debug(f"Router: Unloading model {model_key} from {hostname} because it has no rps.")
+                self.logger.debug(f"Router: Unloading model {model_key} from {hostname} (idle {int(idle_seconds)}s, no rps).")
                 await _send_signal(hostname, model_key, False)
             elif data['host_count'] == 1:
-                current_time = time.time()
                 hostname, _, load_timestamp = data['hosts'][0]
-                if current_time - load_timestamp > max_window:
-                    self.logger.debug(f"Router: Unloading model {model_key} from {hostname} because it was loaded {int(current_time - load_timestamp)} seconds ago and has no rps.")
+                if current_time - load_timestamp > MODEL_IDLE_GRACE_SECONDS:
+                    self.logger.debug(f"Router: Unloading model {model_key} from {hostname} (idle {int(idle_seconds)}s, loaded {int(current_time - load_timestamp)}s ago, no rps).")
                     await _send_signal(hostname, model_key, False)
 
         # load/uload model that have rps per family per direction.

@@ -2,9 +2,10 @@ import {
   ResponseError,
   type AmgixApi,
   type ClusterView,
+  type NodeMetricSeries,
   type NodeView,
   type ReadyResponse,
-  type VectorMetrics,
+  type WindowSample,
 } from '@amgix/amgix-client'
 import {
   CategoryScale,
@@ -80,27 +81,32 @@ function clusterThWithHelp(label: string, tip: string): JQuery<HTMLElement> {
 
 function clusterBatchesColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Total embed batches on this node in the last ${w}s.`
+  return `Embed requests that started on this node, sample count in the last ${w}s.`
 }
 
 function clusterRateColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Embed batches per second, averaged over the last ${w}s.`
+  return `Documents embedded per second that started on this node, over the last ${w}s.`
 }
 
 function clusterInferMsColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Local inference time per batch on this node (weighted by batch count per vector type), over the last ${w}s.`
+  return `Local model inference time per document (weighted by document count per model), over the last ${w}s.`
 }
 
 function clusterPipeMsColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Routing plus embed pipeline time per batch on this node (originating node only), over the last ${w}s.`
+  return `End-to-end time per document from this node (including RPC to other encoders), over the last ${w}s.`
+}
+
+function clusterErrPerSecColumnHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Failed embed requests that started on this node, per second, over the last ${w}s.`
 }
 
 function clusterChartHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Cluster-wide inference and pipeline latency over time, per batch, ${w}s rolling window.`
+  return `Cluster-wide inference and pipeline latency over time, per document, ${w}s rolling window.`
 }
 
 type HomeReadinessKey = 'database' | 'rabbitmq' | 'index' | 'query'
@@ -184,8 +190,7 @@ function formatGpuStatus(node: NodeView): string {
 }
 
 function formatGbForCell(n: number): string {
-  const s = n.toFixed(1)
-  return s.endsWith('.0') ? String(Math.round(n)) : s
+  return n.toFixed(1)
 }
 
 function formatRamFreeTotalGb(node: NodeView): string {
@@ -220,18 +225,47 @@ function formatVramFreeTotalGb(node: NodeView): string {
 
 const clusterMetricsWindowKey = String(CLUSTER_METRICS_WINDOW_SEC)
 
+function getNodeMetricWindowSample(s: NodeMetricSeries): WindowSample | undefined {
+  const w = s.windows
+  if (w == null) {
+    return undefined
+  }
+  return w[clusterMetricsWindowKey] ?? w[CLUSTER_METRICS_WINDOW_SEC]
+}
+
+/** Stable merge key for dimensions key[1..3] (vector type, model, revision). */
+function seriesDimKey(s: NodeMetricSeries): string {
+  const k = s.key
+  if (k.length < 4) {
+    return k.join('\0')
+  }
+  return `${k[1]}\0${k[2] ?? ''}\0${k[3] ?? ''}`
+}
+
+function seriesDisplayLabel(s: NodeMetricSeries): string {
+  const k = s.key
+  const model = (k[2] ?? '').trim()
+  const revision = (k[3] ?? '').trim()
+  if (model !== '') {
+    return revision !== '' ? `${model} (${revision})` : model
+  }
+  return k[1] ?? ''
+}
+
+/** Cluster grid: fixed decimal places for rates (docs/s, err/s). */
 function formatClusterRpsCell(rps: number): string {
   if (!Number.isFinite(rps)) {
     return ''
   }
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 0 }).format(rps)
+  return new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(rps)
 }
 
+/** Cluster grid and chart: fixed decimal places for latency (ms). */
 function formatClusterAvgMsCell(ms: number): string {
   if (!Number.isFinite(ms)) {
     return ''
   }
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 0 }).format(ms)
+  return new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(ms)
 }
 
 function latestFiniteSeriesY(data: ReadonlyArray<{ y?: number | null }>): number | null {
@@ -258,61 +292,82 @@ function clusterChartLegendParts(
   return { labelStem: `${baseLabel}: `, valuePart: `${formatClusterAvgMsCell(y)} ms` }
 }
 
-/** Sum batch rates and counts across vector types; latency fields are n-weighted averages over the window. */
-function formatEmbeddingMetricsCells(node: NodeView): { rps: string; avgMs: string; e2eAvgMs: string; requests: string } {
+/**
+ * Table cells: batches_origin (count), docs_origin (rate),
+ * inference_ms_per_doc and inference_origin_ms_per_doc (latency),
+ * inference_origin_errors (sum in window → per-second rate).
+ */
+function formatEmbeddingMetricsCells(node: NodeView): {
+  rps: string
+  avgMs: string
+  e2eAvgMs: string
+  requests: string
+  errPerSec: string
+} {
   const list = node.metrics ?? []
-  let sawWindow = false
-  let totalN = 0
-  let sumRps = 0
+  let sawAny = false
+  let totalBatches = 0
+  let sumDocsRps = 0
   let weightedMs = 0
-  let weightedE2eMs = 0
-  let e2eN = 0
-  for (const vm of list) {
-    const wm = vm.windows?.[clusterMetricsWindowKey]
-    if (wm == null) {
+  let msN = 0
+  let weightedOriginMs = 0
+  let originN = 0
+  let sumErrorsInWindow = 0
+  for (const s of list) {
+    const name = s.key[0]
+    const ws = getNodeMetricWindowSample(s)
+    if (ws == null) {
       continue
     }
-    sawWindow = true
-    const n = Number(wm.n)
-    const rps = wm.rps
-    const avgMs = wm.avg_ms
-    if (Number.isFinite(rps)) {
-      sumRps += rps
-    }
-    if (Number.isFinite(n) && n > 0) {
-      const ni = Math.trunc(n)
-      totalN += ni
-      if (Number.isFinite(avgMs)) {
-        weightedMs += avgMs * ni
+    const n = Number(ws.n)
+    const v = Number(ws.value)
+    if (name === 'batches_origin') {
+      sawAny = true
+      if (Number.isFinite(n) && n > 0) {
+        totalBatches += Math.trunc(n)
       }
-      const e2e = (wm as unknown as Record<string, unknown>)['e2e_avg_ms'] as number | null | undefined
-      if (e2e != null && Number.isFinite(e2e)) {
-        weightedE2eMs += e2e * ni
-        e2eN += ni
+    } else if (name === 'docs_origin') {
+      sawAny = true
+      if (Number.isFinite(v)) {
+        sumDocsRps += v
+      }
+    } else if (name === 'inference_ms_per_doc') {
+      if (Number.isFinite(n) && n > 0) {
+        sawAny = true
+        const ni = Math.trunc(n)
+        if (Number.isFinite(v)) {
+          weightedMs += v * ni
+          msN += ni
+        }
+      }
+    } else if (name === 'inference_origin_ms_per_doc') {
+      if (Number.isFinite(n) && n > 0) {
+        sawAny = true
+        const ni = Math.trunc(n)
+        if (Number.isFinite(v)) {
+          weightedOriginMs += v * ni
+          originN += ni
+        }
+      }
+    } else if (name === 'inference_origin_errors') {
+      sawAny = true
+      if (Number.isFinite(v)) {
+        sumErrorsInWindow += v
       }
     }
   }
-  if (!sawWindow) {
-    return { rps: '', avgMs: '', e2eAvgMs: '', requests: '' }
+  if (!sawAny) {
+    return { rps: '', avgMs: '', e2eAvgMs: '', requests: '', errPerSec: '' }
   }
+  const errPerSec =
+    CLUSTER_METRICS_WINDOW_SEC > 0 ? sumErrorsInWindow / CLUSTER_METRICS_WINDOW_SEC : 0
   return {
-    rps: formatClusterRpsCell(sumRps),
-    avgMs: totalN > 0 ? formatClusterAvgMsCell(weightedMs / totalN) : '',
-    e2eAvgMs: e2eN > 0 ? formatClusterAvgMsCell(weightedE2eMs / e2eN) : '',
-    requests: String(totalN),
+    rps: formatClusterRpsCell(sumDocsRps),
+    avgMs: msN > 0 ? formatClusterAvgMsCell(weightedMs / msN) : '',
+    e2eAvgMs: originN > 0 ? formatClusterAvgMsCell(weightedOriginMs / originN) : '',
+    requests: String(totalBatches),
+    errPerSec: formatClusterRpsCell(errPerSec),
   }
-}
-
-function vectorMetricsMergeKey(vm: VectorMetrics): string {
-  return `${vm.type}\0${vm.model ?? ''}\0${vm.revision ?? ''}`
-}
-
-function vectorMetricsDisplayLabel(vm: VectorMetrics): string {
-  if (vm.model) {
-    const rev = vm.revision ? ` (${vm.revision})` : ''
-    return `${vm.model}${rev}`
-  }
-  return vm.type
 }
 
 const LEGACY_CHART_TYPE_MODEL_PREFIX = /^(dense_model|sparse_model):\s*(.+)$/i
@@ -367,8 +422,11 @@ function aggregateClusterThroughput(view: ClusterView | null): ClusterThroughput
   let weightedE2eN = 0
 
   for (const node of Object.values(view.nodes)) {
-    for (const vm of node.metrics ?? []) {
-      const wm = vm.windows?.[clusterMetricsWindowKey]
+    for (const s of node.metrics ?? []) {
+      if (s.key[0] !== 'inference_ms_per_doc') {
+        continue
+      }
+      const wm = getNodeMetricWindowSample(s)
       if (wm == null) {
         continue
       }
@@ -377,23 +435,37 @@ function aggregateClusterThroughput(view: ClusterView | null): ClusterThroughput
         continue
       }
       const ni = Math.trunc(n)
-      const key = vectorMetricsMergeKey(vm)
-      const label = vectorMetricsDisplayLabel(vm)
+      const key = seriesDimKey(s)
+      const label = seriesDisplayLabel(s)
       let cur = byKey.get(key)
       if (!cur) {
         cur = { label, weightedMsSum: 0, nSum: 0 }
         byKey.set(key, cur)
       }
 
-      const avgMs = wm.avg_ms
+      const avgMs = Number(wm.value)
       if (Number.isFinite(avgMs)) {
         cur.weightedMsSum += avgMs * ni
         cur.nSum += ni
         weightedAvgSum += avgMs * ni
         weightedAvgN += ni
       }
-      const e2e = (wm as unknown as Record<string, unknown>)['e2e_avg_ms'] as number | null | undefined
-      if (e2e != null && Number.isFinite(e2e)) {
+    }
+    for (const s of node.metrics ?? []) {
+      if (s.key[0] !== 'inference_origin_ms_per_doc') {
+        continue
+      }
+      const wm = getNodeMetricWindowSample(s)
+      if (wm == null) {
+        continue
+      }
+      const n = Number(wm.n)
+      if (!Number.isFinite(n) || n <= 0) {
+        continue
+      }
+      const ni = Math.trunc(n)
+      const e2e = Number(wm.value)
+      if (Number.isFinite(e2e)) {
         weightedE2eSum += e2e * ni
         weightedE2eN += ni
       }
@@ -704,7 +776,7 @@ export class HomePanel extends DashboardPanel {
     const e2eLineColor = '#ea580c'
 
     const avgMsDataset = {
-      label: 'Inference Latency (per batch)',
+      label: 'Inference Latency',
       data: this.clusterThroughputHistory.map((pt) => ({
         x: pt.t,
         y: typeof pt.avgMs === 'number' && Number.isFinite(pt.avgMs) ? pt.avgMs : 0,
@@ -720,7 +792,7 @@ export class HomePanel extends DashboardPanel {
       spanGaps: false,
     }
     const e2eMsDataset = {
-      label: 'Pipeline Latency (per batch)',
+      label: 'Pipeline Latency',
       data: this.clusterThroughputHistory.map((pt) => ({
         x: pt.t,
         y: typeof pt.e2eMs === 'number' && Number.isFinite(pt.e2eMs) ? pt.e2eMs : 0,
@@ -739,7 +811,7 @@ export class HomePanel extends DashboardPanel {
     const perVectorDatasets = seriesKeys.map((key, i) => {
       const typeModel = normalizeVectorSeriesLabelForKey(key, this.clusterSeriesLabels.get(key))
       return {
-        label: `Inference Latency (${typeModel}) (per batch)`,
+        label: `Inference Latency (${typeModel})`,
         data: this.clusterThroughputHistory.map((pt) => {
           const y = pt.byKey.get(key)
           return {
@@ -931,7 +1003,7 @@ export class HomePanel extends DashboardPanel {
         $('<tr>').append(
           $('<td>', {
             class: 'dashboard-home-cluster-placeholder',
-            colspan: 12,
+            colspan: 13,
             text: 'Cluster view unavailable.',
           }),
         ),
@@ -944,7 +1016,7 @@ export class HomePanel extends DashboardPanel {
         $('<tr>').append(
           $('<td>', {
             class: 'dashboard-home-cluster-placeholder',
-            colspan: 12,
+            colspan: 13,
             text: 'No nodes in cluster view.',
           }),
         ),
@@ -973,6 +1045,7 @@ export class HomePanel extends DashboardPanel {
           $('<td>', { class: 'dashboard-home-v', text: m.rps }),
           $('<td>', { class: 'dashboard-home-v', text: m.avgMs }),
           $('<td>', { class: 'dashboard-home-v', text: m.e2eAvgMs }),
+          $('<td>', { class: 'dashboard-home-v', text: m.errPerSec }),
           $('<td>', { class: 'dashboard-home-v', text: formatLastSeen(node.last_seen) }),
         ),
       )
@@ -1097,7 +1170,7 @@ export class HomePanel extends DashboardPanel {
           }).append(
             $('<canvas>', {
               attr: { 'data-home-cluster-throughput-chart': '' },
-              'aria-label': `Cluster inference and pipeline latency over time, per batch, ${CLUSTER_METRICS_WINDOW_SEC}s rolling window`,
+              'aria-label': `Cluster inference and pipeline latency over time, per document, ${CLUSTER_METRICS_WINDOW_SEC}s rolling window`,
             }),
           ),
           $('<ul>', {
@@ -1113,7 +1186,7 @@ export class HomePanel extends DashboardPanel {
           $('<tr>').append(
             $('<th>', {
               class: 'dashboard-home-table-heading',
-              colspan: 12,
+              colspan: 13,
               text: 'Cluster Nodes',
             }),
           ),
@@ -1128,9 +1201,10 @@ export class HomePanel extends DashboardPanel {
             $('<th>', { text: 'RAM (free/total, GB)' }),
             $('<th>', { text: 'VRAM (free/total, GB)' }),
             clusterThWithHelp('Batches', clusterBatchesColumnHelpText()),
-            clusterThWithHelp('Rate/s', clusterRateColumnHelpText()),
-            clusterThWithHelp('Infer ms', clusterInferMsColumnHelpText()),
-            clusterThWithHelp('Pipe ms', clusterPipeMsColumnHelpText()),
+            clusterThWithHelp('Docs/s', clusterRateColumnHelpText()),
+            clusterThWithHelp('Infer ms/doc', clusterInferMsColumnHelpText()),
+            clusterThWithHelp('Pipe ms/doc', clusterPipeMsColumnHelpText()),
+            clusterThWithHelp('Err/s', clusterErrPerSecColumnHelpText()),
             $('<th>', { text: 'Last seen' }),
           ),
         )
