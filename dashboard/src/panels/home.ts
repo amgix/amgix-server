@@ -4,26 +4,103 @@ import {
   type ClusterView,
   type NodeView,
   type ReadyResponse,
+  type VectorMetrics,
 } from '@amgix/amgix-client'
+import {
+  CategoryScale,
+  Chart,
+  Legend,
+  LineController,
+  LineElement,
+  LinearScale,
+  PointElement,
+  Tooltip,
+  type ChartConfiguration,
+  type Scale,
+  type Tick,
+} from 'chart.js'
 import $ from 'jquery'
 
 import { hideDashboardError, showDashboardError } from '../error-bar'
 import { DashboardPanel } from './panel-base'
 
+Chart.register(LineController, LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend)
+
 const HOME_READY_POLL_MS = 10_000
 
 /** Cluster table embedding columns use this rolling window (seconds). */
-const CLUSTER_METRICS_WINDOW_SEC = 60
+const CLUSTER_METRICS_WINDOW_SEC = 30
 
-function buildClusterNodesFootnotes(): JQuery<HTMLElement> {
-  const w = CLUSTER_METRICS_WINDOW_SEC
-  return $('<div>', { class: 'dashboard-home-cluster-footnotes' }).append(
-    $('<p>', { text: '* Current encoder leader.' }),
-    $('<p>', { text: 'Batches: total embed batches in that window on this node.' }),
-    $('<p>', { text: `Rate/s: embed batches per second over the last ${w}s.` }),
-    $('<p>', { text: 'Avg ms: mean local inference time per batch, weighted by batch count per vector type.' }),
-    $('<p>', { text: 'E2E ms: mean end-to-end time per batch including routing; only reported on originating nodes.' }),
+/** Cluster chart: client-side history span (API is snapshot-only). */
+const CLUSTER_CHART_HISTORY_MS = 10 * 60 * 1000
+
+/** Evenly spaced time ticks from min..max (avoids Chart.js “nice” gaps at the edges). */
+const CLUSTER_CHART_X_TICK_COUNT = 7
+
+function buildClusterChartEvenXTicks(min: number, max: number, count: number): Tick[] {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    return [{ value: min }, { value: max }]
+  }
+  if (max <= min) {
+    return [{ value: min }]
+  }
+  const n = Math.max(2, Math.floor(count))
+  const span = max - min
+  const step = span / (n - 1)
+  const ticks: Tick[] = []
+  for (let i = 0; i < n; i += 1) {
+    ticks.push({ value: i === n - 1 ? max : min + i * step })
+  }
+  return ticks
+}
+
+/** Survives full page reload; same origin only. */
+const CLUSTER_CHART_STORAGE_KEY = 'amgix.dashboard.clusterThroughputHistory.v1'
+
+function clusterHelpIcon(tip: string): JQuery<HTMLElement> {
+  return $('<button>', {
+    type: 'button',
+    class: 'dashboard-home-cluster-help',
+    text: 'i',
+    attr: {
+      title: tip,
+      'aria-label': tip,
+    },
+  })
+}
+
+function clusterThWithHelp(label: string, tip: string): JQuery<HTMLElement> {
+  return $('<th>', { class: 'dashboard-home-cluster-th-with-help' }).append(
+    $('<span>', { class: 'dashboard-home-cluster-th-inner' }).append(
+      $('<span>', { class: 'dashboard-home-cluster-th-label', text: label }),
+      clusterHelpIcon(tip),
+    ),
   )
+}
+
+function clusterBatchesColumnHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Total embed batches on this node in the last ${w}s.`
+}
+
+function clusterRateColumnHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Embed batches per second, averaged over the last ${w}s.`
+}
+
+function clusterInferMsColumnHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Local inference time per batch on this node (weighted by batch count per vector type), over the last ${w}s.`
+}
+
+function clusterPipeMsColumnHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Routing plus embed pipeline time per batch on this node (originating node only), over the last ${w}s.`
+}
+
+function clusterChartHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Cluster-wide inference and pipeline latency over time, per batch, ${w}s rolling window.`
 }
 
 type HomeReadinessKey = 'database' | 'rabbitmq' | 'index' | 'query'
@@ -157,8 +234,32 @@ function formatClusterAvgMsCell(ms: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 0 }).format(ms)
 }
 
+function latestFiniteSeriesY(data: ReadonlyArray<{ y?: number | null }>): number | null {
+  for (let i = data.length - 1; i >= 0; i -= 1) {
+    const y = data[i]?.y
+    if (typeof y === 'number' && Number.isFinite(y)) {
+      return y
+    }
+  }
+  return null
+}
+
+function clusterChartLegendParts(
+  baseLabel: string,
+  data: ReadonlyArray<{ y?: number | null }>,
+): { labelStem: string; valuePart: string | null } {
+  const y = latestFiniteSeriesY(data)
+  if (y == null) {
+    return { labelStem: baseLabel, valuePart: null }
+  }
+  if (y === 0) {
+    return { labelStem: `${baseLabel}: `, valuePart: '-' }
+  }
+  return { labelStem: `${baseLabel}: `, valuePart: `${formatClusterAvgMsCell(y)} ms` }
+}
+
 /** Sum batch rates and counts across vector types; latency fields are n-weighted averages over the window. */
-function formatEmbeddingMetricsCells60s(node: NodeView): { rps: string; avgMs: string; e2eAvgMs: string; requests: string } {
+function formatEmbeddingMetricsCells(node: NodeView): { rps: string; avgMs: string; e2eAvgMs: string; requests: string } {
   const list = node.metrics ?? []
   let sawWindow = false
   let totalN = 0
@@ -202,6 +303,118 @@ function formatEmbeddingMetricsCells60s(node: NodeView): { rps: string; avgMs: s
   }
 }
 
+function vectorMetricsMergeKey(vm: VectorMetrics): string {
+  return `${vm.type}\0${vm.model ?? ''}\0${vm.revision ?? ''}`
+}
+
+function vectorMetricsDisplayLabel(vm: VectorMetrics): string {
+  if (vm.model) {
+    const rev = vm.revision ? ` (${vm.revision})` : ''
+    return `${vm.model}${rev}`
+  }
+  return vm.type
+}
+
+const LEGACY_CHART_TYPE_MODEL_PREFIX = /^(dense_model|sparse_model):\s*(.+)$/i
+
+/** Human-readable series name from merge key `type\\0model\\0revision`. */
+function labelFromVectorMetricsMergeKey(key: string): string {
+  const parts = key.split('\0')
+  const typ = parts[0] ?? ''
+  const model = (parts[1] ?? '').trim()
+  const revision = (parts[2] ?? '').trim()
+  if (model !== '') {
+    return revision !== '' ? `${model} (${revision})` : model
+  }
+  return typ
+}
+
+/** Chart legend/tooltip caption; strips legacy `dense_model: …` from storage and fixes type-only stubs. */
+function normalizeVectorSeriesLabelForKey(key: string, stored: string | undefined): string {
+  if (stored != null && stored !== '') {
+    const legacy = LEGACY_CHART_TYPE_MODEL_PREFIX.exec(stored)
+    if (legacy) {
+      return legacy[2]!.trim()
+    }
+    if (stored === 'dense_model' || stored === 'sparse_model') {
+      return labelFromVectorMetricsMergeKey(key)
+    }
+    return stored
+  }
+  return labelFromVectorMetricsMergeKey(key)
+}
+
+type ClusterThroughputAgg = {
+  chartRows: Array<{ key: string; label: string; inferenceMeanMs: number }>
+  globalAvgMs: number | null
+  globalE2eMs: number | null
+}
+
+function aggregateClusterThroughput(view: ClusterView | null): ClusterThroughputAgg {
+  const empty: ClusterThroughputAgg = {
+    chartRows: [],
+    globalAvgMs: null,
+    globalE2eMs: null,
+  }
+  if (view == null || view.nodes == null) {
+    return empty
+  }
+
+  const byKey = new Map<string, { label: string; weightedMsSum: number; nSum: number }>()
+  let weightedAvgSum = 0
+  let weightedAvgN = 0
+  let weightedE2eSum = 0
+  let weightedE2eN = 0
+
+  for (const node of Object.values(view.nodes)) {
+    for (const vm of node.metrics ?? []) {
+      const wm = vm.windows?.[clusterMetricsWindowKey]
+      if (wm == null) {
+        continue
+      }
+      const n = Number(wm.n)
+      if (!Number.isFinite(n) || n <= 0) {
+        continue
+      }
+      const ni = Math.trunc(n)
+      const key = vectorMetricsMergeKey(vm)
+      const label = vectorMetricsDisplayLabel(vm)
+      let cur = byKey.get(key)
+      if (!cur) {
+        cur = { label, weightedMsSum: 0, nSum: 0 }
+        byKey.set(key, cur)
+      }
+
+      const avgMs = wm.avg_ms
+      if (Number.isFinite(avgMs)) {
+        cur.weightedMsSum += avgMs * ni
+        cur.nSum += ni
+        weightedAvgSum += avgMs * ni
+        weightedAvgN += ni
+      }
+      const e2e = (wm as unknown as Record<string, unknown>)['e2e_avg_ms'] as number | null | undefined
+      if (e2e != null && Number.isFinite(e2e)) {
+        weightedE2eSum += e2e * ni
+        weightedE2eN += ni
+      }
+    }
+  }
+
+  const chartRows = Array.from(byKey.entries())
+    .filter(([, v]) => v.nSum > 0)
+    .map(([key, v]) => ({
+      key,
+      label: v.label,
+      inferenceMeanMs: v.weightedMsSum / v.nSum,
+    }))
+    .sort((a, b) => b.inferenceMeanMs - a.inferenceMeanMs)
+  return {
+    chartRows,
+    globalAvgMs: weightedAvgN > 0 ? weightedAvgSum / weightedAvgN : null,
+    globalE2eMs: weightedE2eN > 0 ? weightedE2eSum / weightedE2eN : null,
+  }
+}
+
 function sortClusterNodeEntries(nodes: { [key: string]: NodeView }): Array<[string, NodeView]> {
   const entries = Object.entries(nodes)
   entries.sort((a, b) => {
@@ -214,6 +427,75 @@ function sortClusterNodeEntries(nodes: { [key: string]: NodeView }): Array<[stri
   return entries
 }
 
+function readClusterChartThemeColors(): { grid: string; tick: string } {
+  const s = getComputedStyle(document.documentElement)
+  const grid = s.getPropertyValue('--chart-cluster-grid').trim()
+  const tick = s.getPropertyValue('--chart-cluster-tick').trim()
+  return {
+    grid: grid || 'rgba(120, 120, 120, 0.18)',
+    tick: tick || '#555555',
+  }
+}
+
+/** Match :root font family; axis sizes kept smaller than body text so they fit the chart. */
+function readClusterChartFont(): { family: string; tickPx: number; titlePx: number; tooltipPx: number } {
+  const s = getComputedStyle(document.documentElement)
+  const family = (s.fontFamily || '').trim() || 'system-ui, sans-serif'
+  const rootPx = parseFloat(s.fontSize)
+  const base = Number.isFinite(rootPx) && rootPx > 0 ? rootPx : 16
+  return {
+    family,
+    tickPx: Math.max(10, Math.round(base * 0.67)),
+    titlePx: Math.max(9, Math.round(base * 0.61)),
+    tooltipPx: Math.max(11, Math.round(base * 0.77)),
+  }
+}
+
+function clusterChartDevicePixelRatio(): number {
+  if (typeof window === 'undefined') {
+    return 1
+  }
+  const d = window.devicePixelRatio
+  return d != null && d > 0 ? d : 1
+}
+
+function clusterLineColors(count: number): string[] {
+  const base = ['#16a34a', '#2563eb', '#ca8a04', '#9333ea', '#db2777', '#0891b2', '#ea580c']
+  const out: string[] = []
+  for (let i = 0; i < count; i += 1) {
+    out.push(base[i % base.length]!)
+  }
+  return out
+}
+
+function renderClusterChartHtmlLegend(
+  $ul: JQuery<HTMLElement>,
+  items: Array<{ color: string; labelStem: string; valuePart: string | null }>,
+  labelColor: string,
+): void {
+  $ul.empty()
+  for (const { color, labelStem, valuePart } of items) {
+    const $swatch = $('<span>', { class: 'dashboard-home-cluster-chart-legend-swatch' }).css(
+      'background-color',
+      color,
+    )
+    const $text = $('<span>', {
+      class: 'dashboard-home-cluster-chart-legend-label',
+      css: { color: labelColor },
+    })
+    $text.append(document.createTextNode(labelStem))
+    if (valuePart != null) {
+      $text.append(
+        $('<strong>', {
+          class: 'dashboard-home-cluster-chart-legend-value',
+          text: valuePart,
+        }),
+      )
+    }
+    $ul.append($('<li>', { class: 'dashboard-home-cluster-chart-legend-item' }).append($swatch, $text))
+  }
+}
+
 function $readinessStatus(ok: boolean, readinessKey: HomeReadinessKey): JQuery<HTMLElement> {
   return $('<span>', {
     class: ok ? 'dashboard-home-status dashboard-home-status--ready' : 'dashboard-home-status dashboard-home-status--not-ready',
@@ -222,9 +504,121 @@ function $readinessStatus(ok: boolean, readinessKey: HomeReadinessKey): JQuery<H
   })
 }
 
+/** byKey: cluster-wide weighted mean inference latency (ms) per vector merge key */
+type ClusterThroughputHistoryPoint = {
+  t: number
+  byKey: Map<string, number>
+  avgMs: number | null
+  e2eMs: number | null
+}
+
+type ClusterChartStoredPoint = {
+  t: number
+  avgMs: number | null
+  e2eMs: number | null
+  byKey: [string, number][]
+}
+
+type ClusterChartStoredPayload = {
+  v: 1
+  points: ClusterChartStoredPoint[]
+  labels?: [string, string][]
+}
+
+function clusterPointToStored(pt: ClusterThroughputHistoryPoint): ClusterChartStoredPoint {
+  return {
+    t: pt.t,
+    avgMs: pt.avgMs,
+    e2eMs: pt.e2eMs,
+    byKey: Array.from(pt.byKey.entries()),
+  }
+}
+
+function storedToClusterPoint(raw: ClusterChartStoredPoint): ClusterThroughputHistoryPoint | null {
+  if (typeof raw.t !== 'number' || !Number.isFinite(raw.t)) {
+    return null
+  }
+  if (!Array.isArray(raw.byKey)) {
+    return null
+  }
+  const byKey = new Map<string, number>()
+  for (const pair of raw.byKey) {
+    if (!Array.isArray(pair) || pair.length !== 2) {
+      continue
+    }
+    const [k, v] = pair
+    if (typeof k !== 'string' || typeof v !== 'number' || !Number.isFinite(v)) {
+      continue
+    }
+    byKey.set(k, v)
+  }
+  const avgRaw = raw.avgMs == null ? null : Number(raw.avgMs)
+  const e2eRaw = raw.e2eMs == null ? null : Number(raw.e2eMs)
+  return {
+    t: raw.t,
+    byKey,
+    avgMs: avgRaw != null && Number.isFinite(avgRaw) ? avgRaw : null,
+    e2eMs: e2eRaw != null && Number.isFinite(e2eRaw) ? e2eRaw : null,
+  }
+}
+
+function loadClusterThroughputHistoryFromStorage(
+  cutoff: number,
+): { points: ClusterThroughputHistoryPoint[]; labels: [string, string][] } | null {
+  try {
+    const s = localStorage.getItem(CLUSTER_CHART_STORAGE_KEY)
+    if (s == null || s === '') {
+      return null
+    }
+    const parsed = JSON.parse(s) as unknown
+    if (!parsed || typeof parsed !== 'object') {
+      return null
+    }
+    const p = parsed as Partial<ClusterChartStoredPayload>
+    if (p.v !== 1 || !Array.isArray(p.points)) {
+      return null
+    }
+    const points: ClusterThroughputHistoryPoint[] = []
+    for (const item of p.points) {
+      const pt = storedToClusterPoint(item as ClusterChartStoredPoint)
+      if (pt != null && pt.t >= cutoff) {
+        points.push(pt)
+      }
+    }
+    points.sort((a, b) => a.t - b.t)
+    const labels = Array.isArray(p.labels) ? (p.labels as [string, string][]) : []
+    return { points, labels }
+  } catch {
+    return null
+  }
+}
+
+function saveClusterThroughputHistoryToStorage(
+  points: ClusterThroughputHistoryPoint[],
+  labels: Map<string, string>,
+): void {
+  try {
+    const normalizedLabels: [string, string][] = []
+    for (const [k, v] of labels) {
+      normalizedLabels.push([k, normalizeVectorSeriesLabelForKey(k, v)])
+    }
+    const payload: ClusterChartStoredPayload = {
+      v: 1,
+      points: points.map(clusterPointToStored),
+      labels: normalizedLabels,
+    }
+    localStorage.setItem(CLUSTER_CHART_STORAGE_KEY, JSON.stringify(payload))
+  } catch {
+    // QuotaExceededError, private mode, disabled storage, etc.
+  }
+}
+
 export class HomePanel extends DashboardPanel {
   private readyPollTimer: number | null = null
   private readyPollGeneration = 0
+  private clusterThroughputChart: Chart<'line'> | null = null
+  private clusterThroughputHistory: ClusterThroughputHistoryPoint[] = []
+  private clusterSeriesLabels = new Map<string, string>()
 
   init(api: AmgixApi): void {
     const $root = $('#panel-home [data-home-root]')
@@ -239,11 +633,295 @@ export class HomePanel extends DashboardPanel {
       window.clearInterval(this.readyPollTimer)
       this.readyPollTimer = null
     }
+    this.destroyClusterThroughputChart()
+    this.clusterThroughputHistory = []
+    this.clusterSeriesLabels.clear()
+  }
+
+  private destroyClusterThroughputChart(): void {
+    this.clusterThroughputChart?.destroy()
+    this.clusterThroughputChart = null
+  }
+
+  private refreshClusterThroughputChart($root: JQuery<HTMLElement>, view: ClusterView | null): void {
+    const $canvas = $root.find('[data-home-cluster-throughput-chart]')
+    const canvas = $canvas.get(0) as HTMLCanvasElement | undefined
+    const $wrap = $root.find('[data-home-cluster-chart-wrap]')
+    const $canvasWrap = $root.find('[data-home-cluster-chart-canvas-wrap]')
+    const $legendUl = $root.find('[data-home-cluster-chart-legend]')
+    if (!canvas || !$wrap.length || !$canvasWrap.length || !$legendUl.length) {
+      return
+    }
+
+    const agg = aggregateClusterThroughput(view)
+    const now = Date.now()
+    const cutoff = now - CLUSTER_CHART_HISTORY_MS
+
+    if (this.clusterThroughputHistory.length === 0) {
+      const restored = loadClusterThroughputHistoryFromStorage(cutoff)
+      if (restored != null) {
+        this.clusterThroughputHistory = restored.points
+        for (const [k, lab] of restored.labels) {
+          if (typeof k === 'string' && typeof lab === 'string' && k !== '') {
+            this.clusterSeriesLabels.set(k, normalizeVectorSeriesLabelForKey(k, lab))
+          }
+        }
+      }
+    }
+
+    for (const row of agg.chartRows) {
+      this.clusterSeriesLabels.set(row.key, row.label)
+    }
+
+    const pointMap = new Map<string, number>()
+    for (const row of agg.chartRows) {
+      pointMap.set(row.key, row.inferenceMeanMs)
+    }
+    this.clusterThroughputHistory.push({
+      t: now,
+      byKey: pointMap,
+      avgMs: agg.globalAvgMs,
+      e2eMs: agg.globalE2eMs,
+    })
+    while (this.clusterThroughputHistory.length > 0 && this.clusterThroughputHistory[0]!.t < cutoff) {
+      this.clusterThroughputHistory.shift()
+    }
+
+    saveClusterThroughputHistoryToStorage(this.clusterThroughputHistory, this.clusterSeriesLabels)
+
+    const keySet = new Set<string>()
+    for (const pt of this.clusterThroughputHistory) {
+      for (const k of pt.byKey.keys()) {
+        keySet.add(k)
+      }
+    }
+    const seriesKeys = Array.from(keySet).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: 'base' }),
+    )
+
+    const batchColors = clusterLineColors(Math.max(1, seriesKeys.length))
+    const avgLineColor = '#64748b'
+    const e2eLineColor = '#ea580c'
+
+    const avgMsDataset = {
+      label: 'Inference Latency (per batch)',
+      data: this.clusterThroughputHistory.map((pt) => ({
+        x: pt.t,
+        y: typeof pt.avgMs === 'number' && Number.isFinite(pt.avgMs) ? pt.avgMs : 0,
+      })),
+      borderColor: avgLineColor,
+      backgroundColor: avgLineColor,
+      borderWidth: 2,
+      fill: false,
+      tension: 0.4,
+      pointRadius: 0,
+      pointHoverRadius: 5,
+      pointHitRadius: 12,
+      spanGaps: false,
+    }
+    const e2eMsDataset = {
+      label: 'Pipeline Latency (per batch)',
+      data: this.clusterThroughputHistory.map((pt) => ({
+        x: pt.t,
+        y: typeof pt.e2eMs === 'number' && Number.isFinite(pt.e2eMs) ? pt.e2eMs : 0,
+      })),
+      borderColor: e2eLineColor,
+      backgroundColor: e2eLineColor,
+      borderWidth: 2,
+      fill: false,
+      tension: 0.4,
+      pointRadius: 0,
+      pointHoverRadius: 5,
+      pointHitRadius: 12,
+      spanGaps: false,
+    }
+
+    const perVectorDatasets = seriesKeys.map((key, i) => {
+      const typeModel = normalizeVectorSeriesLabelForKey(key, this.clusterSeriesLabels.get(key))
+      return {
+        label: `Inference Latency (${typeModel}) (per batch)`,
+        data: this.clusterThroughputHistory.map((pt) => {
+          const y = pt.byKey.get(key)
+          return {
+            x: pt.t,
+            y: typeof y === 'number' && Number.isFinite(y) ? y : 0,
+          }
+        }),
+        borderColor: batchColors[i]!,
+        backgroundColor: batchColors[i]!,
+        borderWidth: 2,
+        fill: false,
+        tension: 0.4,
+        pointRadius: 0,
+        pointHoverRadius: 5,
+        pointHitRadius: 12,
+        spanGaps: false,
+      }
+    })
+
+    const datasets = [avgMsDataset, e2eMsDataset, ...perVectorDatasets]
+
+    $canvasWrap.css('height', '150px')
+
+    const { grid: gridColor, tick: tickColor } = readClusterChartThemeColors()
+    const chartFont = readClusterChartFont()
+
+    const legendItems = datasets.map((ds) => ({
+      color: String(ds.borderColor ?? ds.backgroundColor ?? '#888'),
+      ...clusterChartLegendParts(String(ds.label ?? ''), ds.data as Array<{ y?: number | null }>),
+    }))
+    renderClusterChartHtmlLegend($legendUl, legendItems, tickColor)
+
+    if (this.clusterThroughputChart == null) {
+      const ctx = canvas.getContext('2d')
+      if (!ctx) {
+        return
+      }
+      const config: ChartConfiguration<'line'> = {
+        type: 'line',
+        data: { datasets },
+        options: {
+          color: tickColor,
+          devicePixelRatio: clusterChartDevicePixelRatio(),
+          font: {
+            family: chartFont.family,
+            size: chartFont.tickPx,
+          },
+          parsing: false,
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'nearest', axis: 'x', intersect: false },
+          plugins: {
+            legend: {
+              display: false,
+            },
+            tooltip: {
+              titleFont: { family: chartFont.family, size: chartFont.tooltipPx },
+              bodyFont: { family: chartFont.family, size: chartFont.tooltipPx },
+              callbacks: {
+                title(items) {
+                  const raw = items[0]?.parsed.x
+                  if (typeof raw !== 'number') {
+                    return ''
+                  }
+                  return new Date(raw).toLocaleString()
+                },
+                label(ctx) {
+                  const v = ctx.parsed.y
+                  const lab = ctx.dataset.label ?? ''
+                  if (typeof v !== 'number') {
+                    return lab
+                  }
+                  return `${lab}: ${formatClusterAvgMsCell(v)} ms`
+                },
+              },
+            },
+          },
+          scales: {
+            x: {
+              type: 'linear',
+              min: cutoff,
+              max: now,
+              afterBuildTicks: (axis: Scale) => {
+                axis.ticks = buildClusterChartEvenXTicks(
+                  Number(axis.min),
+                  Number(axis.max),
+                  CLUSTER_CHART_X_TICK_COUNT,
+                )
+              },
+              grid: { color: gridColor },
+              ticks: {
+                autoSkip: false,
+                color: tickColor,
+                font: { family: chartFont.family, size: chartFont.tickPx },
+                callback: (tickValue) => {
+                  const n = typeof tickValue === 'number' ? tickValue : Number(tickValue)
+                  if (!Number.isFinite(n)) {
+                    return ''
+                  }
+                  return new Date(n).toLocaleTimeString(undefined, {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })
+                },
+              },
+            },
+            y: {
+              type: 'linear',
+              position: 'left',
+              beginAtZero: true,
+              title: {
+                display: true,
+                text: 'Milliseconds',
+                color: tickColor,
+                font: { family: chartFont.family, size: chartFont.titlePx, weight: 600 },
+              },
+              ticks: {
+                color: tickColor,
+                font: { family: chartFont.family, size: chartFont.tickPx },
+              },
+              grid: { color: gridColor },
+            },
+          },
+        },
+      }
+      this.clusterThroughputChart = new Chart(ctx, config)
+    } else {
+      const ch = this.clusterThroughputChart
+      ch.data.datasets = datasets as typeof ch.data.datasets
+      const xScale = ch.options.scales?.x
+      if (xScale && typeof xScale === 'object' && 'min' in xScale && 'max' in xScale) {
+        ;(xScale as { min?: number; max?: number }).min = cutoff
+        ;(xScale as { min?: number; max?: number }).max = now
+      }
+      const leg = ch.options.plugins?.legend
+      if (leg && typeof leg === 'object' && 'display' in leg) {
+        ;(leg as { display?: boolean }).display = false
+      }
+      ch.options.color = tickColor
+      const xs = ch.options.scales?.x
+      if (xs && typeof xs === 'object') {
+        const gx = (xs as { grid?: { color?: string }; ticks?: { color?: string } }).grid
+        if (gx) {
+          gx.color = gridColor
+        }
+        const tx = (xs as { ticks?: { color?: string } }).ticks
+        if (tx) {
+          tx.color = tickColor
+        }
+      }
+      const ys = ch.options.scales?.y
+      if (ys && typeof ys === 'object') {
+        const gy = (ys as { grid?: { color?: string }; ticks?: { color?: string }; title?: { color?: string } }).grid
+        if (gy) {
+          gy.color = gridColor
+        }
+        const ty = (ys as { ticks?: { color?: string } }).ticks
+        if (ty) {
+          ty.color = tickColor
+        }
+        const ysWithTitle = ys as {
+          title?: { display?: boolean; text?: string; color?: string }
+        }
+        if (!ysWithTitle.title) {
+          ysWithTitle.title = {}
+        }
+        ysWithTitle.title.display = true
+        ysWithTitle.title.text = 'Milliseconds'
+        ysWithTitle.title.color = tickColor
+      }
+      const sc = ch.options.scales as Record<string, unknown> | undefined
+      if (sc?.y1 !== undefined) {
+        delete sc.y1
+      }
+      ch.update('none')
+    }
   }
 
   private applyClusterViewToDom($root: JQuery<HTMLElement>, view: ClusterView | null): void {
     const $tbody = $root.find('[data-home-cluster-tbody]')
     if (!$tbody.length) {
+      this.refreshClusterThroughputChart($root, view)
       return
     }
     $tbody.empty()
@@ -258,6 +936,7 @@ export class HomePanel extends DashboardPanel {
           }),
         ),
       )
+      this.refreshClusterThroughputChart($root, view)
       return
     }
     if (Object.keys(nodes).length === 0) {
@@ -270,10 +949,11 @@ export class HomePanel extends DashboardPanel {
           }),
         ),
       )
+      this.refreshClusterThroughputChart($root, view)
       return
     }
     for (const [hostname, node] of sortClusterNodeEntries(nodes)) {
-      const m = formatEmbeddingMetricsCells60s(node)
+      const m = formatEmbeddingMetricsCells(node)
       const $nodeTd = $('<td>', { class: 'dashboard-home-v' })
       if (node.is_leader) {
         $nodeTd.append($('<strong>', { text: `${hostname}*` }))
@@ -297,6 +977,7 @@ export class HomePanel extends DashboardPanel {
         ),
       )
     }
+    this.refreshClusterThroughputChart($root, view)
   }
 
   private applyReadinessToDom($root: JQuery<HTMLElement>, ready: ReadyResponse): void {
@@ -402,6 +1083,30 @@ export class HomePanel extends DashboardPanel {
       )
 
       const $systemTable = $('<table>', { class: 'dashboard-home-table' }).append($thead, $tbody)
+      const $systemBlock = $('<div>', { class: 'dashboard-home-system-block' }).append($systemTable)
+
+      const $clusterChartSection = $('<section>', { class: 'dashboard-home-cluster-metrics' }).append(
+        $('<div>', {
+          class: 'dashboard-home-cluster-chart-inner',
+          attr: { 'data-home-cluster-chart-wrap': '' },
+        }).append(
+          $('<div>', { class: 'dashboard-home-cluster-chart-hint-row' }).append(clusterHelpIcon(clusterChartHelpText())),
+          $('<div>', {
+            class: 'dashboard-home-cluster-chart-canvas-wrap',
+            attr: { 'data-home-cluster-chart-canvas-wrap': '' },
+          }).append(
+            $('<canvas>', {
+              attr: { 'data-home-cluster-throughput-chart': '' },
+              'aria-label': `Cluster inference and pipeline latency over time, per batch, ${CLUSTER_METRICS_WINDOW_SEC}s rolling window`,
+            }),
+          ),
+          $('<ul>', {
+            class: 'dashboard-home-cluster-chart-legend',
+            attr: { 'data-home-cluster-chart-legend': '' },
+            'aria-label': 'Chart series',
+          }),
+        ),
+      )
 
       const $clusterThead = $('<thead>')
         .append(
@@ -422,10 +1127,10 @@ export class HomePanel extends DashboardPanel {
             $('<th>', { text: 'GPU' }),
             $('<th>', { text: 'RAM (free/total, GB)' }),
             $('<th>', { text: 'VRAM (free/total, GB)' }),
-            $('<th>', { text: 'Batches' }),
-            $('<th>', { text: 'Rate/s' }),
-            $('<th>', { text: 'Avg ms' }),
-            $('<th>', { text: 'E2E ms' }),
+            clusterThWithHelp('Batches', clusterBatchesColumnHelpText()),
+            clusterThWithHelp('Rate/s', clusterRateColumnHelpText()),
+            clusterThWithHelp('Infer ms', clusterInferMsColumnHelpText()),
+            clusterThWithHelp('Pipe ms', clusterPipeMsColumnHelpText()),
             $('<th>', { text: 'Last seen' }),
           ),
         )
@@ -434,7 +1139,8 @@ export class HomePanel extends DashboardPanel {
         class: 'dashboard-home-table dashboard-home-cluster-table',
       }).append($clusterThead, $('<tbody>', { attr: { 'data-home-cluster-tbody': '' } }))
 
-      $root.empty().append($systemTable, $clusterTable, buildClusterNodesFootnotes())
+      const $topRow = $('<div>', { class: 'dashboard-home-top-row' }).append($systemBlock, $clusterChartSection)
+      $root.empty().append($topRow, $clusterTable)
       this.applyClusterViewToDom($root, clusterView)
 
       this.readyPollTimer = window.setInterval(() => {
