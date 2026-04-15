@@ -167,7 +167,7 @@ class PostgreSQLDatabase(SQLBase):
             """,
             
             # Database Probing Templates (with double quotes for PostgreSQL)
-            "version_query": "SELECT version() AS version",
+            "version_query": "SELECT current_setting('server_version') AS version",
             "vector_test_create": f'CREATE TEMPORARY TABLE "{APP_PREFIX}_test_vector_idx" (v VECTOR(1) NOT NULL)',
             "vector_test_drop": f'DROP TABLE "{APP_PREFIX}_test_vector_idx"',
             
