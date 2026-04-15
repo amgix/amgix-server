@@ -86,6 +86,7 @@ class MariaDatabase(SQLBase):
             "upsert": "INSERT INTO `{table}` ({columns}) VALUES {values} ON DUPLICATE KEY UPDATE {update_clause}",
             # Update clause for IDF upsert (MariaDB/MySQL)
             "upsert_update_doc_count": "doc_count = doc_count + 1",
+            "upsert_update_metric_bucket": "`value` = VALUES(`value`), `n` = VALUES(`n`)",
             "update_join": "UPDATE `{table}` {alias} JOIN ({subquery}) {subquery_alias} ON {join_conditions} SET {set_clause}",
             "delete_join": "DELETE {alias} FROM `{table}` {alias} JOIN ({subquery}) {subquery_alias} ON {join_conditions} WHERE {where_clause}",
             

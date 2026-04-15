@@ -1,25 +1,24 @@
 import asyncio
 from logging import Logger
-import math
 import os
 import psutil
 import time
 from collections import defaultdict
 from aiorwlock import RWLock
 
-from aio_pika import RobustQueue
 from src.core.common.cache import AMGIXCache
 from src.core.common.constants import RPC_TIMEOUT_SECONDS, WMTR_DEFAULT_TRIGRAM_WEIGHT
 from src.core.common.embed_router import EmbedRouter
-from src.core.common.rolling_metrics import RollingMetrics
+from src.core.common.metrics_definitions import MetricKey
+from src.core.common.metrics_service import MetricsService
 from src.core.models.vector import VectorConfigInternal
 from src.core.vector import VectorBase, TrigramsVector, FullTextVector, WhiteSpaceVector, WMTRVector, DenseModelVector, SparseModelVector, CustomDenseVector, CustomSparseVector
 from src.core.common.bunny_talk import BunnyTalk
 from src.core.database.base import DatabaseBase
 from src.core.common.enums import VectorType
-from typing import Dict, List, Tuple, Type, Union, Optional
-from src.core.models.cluster import ClusterView, MetricsPayload, NodeMetricSeries, NodeView, WindowSample
+from typing import Any, Dict, List, Tuple, Type, Union, Optional
 from .encoder_base import EncoderBase
+from .model_rebalancer import ModelRebalancer
 
 
 class LazyVectorDict(dict):
@@ -47,12 +46,11 @@ except Exception:
 
 
 HOSTNAME = os.getenv('HOSTNAME', 'unknown')
+AMGIX_AMQP_URL = os.getenv("AMGIX_AMQP_URL", "pyamqp://guest:guest@rabbitmq//")
 
 NODE_QUEUE_PREFIX = "embed-node"
 NODE_QUEUE_NAME = f"{NODE_QUEUE_PREFIX}-{HOSTNAME}"
 OPEN_EMBED_QUEUE_NAME = "embed-open"
-LEADER_QUEUE_NAME = "embed-leader"
-
 # Metrics aggregation windows in seconds
 METRIC_WINDOWS = [10, 30, 60]
 # Subset of METRIC_WINDOWS exposed in the cluster view API response
@@ -123,6 +121,28 @@ def _check_memory_reserve(reserve_config: Optional[Tuple[float, bool]], free_gb:
     
     return free_gb < required_free_gb
 
+
+def _loaded_model_label(mk_list: List[str]) -> Optional[str]:
+    if len(mk_list) < 3 or not mk_list[1]:
+        return None
+    model_name, revision = mk_list[1], mk_list[2]
+    return f"{model_name}:{revision}" if revision else model_name
+
+
+def _serialize_loaded_models_meta(loaded_models: List[Tuple[List[str], float]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for mk_list, load_timestamp in loaded_models:
+        entry: Dict[str, Any] = {
+            "model_key": list(mk_list),
+            "loaded_at": float(load_timestamp),
+        }
+        label = _loaded_model_label(mk_list)
+        if label is not None:
+            entry["label"] = label
+        out.append(entry)
+    out.sort(key=lambda entry: str(entry.get("label", "")))
+    return out
+
 class EmbedRouterService(EncoderBase):
     """Router for embedding documents."""
 
@@ -142,9 +162,8 @@ class EmbedRouterService(EncoderBase):
 
         self.local_models = {}
         self.at_capacity = False
-        self.leader: Tuple[RobustQueue, str] = None
-        self.node: Tuple[RobustQueue, str] = None
-        self.embed_open: Tuple[RobustQueue, str] = None
+        self.node = None
+        self.embed_open = None
 
         self.load_models = AMGIX_LOAD_MODELS
 
@@ -153,9 +172,29 @@ class EmbedRouterService(EncoderBase):
 
         self._at_model_capacity(force_check=True)
 
-        self._rolling = RollingMetrics(windows=METRIC_WINDOWS)
-        self._cluster_metrics: Dict[str, Dict[Tuple[str, str, str], Dict]] = {}
-        self._cluster_view: Dict[str, NodeView] = {}
+        self.metrics = MetricsService(
+            amqp_url=AMGIX_AMQP_URL,
+            logger=self.logger,
+            hostname=HOSTNAME,
+            source="router",
+            role=AMGIX_ENCODER_ROLE,
+            windows=METRIC_WINDOWS,
+            database=database,
+            leader_loop_interval_s=METRICS_LOOP_INTERVAL_SECONDS,
+            cluster_view_windows=CLUSTER_VIEW_WINDOWS,
+            metrics_node_expiry_seconds=METRICS_NODE_EXPIRY_SECONDS,
+        )
+        self.model_rebalancer = ModelRebalancer(
+            bunny_talk=self.bunny_talk,
+            logger=self.logger,
+            windows=METRIC_WINDOWS,
+            leader_loop_interval_s=METRICS_LOOP_INTERVAL_SECONDS,
+            model_idle_grace_seconds=MODEL_IDLE_GRACE_SECONDS,
+            target_availability_pct=TARGET_AVAILABLITY_PCT,
+            node_queue_prefix=NODE_QUEUE_PREFIX,
+        )
+        self._rebalance_task: Optional[asyncio.Task] = None
+        self._metrics_meta_task: Optional[asyncio.Task] = None
 
         self.model_locks: defaultdict[str, RWLock] = defaultdict(RWLock)
         self.model_load_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -189,7 +228,10 @@ class EmbedRouterService(EncoderBase):
 
         await self._listen_on_open_queues(start_listening=True)
 
-        asyncio.create_task(self._metrics_loop())
+        self.metrics.publish_meta(await self._metrics_meta())
+        self.metrics.start_leader_loop()
+        self._rebalance_task = asyncio.create_task(self._rebalance_loop())
+        self._metrics_meta_task = asyncio.create_task(self._metrics_meta_loop())
 
     async def route(
         self,
@@ -301,13 +343,11 @@ class EmbedRouterService(EncoderBase):
 
             if hops == 0:
                 n_docs = len(docs)
-                self._rolling.record_rate(("batches_origin", *model_key))
-                self._rolling.record_rate(("docs_origin", *model_key), n_docs)
-                self._rolling.record_avg(("inference_origin_ms", *model_key), e2e_ms)
-                if n_docs > 0:
-                    self._rolling.record_avg(("inference_origin_ms_per_doc", *model_key), e2e_ms / n_docs)
+                self.metrics.record(MetricKey.EMBED_BATCHES_ORIGIN, dims=model_key)
+                self.metrics.record(MetricKey.EMBED_PASSAGES_ORIGIN, n_docs, dims=model_key)
+                self.metrics.record(MetricKey.EMBED_INFERENCE_ORIGIN_MS, e2e_ms, dims=model_key, n=1)
                 if result is None:
-                    self._rolling.record_sum(("inference_origin_errors", *model_key))
+                    self.metrics.record(MetricKey.EMBED_INFERENCE_ORIGIN_ERRORS, dims=model_key)
 
         return result
 
@@ -336,12 +376,10 @@ class EmbedRouterService(EncoderBase):
 
         n_docs = len(docs)
         inference_ms = (time.monotonic_ns() - start_ns) / 1_000_000.0
-        self._rolling.record_rate(("batches", *model_key))
-        self._rolling.record_rate(("docs", *model_key), n_docs)
-        self._rolling.record_avg(("inference_ms", *model_key), inference_ms)
-        if n_docs > 0:
-            self._rolling.record_avg(("inference_ms_per_doc", *model_key), inference_ms / n_docs)
-        self._rolling.record_avg(("hops", *model_key), hops)
+        self.metrics.record(MetricKey.EMBED_BATCHES, dims=model_key)
+        self.metrics.record(MetricKey.EMBED_PASSAGES, n_docs, dims=model_key)
+        self.metrics.record(MetricKey.EMBED_INFERENCE_MS, inference_ms, dims=model_key, n=1)
+        self.metrics.record(MetricKey.EMBED_HOPS, hops, dims=model_key, n=1)
 
         return result
 
@@ -597,373 +635,32 @@ class EmbedRouterService(EncoderBase):
         except Exception as e:
             self.logger.error(f"Router: Error handling node signal (load: {load}, model_key: {model_key}): {e}")
 
-    async def _metrics_signal(self, payload: MetricsPayload) -> Optional[ClusterView]:
-        """Accumulate metrics from workers; returns ClusterView snapshot when query_view=True."""
-
-        if payload.probe:
-            return None
-
-        if payload.query_view:
-            if HOSTNAME in self._cluster_view:
-                self._cluster_view[HOSTNAME].is_leader = True
-            return ClusterView(nodes=dict(self._cluster_view))
-
-        hostname = payload.hostname
-        now = time.time()
-
-        loaded_models_list = payload.loaded_models or []
-        incoming_metrics = payload.metrics or []
-
-        if payload.role != "api":
-            # Build _cluster_metrics in the shape rebalancing expects:
-            # {model_key_tuple: {str(win): {"rps": float, "n": int}}}
-            rebalance_metrics: Dict[tuple, Dict[str, Dict[str, float]]] = {}
-            model_last_seen: Dict[tuple, float] = {}
-            for series in incoming_metrics:
-                if series.key[0] == "batches_origin" and len(series.key) == 4:
-                    mk = tuple(series.key[1:])
-                    rebalance_metrics[mk] = {
-                        str(win): {"rps": sample.value, "n": sample.n}
-                        for win, sample in series.windows.items()
-                    }
-                    if series.last_seen is not None:
-                        model_last_seen[mk] = series.last_seen
-            self._cluster_metrics[hostname] = {
-                'metrics': rebalance_metrics,
-                'model_last_seen': model_last_seen,
-                'loaded_models': [
-                    (tuple(mk_list), load_timestamp)
-                    for mk_list, load_timestamp in loaded_models_list
-                ],
-                'load_models': bool(payload.load_models),
-                'capacity': 0 if payload.at_capacity else 1 if len(loaded_models_list) > 0 else 2,
-                'last_seen': now,
-            }
-            self.logger.debug(
-                f"Router: Received metrics from {hostname} (load_models={payload.load_models}): "
-                f"metrics: {len(incoming_metrics)}, models: {len(loaded_models_list)}, "
-                f"capacity: {self._cluster_metrics[hostname]['capacity']}"
-            )
-
-        loaded_model_strings = []
-        for mk_list, _ in loaded_models_list:
-            if len(mk_list) >= 3 and mk_list[1]:
-                model_name, revision = mk_list[1], mk_list[2]
-                label = f"{model_name}:{revision}" if revision else model_name
-                loaded_model_strings.append(label)
-
-        self._cluster_view[hostname] = NodeView(
-            role=payload.role,
-            load_models=payload.load_models,
-            at_capacity=payload.at_capacity,
-            last_seen=now,
-            gpu_support=payload.gpu_support,
-            gpu_available=payload.gpu_available,
-            total_ram_gb=payload.total_ram_gb,
-            free_ram_gb=payload.free_ram_gb,
-            total_vram_gb=payload.total_vram_gb,
-            free_vram_gb=payload.free_vram_gb,
-            loaded_models=sorted(loaded_model_strings),
-            metrics=[
-                NodeMetricSeries(key=s.key, windows={w: v for w, v in s.windows.items() if w in CLUSTER_VIEW_WINDOWS})
-                for s in incoming_metrics
-            ],
-        )
-
-    def _cleanup_stale_metrics(self) -> None:
-        """Remove metrics from hosts that haven't reported in a while."""
-        now = time.time()
-
-        stale_encoder = [
-            hostname for hostname, data in self._cluster_metrics.items()
-            if data['last_seen'] < now - METRICS_NODE_EXPIRY_SECONDS
-        ]
-        for hostname in stale_encoder:
-            del self._cluster_metrics[hostname]
-            self.logger.info(f"Router: Expired encoder metrics for {hostname} (stale)")
-
-        stale_view = [
-            hostname for hostname, data in self._cluster_view.items()
-            if data.last_seen < now - METRICS_NODE_EXPIRY_SECONDS
-        ]
-        for hostname in stale_view:
-            del self._cluster_view[hostname]
-            self.logger.info(f"Router: Expired cluster view for {hostname} (stale)")
-
-    async def _metrics_loop(self) -> None:
-        """Send metrics to leader."""
-
-        while True:        
-            # 1. Do a play for leader
-            try:
-
-                try_leader = True
-
-                try:
-                    # try to send a probe to the leader (even if it's us)
-                    await self.bunny_talk.talk(
-                        routing_key=LEADER_QUEUE_NAME,
-                        payload=MetricsPayload(probe=True, hostname=HOSTNAME),
-                        start_trace=True
-                    )
-                    try_leader = False
-                except Exception as e:
-                    # if it fails, we have no leader
-                    pass
-
-                if try_leader:
-                    was_leader = self.leader is not None
-
-                    self.leader = await self.bunny_talk.listen(
-                        routing_key=LEADER_QUEUE_NAME,
-                        handler=self._metrics_signal,
-                        auto_delete=True,
-                        exclusive=True,
-                        robust=False
-                    )
-
-                    if not was_leader:
-                        self.logger.info("Router: I'm the leader.")
-
-            except Exception as e:
-                self.leader = None
-                self.logger.debug(f"Router: Not the leader: {e}")
-
-            # 2. Send metrics to leader
-            try:
-                wire_metrics = [
-                    NodeMetricSeries(
-                        key=list(k),
-                        windows={win: WindowSample(value=d["value"], n=d["n"]) for win, d in windows.items()},
-                        last_seen=self._rolling.last_seen(k),
-                    )
-                    for k, windows in self._rolling.snapshot().items()
-                ]
-
-                async with self.metrics_lock.reader:
-                    loaded_models = [
-                        (list(model_key), load_timestamp)
-                        for model_key, (queue, consumer_tag, load_timestamp) in self.local_models.items()
-                    ]
-
-                payload = MetricsPayload(
-                    probe=False,
-                    hostname=HOSTNAME,
-                    role=AMGIX_ENCODER_ROLE,
-                    metrics=wire_metrics,
-                    loaded_models=loaded_models,
-                    load_models=self.load_models,
-                    at_capacity=self._at_model_capacity(),
-                    total_ram_gb=round(TOTAL_RAM_GB, 2),
-                    free_ram_gb=round(self._free_ram_gb, 2),
-                    total_vram_gb=round(TOTAL_VRAM_GB, 2) if TOTAL_VRAM_GB is not None else None,
-                    free_vram_gb=round(self._free_vram_gb, 2) if self._free_vram_gb is not None else None,
-                    gpu_support=PYNVML_AVAILABLE,
-                    gpu_available=GPU_HANDLE is not None,
-                )
-                if self.leader:
-                    await self._metrics_signal(payload)
-                else:
-                    await self.bunny_talk.talk(
-                        routing_key=LEADER_QUEUE_NAME,
-                        payload=payload,
-                        start_trace=True
-                    )
-            except Exception as e:
-                self.logger.warning(f"Router: Error sending metrics to leader: {e}")
-
-            # 3. rebalance models
-            if self.leader:
-                await self._rebalance_models()
-
-            # 4. Sleep
+    async def _rebalance_loop(self) -> None:
+        while True:
+            if self.metrics.is_leader():
+                await self.model_rebalancer.rebalance(self.metrics.cluster_snapshot())
             await asyncio.sleep(METRICS_LOOP_INTERVAL_SECONDS)
 
-    async def _rebalance_models(self) -> None:
-        """Rebalance models."""
+    async def _metrics_meta_loop(self) -> None:
+        while True:
+            self.metrics.publish_meta(await self._metrics_meta())
+            await asyncio.sleep(METRICS_LOOP_INTERVAL_SECONDS)
 
-        start_ns = time.monotonic_ns()
-        self.logger.debug(f"Router: Rebalancing models --------------------------------")
+    async def _metrics_meta(self) -> Dict[str, Any]:
+        async with self.metrics_lock.reader:
+            loaded_models = [
+                (list(model_key), load_timestamp)
+                for model_key, (queue, consumer_tag, load_timestamp) in self.local_models.items()
+            ]
 
-        async def _send_signal(hostname: str, model_key: tuple[str, str, str], load: bool) -> None:
-            node_queue_name = f"{NODE_QUEUE_PREFIX}-{hostname}"
-            try:
-                self.logger.debug(f"Router: Sending signal to {hostname} for {model_key}: load={load}")
-                await self.bunny_talk.talk(node_queue_name, load=load, model_key=list(model_key), start_trace=True)
-            except Exception as e:
-                self.logger.warning(f"Router: Failed to send signal to {hostname} for {model_key} (load={load}): {e}")
-
-        # Clean up stale metrics (older than 2x the metrics interval)
-        self._cleanup_stale_metrics()
-
-        # find hosts that can load models
-        st_host_count = 0
-        st_available_count = 0
-        available_st_hosts = dict()
-
-        for hostname, data in self._cluster_metrics.items():
-            if data.get('load_models', True):
-                st_host_count += 1
-                if data['capacity'] > 0:
-                    available_st_hosts[hostname] = data['capacity']
-                    st_available_count += 1
-
-        st_reservations = max(1, math.floor(TARGET_AVAILABLITY_PCT * st_host_count / 100))
-        st_direction = st_available_count - st_reservations
-
-        # Get all models that are loaded
-        model_list = set(model_tuple[0] for host_data in self._cluster_metrics.values() 
-                        for model_tuple in host_data['loaded_models'] if host_data['loaded_models'])
-
-        max_window = max(METRIC_WINDOWS)
-
-        # Aggregate batches_origin RPS and last_seen cluster-wide per model key.
-        # Index nodes record RPS but have no loaded models; query nodes load models but don't
-        # originate requests. We must sum across all nodes to get total demand per model.
-        cluster_rps: dict[tuple, dict[str, float]] = {}
-        cluster_last_seen: dict[tuple, float] = {}
-        for host_data in self._cluster_metrics.values():
-            for mk, windows in host_data['metrics'].items():
-                if mk not in cluster_rps:
-                    cluster_rps[mk] = {}
-                for win_str, d in windows.items():
-                    cluster_rps[mk][win_str] = cluster_rps[mk].get(win_str, 0.0) + d.get('rps', 0.0)
-            for mk, ts in host_data.get('model_last_seen', {}).items():
-                if ts > cluster_last_seen.get(mk, 0.0):
-                    cluster_last_seen[mk] = ts
-
-        total_rps = 0.0
-        
-        models = {}
-        for model_key in model_list:
-            metrics = cluster_rps.get(model_key, {})
-
-            # Weighted RPS across all windows (shorter windows get higher weight)
-            weighted_rps = 0.0
-            for window in METRIC_WINDOWS:
-                window_rps = metrics.get(str(window), 0.0)
-                weight = max_window / window
-                weighted_rps += window_rps * weight
-
-            models[model_key] = {
-                'hosts': sorted([(k, v['capacity'], model_tuple[1]) for k, v in self._cluster_metrics.items() 
-                               for model_tuple in v['loaded_models']
-                               if model_tuple[0] == model_key], key=lambda x: x[1]),
-                'host_count': 0,
-                'weighted_rps': weighted_rps,
-                'proportion': 0.0,
-            }
-            total_rps += weighted_rps
-
-        # Track best candidates for ST family
-        best_add_st = None
-        best_score_st = -1
-        second_best_score_st = -1
-        best_remove_st = None
-        best_remove_score_st = float('inf')
-        second_best_remove_score_st = float('inf')
-
-        for model_key, data in models.items():
-            data['host_count'] = len(data['hosts'])
-            data['proportion'] = data['weighted_rps'] / total_rps if total_rps > 0 else 0.0
-            data['score'] = data['proportion'] / (data['host_count'] + 1)
-
-            data['target_hosts'] = [(host, capacity) for host, capacity in available_st_hosts.items() if host not in (h for h, _, _ in data['hosts'])]
-
-            if (data['weighted_rps'] > 0 and data['target_hosts'] and data['score'] > best_score_st):
-                second_best_score_st = best_score_st
-                best_score_st = data['score']
-                best_add_st = (model_key, data)
-            elif (data['weighted_rps'] > 0 and data['target_hosts'] and data['score'] > second_best_score_st):
-                second_best_score_st = data['score']
-
-            if (data['weighted_rps'] > 0 and data['host_count'] > 1):
-                remove_score = data['proportion'] / data['host_count']
-                if remove_score < best_remove_score_st:
-                    second_best_remove_score_st = best_remove_score_st
-                    best_remove_score_st = remove_score
-                    best_remove_st = (model_key, data)
-                elif remove_score < second_best_remove_score_st:
-                    second_best_remove_score_st = remove_score
-
-        # unload models that have no rps
-        current_time = time.time()
-        for model_key, data in [(k, v) for k, v in models.items() if v['weighted_rps'] == 0]:
-            last_active = cluster_last_seen.get(model_key, 0.0)
-            idle_seconds = current_time - last_active
-            if idle_seconds <= MODEL_IDLE_GRACE_SECONDS:
-                continue
-            if data['host_count'] > 1:
-                hostname = data['hosts'][0][0]
-                self.logger.debug(f"Router: Unloading model {model_key} from {hostname} (idle {int(idle_seconds)}s, no rps).")
-                await _send_signal(hostname, model_key, False)
-            elif data['host_count'] == 1:
-                hostname, _, load_timestamp = data['hosts'][0]
-                if current_time - load_timestamp > MODEL_IDLE_GRACE_SECONDS:
-                    self.logger.debug(f"Router: Unloading model {model_key} from {hostname} (idle {int(idle_seconds)}s, loaded {int(current_time - load_timestamp)}s ago, no rps).")
-                    await _send_signal(hostname, model_key, False)
-
-        # load/uload model that have rps per family per direction.
-        
-        # Short-circuit demand-based rebalancing on very small clusters (<=2 capable hosts)
-        capable_hosts_count = sum(1 for _, d in self._cluster_metrics.items() if d.get('load_models', True))
-        if capable_hosts_count < 3:
-            self.logger.debug(f"Router: Skipping demand-based rebalancing: only {capable_hosts_count} capable host(s).")
-            elapsed_ms = (time.monotonic_ns() - start_ns) / 1_000_000.0
-            self.logger.debug(f"Router: Done rebalancing models in {elapsed_ms:.3f}ms ---------- ")
-            return
-
-        # Swap step when family is full (direction == 0): move one slot from lowest p/h to highest p/(h+1)
-        if st_direction == 0:
-            swap_add_st = None
-            swap_add_score_st = -1
-            swap_remove_st = None
-            swap_remove_score_st = float('inf')
-
-            for m_key, m_data in models.items():
-                if m_data['weighted_rps'] == 0:
-                    continue
-                if m_data['score'] > swap_add_score_st:
-                    swap_add_score_st = m_data['score']
-                    swap_add_st = (m_key, m_data)
-                if m_data['host_count'] > 1:
-                    rm_score = (m_data['proportion'] / m_data['host_count'])
-                    if rm_score < swap_remove_score_st:
-                        swap_remove_score_st = rm_score
-                        swap_remove_st = (m_key, m_data)
-
-            if swap_add_st and swap_remove_st and swap_add_st[0] != swap_remove_st[0]:
-                add_key, add_data = swap_add_st
-                remove_key, remove_data = swap_remove_st
-                add_hosts = set(h for h, _, _ in add_data['hosts'])
-                remove_host_tuple = next(((h, cap, ts) for h, cap, ts in remove_data['hosts'] if h not in add_hosts), None)
-                if remove_host_tuple:
-                    hostname, _, load_ts = remove_host_tuple
-                    current_time = time.time()
-                    if not load_ts or current_time - load_ts >= METRICS_LOOP_INTERVAL_SECONDS * 2:
-                        self.logger.debug(f"Router: ST swap: unloading {remove_key} from {hostname} to make room for {add_key}")
-                        await _send_signal(hostname, remove_key, False)
-
-        # Handle ST family
-        if st_direction > 0 and best_add_st:
-            model_key, data = best_add_st
-            # Pick best host (highest capacity)
-            hostname = max(data['target_hosts'], key=lambda x: x[1])[0]
-            self.logger.debug(f"Router: Adding {model_key} to {hostname} (score: {best_score_st:.3f})")
-            await _send_signal(hostname, model_key, True)
-        elif st_direction < 0 and best_remove_st:
-            model_key, data = best_remove_st
-            # Pick worst host (lowest capacity)
-            hostname = min(data['hosts'], key=lambda x: x[1])[0]
-            
-            # Dwell-time hysteresis: don't unload if recently loaded
-            current_time = time.time()
-            _, _, load_timestamp = next((h for h in data['hosts'] if h[0] == hostname), (None, None, None))
-            if load_timestamp and current_time - load_timestamp < METRICS_LOOP_INTERVAL_SECONDS * 2:
-                self.logger.debug(f"Router: Skipping removal of {model_key} from {hostname} (too recent: {int(current_time - load_timestamp)}s)")
-            else:
-                self.logger.debug(f"Router: Removing {model_key} from {hostname} (score: {best_remove_score_st:.3f})")
-                await _send_signal(hostname, model_key, False)
-
-        elapsed_ms = (time.monotonic_ns() - start_ns) / 1_000_000.0
-        self.logger.debug(f"Router: Done rebalancing models in {elapsed_ms:.3f}ms ---------- ")
+        return {
+            "load_models": self.load_models,
+            "at_capacity": self._at_model_capacity(),
+            "total_ram_gb": round(TOTAL_RAM_GB, 2),
+            "free_ram_gb": round(self._free_ram_gb, 2),
+            "total_vram_gb": round(TOTAL_VRAM_GB, 2) if TOTAL_VRAM_GB is not None else None,
+            "free_vram_gb": round(self._free_vram_gb, 2) if self._free_vram_gb is not None else None,
+            "gpu_support": PYNVML_AVAILABLE,
+            "gpu_available": GPU_HANDLE is not None,
+            "loaded_models": _serialize_loaded_models_meta(loaded_models),
+        }

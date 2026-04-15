@@ -1,40 +1,47 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
+
+NodeMeta = Dict[str, Any]
 
 
 class MetricsPayload(BaseModel):
     """Internal wire payload sent from each node to the leader every metrics cycle."""
     probe: bool
     query_view: bool = False
+    query_window: Optional[int] = None
     hostname: str
+    source: Optional[str] = None
     role: Optional[str] = None
     metrics: Optional[List["NodeMetricSeries"]] = None
-    loaded_models: Optional[List[Tuple[List[str], float]]] = None
-    load_models: Optional[bool] = None
-    at_capacity: Optional[bool] = None
-    total_ram_gb: Optional[float] = None
-    free_ram_gb: Optional[float] = None
-    total_vram_gb: Optional[float] = None
-    free_vram_gb: Optional[float] = None
-    gpu_support: Optional[bool] = None
-    gpu_available: Optional[bool] = None
+    meta: Optional[NodeMeta] = None
 
 
 class WindowSample(BaseModel):
-    """Aggregated value and sample count for a single rolling window."""
-    value: float = Field(..., description="Aggregated value (rate/sec, average, or sum depending on the metric)")
-    n: int = Field(..., description="Number of samples in this window")
+    """Mergeable numerator/denominator stats for a single window."""
+    value: float = Field(..., description="Mergeable numerator for the window")
+    n: Optional[int] = Field(default=None, description="Mergeable denominator for average-like metrics")
+
+
+class MetricsBucket(BaseModel):
+    """One mergeable aligned bucket that can be used for live and historical metrics."""
+    key: str = Field(..., description="Metric name for this bucket")
+    dims: List[str] = Field(default_factory=list, description="Optional metric dimensions for this bucket")
+    bucket_start: int = Field(..., description="Unix timestamp of the inclusive bucket start boundary")
+    bucket_seconds: int = Field(..., description="Bucket duration in seconds")
+    value: float = Field(..., description="Mergeable numerator for the bucket")
+    n: Optional[int] = Field(default=None, description="Mergeable denominator for average-like metrics")
 
 
 class NodeMetricSeries(BaseModel):
     """
-    One metric stream on a node with rolling-window snapshots.
+    One metric stream on a node with mergeable window stats.
 
-    key[0] is the metric name (e.g. 'batches', 'inference_ms', 'inference_origin_ms', 'hops').
-    key[1:] are optional dimensions (e.g. vector type, model name, revision).
+    key is the metric name (e.g. 'batches', 'inference_ms', 'inference_origin_ms', 'hops').
+    dims are optional dimensions (e.g. vector type, model name, revision).
     windows are keyed by window size in seconds.
     """
-    key: List[str] = Field(..., description="Compound key: [metric_name, *dimensions]")
+    key: str = Field(..., description="Metric name")
+    dims: List[str] = Field(default_factory=list, description="Optional metric dimensions")
     windows: Dict[int, WindowSample] = Field(
         default_factory=dict,
         description="Rolling-window snapshots keyed by window size in seconds",
@@ -49,18 +56,10 @@ class NodeView(BaseModel):
     """Snapshot of a single cluster node as last reported to the leader."""
     role: str = Field(..., description="Node role: 'index', 'query', 'all' for encoder nodes; 'api' for API nodes")
     is_leader: bool = Field(default=False, description="Whether this node is the current encoder leader")
-    load_models: bool = Field(..., description="Whether this node is configured to load embedding models")
-    at_capacity: bool = Field(..., description="Whether this node is currently at memory capacity and cannot load additional models")
     last_seen: float = Field(..., description="Unix timestamp of the last heartbeat received from this node")
-    gpu_support: bool = Field(..., description="Whether the node was built with GPU library support")
-    gpu_available: bool = Field(..., description="Whether a GPU device was detected and is usable on this node")
-    total_ram_gb: Optional[float] = Field(default=None, description="Total system RAM in GB")
-    free_ram_gb: Optional[float] = Field(default=None, description="Currently free system RAM in GB")
-    total_vram_gb: Optional[float] = Field(default=None, description="Total GPU VRAM in GB; null on CPU-only nodes")
-    free_vram_gb: Optional[float] = Field(default=None, description="Currently free GPU VRAM in GB; null on CPU-only nodes")
-    loaded_models: List[str] = Field(
-        default_factory=list,
-        description="Names of models currently loaded on this node (format: name or name:revision)"
+    meta: NodeMeta = Field(
+        default_factory=dict,
+        description="Forward-compatible node metadata bag (for load/capacity/gpu/memory/model details and future node status values)",
     )
     metrics: List[NodeMetricSeries] = Field(
         default_factory=list,
@@ -68,9 +67,16 @@ class NodeView(BaseModel):
     )
 
 
-class ClusterView(BaseModel):
-    """Latest cluster state as persisted by the encoder leader."""
+class Metrics(BaseModel):
+    """Latest metrics state as persisted by the encoder leader."""
     nodes: Dict[str, NodeView] = Field(
         default_factory=dict,
         description="Map of node ID to node snapshot for all nodes that have reported within the expiry window"
     )
+
+
+class MetricTrend(BaseModel):
+    """Historical buckets for a single metric key at a given resolution."""
+    key: str = Field(..., description="Metric key")
+    bucket_seconds: int = Field(..., description="Bucket resolution in seconds")
+    buckets: List[MetricsBucket] = Field(default_factory=list, description="Buckets ordered by bucket_start ascending")

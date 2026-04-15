@@ -2,7 +2,6 @@ apis/AmgixApi.ts
 apis/index.ts
 index.ts
 models/BulkUploadRequest.ts
-models/ClusterView.ts
 models/CollectionConfig.ts
 models/CollectionExistsResponse.ts
 models/CollectionStatsResponse.ts
@@ -14,6 +13,9 @@ models/DocumentStatusResponse.ts
 models/HTTPValidationError.ts
 models/MetadataFilter.ts
 models/MetadataIndex.ts
+models/MetricTrend.ts
+models/Metrics.ts
+models/MetricsBucket.ts
 models/NodeMetricSeries.ts
 models/NodeView.ts
 models/OkResponse.ts

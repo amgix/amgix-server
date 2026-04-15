@@ -49,5 +49,6 @@ export function initDashboardThemeToggle($button: JQuery<HTMLButtonElement>): vo
     applyDashboardTheme(next)
     setStoredTheme(next)
     syncThemeToggle($button)
+    $(document).trigger('amgix-dashboard-theme-changed')
   })
 }

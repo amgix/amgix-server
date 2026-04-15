@@ -40,65 +40,17 @@ export interface NodeView {
      */
     is_leader?: boolean;
     /**
-     * Whether this node is configured to load embedding models
-     * @type {boolean}
-     * @memberof NodeView
-     */
-    load_models: boolean;
-    /**
-     * Whether this node is currently at memory capacity and cannot load additional models
-     * @type {boolean}
-     * @memberof NodeView
-     */
-    at_capacity: boolean;
-    /**
      * Unix timestamp of the last heartbeat received from this node
      * @type {number}
      * @memberof NodeView
      */
     last_seen: number;
     /**
-     * Whether the node was built with GPU library support
-     * @type {boolean}
+     * Forward-compatible node metadata bag (for load/capacity/gpu/memory/model details and future node status values)
+     * @type {{ [key: string]: any; }}
      * @memberof NodeView
      */
-    gpu_support: boolean;
-    /**
-     * Whether a GPU device was detected and is usable on this node
-     * @type {boolean}
-     * @memberof NodeView
-     */
-    gpu_available: boolean;
-    /**
-     * Total system RAM in GB
-     * @type {number}
-     * @memberof NodeView
-     */
-    total_ram_gb?: number;
-    /**
-     * Currently free system RAM in GB
-     * @type {number}
-     * @memberof NodeView
-     */
-    free_ram_gb?: number;
-    /**
-     * Total GPU VRAM in GB; null on CPU-only nodes
-     * @type {number}
-     * @memberof NodeView
-     */
-    total_vram_gb?: number;
-    /**
-     * Currently free GPU VRAM in GB; null on CPU-only nodes
-     * @type {number}
-     * @memberof NodeView
-     */
-    free_vram_gb?: number;
-    /**
-     * Names of models currently loaded on this node (format: name or name:revision)
-     * @type {Array<string>}
-     * @memberof NodeView
-     */
-    loaded_models?: Array<string>;
+    meta?: { [key: string]: any; };
     /**
      * Metric series for this node; empty for API nodes
      * @type {Array<NodeMetricSeries>}
@@ -112,11 +64,7 @@ export interface NodeView {
  */
 export function instanceOfNodeView(value: object): value is NodeView {
     if (!('role' in value) || value['role'] === undefined) return false;
-    if (!('load_models' in value) || value['load_models'] === undefined) return false;
-    if (!('at_capacity' in value) || value['at_capacity'] === undefined) return false;
     if (!('last_seen' in value) || value['last_seen'] === undefined) return false;
-    if (!('gpu_support' in value) || value['gpu_support'] === undefined) return false;
-    if (!('gpu_available' in value) || value['gpu_available'] === undefined) return false;
     return true;
 }
 
@@ -132,16 +80,8 @@ export function NodeViewFromJSONTyped(json: any, ignoreDiscriminator: boolean): 
         
         'role': json['role'],
         'is_leader': json['is_leader'] == null ? undefined : json['is_leader'],
-        'load_models': json['load_models'],
-        'at_capacity': json['at_capacity'],
         'last_seen': json['last_seen'],
-        'gpu_support': json['gpu_support'],
-        'gpu_available': json['gpu_available'],
-        'total_ram_gb': json['total_ram_gb'] == null ? undefined : json['total_ram_gb'],
-        'free_ram_gb': json['free_ram_gb'] == null ? undefined : json['free_ram_gb'],
-        'total_vram_gb': json['total_vram_gb'] == null ? undefined : json['total_vram_gb'],
-        'free_vram_gb': json['free_vram_gb'] == null ? undefined : json['free_vram_gb'],
-        'loaded_models': json['loaded_models'] == null ? undefined : json['loaded_models'],
+        'meta': json['meta'] == null ? undefined : json['meta'],
         'metrics': json['metrics'] == null ? undefined : ((json['metrics'] as Array<any>).map(NodeMetricSeriesFromJSON)),
     };
 }
@@ -159,16 +99,8 @@ export function NodeViewToJSONTyped(value?: NodeView | null, ignoreDiscriminator
         
         'role': value['role'],
         'is_leader': value['is_leader'],
-        'load_models': value['load_models'],
-        'at_capacity': value['at_capacity'],
         'last_seen': value['last_seen'],
-        'gpu_support': value['gpu_support'],
-        'gpu_available': value['gpu_available'],
-        'total_ram_gb': value['total_ram_gb'],
-        'free_ram_gb': value['free_ram_gb'],
-        'total_vram_gb': value['total_vram_gb'],
-        'free_vram_gb': value['free_vram_gb'],
-        'loaded_models': value['loaded_models'],
+        'meta': value['meta'],
         'metrics': value['metrics'] == null ? undefined : ((value['metrics'] as Array<any>).map(NodeMetricSeriesToJSON)),
     };
 }

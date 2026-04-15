@@ -4,22 +4,25 @@ import os
 import logging
 import asyncio
 import pathlib
-from typing import Dict, List
+from datetime import datetime
+from typing import Dict, List, Literal, Optional
 from contextlib import asynccontextmanager
 import uuid
 
-from fastapi import FastAPI, HTTPException, Path, Request, APIRouter
+from fastapi import FastAPI, HTTPException, Path, Query, Request, APIRouter
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from typing import Annotated
 import traceback
 
 
-from src.api.api_metrics import ApiMetricsMiddleware, snapshot_as_node_metric_series
+from src.api import api_metrics as api_metrics_module
+from src.api.api_metrics import ApiMetricsMiddleware, init_api_metrics_service
 from src.core.common.bunny_talk import BunnyTalk
 from src.core.common.lock_manager import LockService, LockClient
 from src.core.common.logging_config import configure_logging
-from src.core.models.cluster import ClusterView, MetricsPayload
+from src.core.models.cluster import Metrics, MetricTrend, MetricsBucket, MetricsPayload
+from src.core.common.metrics_definitions import MetricKey
 from src.core.models.document import (
     CollectionStatsResponse,
     Document,
@@ -134,35 +137,6 @@ _rabbitmq_broker_version: str | None = None
 
 DASHBOARD_STATIC_DIR = pathlib.Path(__file__).resolve().parent / "dashboard"
 
-
-_ENCODER_LEADER_QUEUE = "embed-leader"
-_API_REPORT_INTERVAL_S = 10
-
-
-async def _report_to_leader_loop() -> None:
-    while True:
-        try:
-            await _bunny_talk.talk(
-                routing_key=_ENCODER_LEADER_QUEUE,
-                payload=MetricsPayload(
-                    probe=False,
-                    hostname=HOSTNAME,
-                    role='api',
-                    metrics=snapshot_as_node_metric_series(),
-                    loaded_models=[],
-                    load_models=False,
-                    at_capacity=False,
-                    free_ram_gb=None,
-                    gpu_support=False,
-                    gpu_available=False,
-                ),
-                start_trace=True,
-            )
-        except Exception as e:
-            logger.debug(f"API: Could not report to encoder leader: {e}")
-        await asyncio.sleep(_API_REPORT_INTERVAL_S)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan event handler for database connection on startup."""
@@ -191,17 +165,19 @@ async def lifespan(app: FastAPI):
 
     await _database.check_features()
 
-    reporter_task = asyncio.create_task(_report_to_leader_loop())
+    api_metrics = init_api_metrics_service(
+        amqp_url=AMGIX_AMQP_URL,
+        logger=logger,
+        hostname=HOSTNAME,
+        database=_database,
+    )
+    api_metrics.start_reporting()
 
     yield
 
     logger.info(f"Stopping {APP_NAME} API")
 
-    reporter_task.cancel()
-    try:
-        await reporter_task
-    except asyncio.CancelledError:
-        pass
+    await api_metrics.stop_reporting()
 
     # Cleanup on shutdown
     if _bunny_talk:
@@ -357,26 +333,61 @@ async def readiness_check() -> ReadyResponse:
     return JSONResponse(status_code=HTTP_STATUS_PARTIAL_READY, content=body.model_dump())
 
 
-@shared_router.get("/cluster/view", operation_id="cluster_view")
-async def cluster_view() -> ClusterView:
-    """Return the current cluster view from the encoder leader.
+@shared_router.get("/metrics/current", operation_id="metrics_current")
+async def metrics_current(window: Literal[30, 60] = 30) -> Metrics:
+    """Return the current metrics state for all nodes over the given window (seconds)."""
+    return await _bunny_talk.rpc(
+        api_metrics_module.api_metrics.leader_queue,
+        payload=MetricsPayload(probe=False, query_view=True, query_window=window, hostname=HOSTNAME),
+        return_type=Metrics,
+        timeout=2.0,
+    )
 
-    Queries the leader in real time over AMQP. Returns an empty ClusterView
-    if there is no active encoder leader.
+
+@shared_router.get("/metrics/trends", operation_id="metrics_trends")
+async def metrics_trends(
+    since: datetime,
+    until: datetime,
+    resolution: Literal[60, 300] = 60,
+    keys: Optional[List[str]] = Query(default=None),
+) -> List[MetricTrend]:
+    """Return historical metric buckets for the given time range and resolution.
+
+    Args:
+        since: Inclusive start of the time range (ISO 8601, UTC assumed if no timezone given).
+        until: Exclusive end of the time range (ISO 8601, UTC assumed if no timezone given).
+        resolution: Bucket size in seconds — 60 for 1-minute, 300 for 5-minute.
+        keys: One or more metric keys to return. Omit to return all keys.
     """
-    try:
-        result = await _bunny_talk.rpc(
-            _ENCODER_LEADER_QUEUE,
-            payload=MetricsPayload(probe=False, query_view=True, hostname=HOSTNAME),
-            return_type=ClusterView,
-            timeout=2.0,
-        )
-        if isinstance(result, ClusterView):
-            return result
-        return ClusterView()
-    except Exception as e:
-        logger.warning(f"cluster_view: failed to reach leader: {e}")
-        return ClusterView()
+    if since.tzinfo is None or until.tzinfo is None:
+        raise HTTPException(status_code=422, detail="'since' and 'until' must include a timezone (e.g. 2024-01-01T00:00:00Z)")
+
+    since_ts = since.timestamp()
+    until_ts = until.timestamp()
+
+    if since_ts >= until_ts:
+        raise HTTPException(status_code=422, detail="'since' must be less than 'until'")
+    valid_keys = {k.value for k in MetricKey}
+    if keys:
+        unknown = [k for k in keys if k not in valid_keys]
+        if unknown:
+            raise HTTPException(status_code=422, detail=f"Unknown metric keys: {unknown}")
+
+    buckets = await _database.query_metric_buckets(
+        bucket_seconds=resolution,
+        since=since_ts,
+        until=until_ts,
+        keys=keys or None,
+    )
+
+    grouped: Dict[str, List[MetricsBucket]] = {}
+    for bucket in buckets:
+        grouped.setdefault(bucket.key, []).append(bucket)
+
+    return [
+        MetricTrend(key=key, bucket_seconds=resolution, buckets=key_buckets)
+        for key, key_buckets in grouped.items()
+    ]
 
 
 # Collections

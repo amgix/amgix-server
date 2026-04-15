@@ -87,6 +87,7 @@ class PostgreSQLDatabase(SQLBase):
             "upsert": 'INSERT INTO "{table}" ({columns}) VALUES {values} ON CONFLICT ({conflict_columns}) DO UPDATE SET {update_clause}',
             # Update clause for IDF upsert (PostgreSQL)
             "upsert_update_doc_count": '"doc_count" = "{table}"."doc_count" + EXCLUDED."doc_count"',
+            "upsert_update_metric_bucket": '"value" = EXCLUDED."value", "n" = EXCLUDED."n"',
             "update_join": 'UPDATE "{table}" {alias} SET {set_clause} FROM ({subquery}) {subquery_alias} WHERE {join_conditions}',
             "delete_join": 'DELETE FROM "{table}" {alias} USING ({subquery}) {subquery_alias} WHERE {join_conditions} AND {where_clause}',
             

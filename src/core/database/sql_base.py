@@ -12,6 +12,7 @@ from abc import abstractmethod
 from contextlib import asynccontextmanager
 from .base import DatabaseBase, AmgixNotFound
 from .common import AmgixValidationError
+from ..models.cluster import MetricsBucket
 from ..models.document import Document, DocumentWithVectors, QueueDocument, QueueInfo, SearchResult, DocumentStatus, DocumentStatusResponse, VectorScore
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config
 from ..common import (
@@ -20,7 +21,8 @@ from ..common import (
     MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH, UUID_LENGTH, MAX_DOCUMENT_TAG_LENGTH,
     MAX_FIELD_VECTOR_NAME_LENGTH, MAX_INTERNAL_COLLECTION_NAME_LENGTH,
     MAX_DOCUMENT_ID_LENGTH, QueuedDocumentStatus, MAX_STATUS_LENGTH, MAX_SEARCH_LIMIT,
-    get_user_collection_name, MetadataValueType, COLLECTION_INGEST_LOCK_TIMEOUT
+    get_user_collection_name, MetadataValueType, COLLECTION_INGEST_LOCK_TIMEOUT,
+    MAX_HOSTNAME_LENGTH, MAX_METRIC_SOURCE_LENGTH, MAX_METRIC_KEY_LENGTH,
 )
 from ..common.lock_manager import LockClient
 
@@ -120,6 +122,7 @@ class SQLBase(DatabaseBase):
         "upsert": "INSERT INTO {table} ({columns}) VALUES {values} ON DUPLICATE KEY UPDATE {update_clause}",
         # Backend-specific update clause for IDF upsert; default works for MariaDB/MySQL
         "upsert_update_doc_count": "doc_count = doc_count + 1",
+        "upsert_update_metric_bucket": "value = VALUES(value), n = VALUES(n)",
         "query_vector_batch_select_first": """
             SELECT
                 %s AS field_vector_id,
@@ -301,14 +304,6 @@ class SQLBase(DatabaseBase):
         Configure the database with system objects and ensure proper setup.
         """
 
-        # precheck if the database is already configured
-        try:
-            await self.execute_sql(f"SELECT COUNT(*) FROM {self.quote_identifier(self.meta_collection)}")
-            self.logger.info(f"System meta table already exists")
-            return
-        except Exception as e:
-            self.logger.debug(f"Check for system meta table failed: {str(e)}")
-
         # Create the system meta table if it doesn't exist
         try:
             columns = [
@@ -410,6 +405,60 @@ class SQLBase(DatabaseBase):
                 self.logger.info(f"System queue table already exists")
             else:
                 self.logger.error(f"Failed to create system queue table: {e}")
+                raise
+
+        # Create the system metrics table if it doesn't exist
+        try:
+            metrics_columns = [
+                self.format_sql("column_varchar", name="id", size=UUID_LENGTH, null_constraint=" NOT NULL"),
+                self.format_sql("column_varchar", name="hostname", size=MAX_HOSTNAME_LENGTH, null_constraint=" NOT NULL"),
+                self.format_sql("column_varchar", name="source", size=MAX_METRIC_SOURCE_LENGTH, null_constraint=" NOT NULL"),
+                self.format_sql("column_varchar", name="key", size=MAX_METRIC_KEY_LENGTH, null_constraint=" NOT NULL"),
+                self.format_sql("column_text", name="dims", null_constraint=" NOT NULL"),
+                self.format_sql("column_bigint", name="bucket_start", null_constraint=" NOT NULL"),
+                self.format_sql("column_int", name="bucket_seconds", null_constraint=" NOT NULL"),
+                self.format_sql("column_float", name="value", null_constraint=" NOT NULL"),
+                self.format_sql("column_int", name="n", null_constraint=""),
+            ]
+            metrics_pk = self.format_sql(
+                "index_primary",
+                name=self._string_to_uuid(f"{self.metrics_collection}_pk"),
+                column="id",
+            )
+            metrics_ddl = self.format_sql("create_table",
+                if_not_exists="",
+                table_name=self.metrics_collection,
+                columns=',\n                '.join(metrics_columns),
+                indexes=',\n                ' + metrics_pk,
+                table_options=self.SQL_TEMPLATES.get("table_options", "")
+            )
+            await self.execute_sql_no_result(metrics_ddl)
+
+            for idx_name, idx_cols in [
+                ("bucket_lookup", self.quote_column_list(["bucket_seconds", "bucket_start"])),
+                ("key", self.quote_column_list(["key"])),
+            ]:
+                idx_sql = self.format_sql("create_index_simple",
+                    table=self.metrics_collection,
+                    name=self._string_to_uuid(f"{self.metrics_collection}_{idx_name}"),
+                    columns=idx_cols,
+                )
+                try:
+                    await self.execute_sql_no_result(idx_sql)
+                except Exception as e:
+                    if "duplicate key name" in str(e).lower():
+                        self.logger.info(f"Metrics index {idx_name} already exists")
+                    else:
+                        self.logger.error(f"Failed to create metrics index {idx_name}: {e}")
+                        raise
+
+            self.logger.info("Created system metrics table")
+
+        except Exception as e:
+            if "already exists" in str(e).lower():
+                self.logger.info("System metrics table already exists")
+            else:
+                self.logger.error(f"Failed to create system metrics table: {e}")
                 raise
 
     async def probe(self) -> None:
@@ -2209,4 +2258,88 @@ class SQLBase(DatabaseBase):
         return DocumentStatusResponse(
             statuses=statuses
         )
-        
+
+    # ==========================================
+    # Metrics Methods
+    # ==========================================
+
+    async def append_metric_buckets(self, hostname: str, source: str, buckets: List[MetricsBucket]) -> None:
+        if not buckets:
+            return
+        columns = ["id", "hostname", "source", "key", "dims", "bucket_start", "bucket_seconds", "value", "n"]
+        update_clause = self.SQL_TEMPLATES["upsert_update_metric_bucket"]
+        row_placeholder = f"({', '.join(['%s'] * len(columns))})"
+        upsert_sql = self.format_sql(
+            "upsert",
+            table=self.metrics_collection,
+            columns=self.quote_column_list(columns),
+            values=', '.join([row_placeholder] * len(buckets)),
+            update_clause=update_clause,
+            conflict_columns=self.quote_identifier("id"),
+        )
+        params: List[Any] = []
+        for bucket in buckets:
+            identity = f"{hostname}:{source}:{bucket.key}:{':'.join(bucket.dims)}:{bucket.bucket_start}:{bucket.bucket_seconds}"
+            params.extend([
+                self._string_to_uuid(identity),
+                hostname,
+                source,
+                bucket.key,
+                json.dumps(bucket.dims),
+                bucket.bucket_start,
+                bucket.bucket_seconds,
+                bucket.value,
+                bucket.n,
+            ])
+        await self.execute_sql_no_result(upsert_sql, tuple(params))
+
+    async def trim_metric_buckets(self, bucket_seconds: int, cutoff: float) -> None:
+        delete_sql = self.format_sql(
+            "delete",
+            table=self.metrics_collection,
+            where_clause=(
+                f"{self.quote_identifier('bucket_seconds')} = %s"
+                f" AND {self.quote_identifier('bucket_start')} < %s"
+            ),
+        )
+        await self.execute_sql_no_result(delete_sql, (bucket_seconds, int(cutoff)))
+
+    async def query_metric_buckets(
+        self,
+        bucket_seconds: int,
+        since: float,
+        until: float,
+        keys: Optional[List[str]] = None,
+    ) -> List[MetricsBucket]:
+        where_parts = [
+            f"{self.quote_identifier('bucket_seconds')} = %s",
+            f"{self.quote_identifier('bucket_start')} >= %s",
+            f"{self.quote_identifier('bucket_start')} < %s",
+        ]
+        params: List[Any] = [bucket_seconds, int(since), int(until)]
+        if keys:
+            placeholders = ', '.join(['%s'] * len(keys))
+            where_parts.append(f"{self.quote_identifier('key')} IN ({placeholders})")
+            params.extend(keys)
+        select_sql = self.format_sql(
+            "select",
+            columns="*",
+            table=self.metrics_collection,
+            joins="",
+            where=" WHERE " + " AND ".join(where_parts),
+            group_by="",
+            order_by=f" ORDER BY {self.quote_identifier('bucket_start')} ASC",
+            limit="",
+        )
+        rows = await self.execute_sql(select_sql, tuple(params))
+        return [
+            MetricsBucket(
+                key=row["key"],
+                dims=json.loads(row["dims"]) if row["dims"] else [],
+                bucket_start=int(row["bucket_start"]),
+                bucket_seconds=int(row["bucket_seconds"]),
+                value=float(row["value"]),
+                n=int(row["n"]) if row["n"] is not None else None,
+            )
+            for row in rows
+        ]

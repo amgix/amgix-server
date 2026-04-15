@@ -16,13 +16,14 @@
 import * as runtime from '../runtime';
 import type {
   BulkUploadRequest,
-  ClusterView,
   CollectionConfig,
   CollectionExistsResponse,
   CollectionStatsResponse,
   Document,
   DocumentStatusResponse,
   HTTPValidationError,
+  MetricTrend,
+  Metrics,
   OkResponse,
   QueueInfo,
   ReadyResponse,
@@ -34,8 +35,6 @@ import type {
 import {
     BulkUploadRequestFromJSON,
     BulkUploadRequestToJSON,
-    ClusterViewFromJSON,
-    ClusterViewToJSON,
     CollectionConfigFromJSON,
     CollectionConfigToJSON,
     CollectionExistsResponseFromJSON,
@@ -48,6 +47,10 @@ import {
     DocumentStatusResponseToJSON,
     HTTPValidationErrorFromJSON,
     HTTPValidationErrorToJSON,
+    MetricTrendFromJSON,
+    MetricTrendToJSON,
+    MetricsFromJSON,
+    MetricsToJSON,
     OkResponseFromJSON,
     OkResponseToJSON,
     QueueInfoFromJSON,
@@ -112,6 +115,17 @@ export interface GetDocumentStatusRequest {
     documentId: string;
 }
 
+export interface MetricsCurrentRequest {
+    window?: MetricsCurrentWindowEnum;
+}
+
+export interface MetricsTrendsRequest {
+    since: Date;
+    until: Date;
+    resolution?: MetricsTrendsResolutionEnum;
+    keys?: Array<string>;
+}
+
 export interface SearchRequest {
     collectionName: string;
     searchQuery: SearchQuery;
@@ -136,45 +150,6 @@ export interface UpsertDocumentsBulkRequest {
  * 
  */
 export class AmgixApi extends runtime.BaseAPI {
-
-    /**
-     * Creates request options for clusterView without sending the request
-     */
-    async clusterViewRequestOpts(): Promise<runtime.RequestOpts> {
-        const queryParameters: any = {};
-
-        const headerParameters: runtime.HTTPHeaders = {};
-
-
-        let urlPath = `/v1/cluster/view`;
-
-        return {
-            path: urlPath,
-            method: 'GET',
-            headers: headerParameters,
-            query: queryParameters,
-        };
-    }
-
-    /**
-     * Return the current cluster view from the encoder leader.  Queries the leader in real time over AMQP. Returns an empty ClusterView if there is no active encoder leader.
-     * Cluster View
-     */
-    async clusterViewRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ClusterView>> {
-        const requestOptions = await this.clusterViewRequestOpts();
-        const response = await this.request(requestOptions, initOverrides);
-
-        return new runtime.JSONApiResponse(response, (jsonValue) => ClusterViewFromJSON(jsonValue));
-    }
-
-    /**
-     * Return the current cluster view from the encoder leader.  Queries the leader in real time over AMQP. Returns an empty ClusterView if there is no active encoder leader.
-     * Cluster View
-     */
-    async clusterView(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ClusterView> {
-        const response = await this.clusterViewRaw(initOverrides);
-        return await response.value();
-    }
 
     /**
      * Creates request options for collectionExists without sending the request
@@ -845,6 +820,118 @@ export class AmgixApi extends runtime.BaseAPI {
     }
 
     /**
+     * Creates request options for metricsCurrent without sending the request
+     */
+    async metricsCurrentRequestOpts(requestParameters: MetricsCurrentRequest): Promise<runtime.RequestOpts> {
+        const queryParameters: any = {};
+
+        if (requestParameters['window'] != null) {
+            queryParameters['window'] = requestParameters['window'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+
+        let urlPath = `/v1/metrics/current`;
+
+        return {
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     * Return the current metrics state for all nodes over the given window (seconds).
+     * Metrics Current
+     */
+    async metricsCurrentRaw(requestParameters: MetricsCurrentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Metrics>> {
+        const requestOptions = await this.metricsCurrentRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) => MetricsFromJSON(jsonValue));
+    }
+
+    /**
+     * Return the current metrics state for all nodes over the given window (seconds).
+     * Metrics Current
+     */
+    async metricsCurrent(requestParameters: MetricsCurrentRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Metrics> {
+        const response = await this.metricsCurrentRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * Creates request options for metricsTrends without sending the request
+     */
+    async metricsTrendsRequestOpts(requestParameters: MetricsTrendsRequest): Promise<runtime.RequestOpts> {
+        if (requestParameters['since'] == null) {
+            throw new runtime.RequiredError(
+                'since',
+                'Required parameter "since" was null or undefined when calling metricsTrends().'
+            );
+        }
+
+        if (requestParameters['until'] == null) {
+            throw new runtime.RequiredError(
+                'until',
+                'Required parameter "until" was null or undefined when calling metricsTrends().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['since'] != null) {
+            queryParameters['since'] = (requestParameters['since'] as any).toISOString();
+        }
+
+        if (requestParameters['until'] != null) {
+            queryParameters['until'] = (requestParameters['until'] as any).toISOString();
+        }
+
+        if (requestParameters['resolution'] != null) {
+            queryParameters['resolution'] = requestParameters['resolution'];
+        }
+
+        if (requestParameters['keys'] != null) {
+            queryParameters['keys'] = requestParameters['keys'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+
+        let urlPath = `/v1/metrics/trends`;
+
+        return {
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     * Return historical metric buckets for the given time range and resolution.  Args:     since: Inclusive start of the time range (ISO 8601, UTC assumed if no timezone given).     until: Exclusive end of the time range (ISO 8601, UTC assumed if no timezone given).     resolution: Bucket size in seconds — 60 for 1-minute, 300 for 5-minute.     keys: One or more metric keys to return. Omit to return all keys.
+     * Metrics Trends
+     */
+    async metricsTrendsRaw(requestParameters: MetricsTrendsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<MetricTrend>>> {
+        const requestOptions = await this.metricsTrendsRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) => jsonValue.map(MetricTrendFromJSON));
+    }
+
+    /**
+     * Return historical metric buckets for the given time range and resolution.  Args:     since: Inclusive start of the time range (ISO 8601, UTC assumed if no timezone given).     until: Exclusive end of the time range (ISO 8601, UTC assumed if no timezone given).     resolution: Bucket size in seconds — 60 for 1-minute, 300 for 5-minute.     keys: One or more metric keys to return. Omit to return all keys.
+     * Metrics Trends
+     */
+    async metricsTrends(requestParameters: MetricsTrendsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<MetricTrend>> {
+        const response = await this.metricsTrendsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
      * Creates request options for search without sending the request
      */
     async searchRequestOpts(requestParameters: SearchRequest): Promise<runtime.RequestOpts> {
@@ -1151,3 +1238,20 @@ export class AmgixApi extends runtime.BaseAPI {
     }
 
 }
+
+/**
+ * @export
+ */
+export const MetricsCurrentWindowEnum = {
+    NUMBER_30: 30,
+    NUMBER_60: 60
+} as const;
+export type MetricsCurrentWindowEnum = typeof MetricsCurrentWindowEnum[keyof typeof MetricsCurrentWindowEnum];
+/**
+ * @export
+ */
+export const MetricsTrendsResolutionEnum = {
+    NUMBER_60: 60,
+    NUMBER_300: 300
+} as const;
+export type MetricsTrendsResolutionEnum = typeof MetricsTrendsResolutionEnum[keyof typeof MetricsTrendsResolutionEnum];

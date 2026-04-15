@@ -37,6 +37,10 @@
                   <span class="material-symbols-outlined material-symbols--btn" aria-hidden="true">home</span>
                   <span>Home</span>
                 </button>
+                <button type="button" data-panel-link="cluster-map">
+                  <span class="material-symbols-outlined material-symbols--btn" aria-hidden="true">hub</span>
+                  <span>Cluster Map</span>
+                </button>
                 <button type="button" data-panel-link="collections">
                   <span class="material-symbols-outlined material-symbols--btn" aria-hidden="true">docs</span>
                   <span>Collections</span>
@@ -71,6 +75,15 @@
         <main id="dashboard-panels">
           <section class="dashboard-panel" data-panel="home" id="panel-home" aria-label="Home">
             <div class="dashboard-home" data-home-root aria-live="polite"></div>
+          </section>
+          <section
+            class="dashboard-panel"
+            data-panel="cluster-map"
+            id="panel-cluster-map"
+            hidden
+            aria-label="Cluster Map"
+          >
+            <div class="dashboard-cluster-map" data-cluster-map-root></div>
           </section>
           <section
             class="dashboard-panel"

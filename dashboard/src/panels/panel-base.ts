@@ -7,4 +7,7 @@ export abstract class DashboardPanel {
   refresh(api: AmgixApi): void {
     this.init(api)
   }
+
+  /** Called when switching away so panels can stop timers and invalidate in-flight work. */
+  deactivate(): void {}
 }

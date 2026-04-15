@@ -13,6 +13,7 @@ from qdrant_client.http import models as rest
 from qdrant_client.models import FormulaQuery, SumExpression, MultExpression, Prefetch
 
 from .base import DatabaseBase, AmgixNotFound
+from ..models.cluster import MetricsBucket
 from ..models.document import Document, DocumentWithVectors, SearchResult, QueueDocument, QueueInfo, DocumentStatus, DocumentStatusResponse, VectorScore
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config
 from ..common import APP_PREFIX, VectorType, DatabaseInfo, DatabaseFeatures, SEARCH_PREFETCH_MULTIPLIER, DenseDistance, QueuedDocumentStatus, get_user_collection_name, MetadataValueType
@@ -78,14 +79,6 @@ class QdrantDatabase(DatabaseBase):
         """
         Configure the database with system objects and ensure proper setup.
         """
-
-        # precheck if the database is already configured
-        try:
-            if await self.client.collection_exists(self.meta_collection):
-                self.logger.info(f"System meta collection already exists")
-                return
-        except Exception as e:
-            self.logger.debug(f"Check for system meta collection failed: {str(e)}")
 
         # Create the system meta collection if it doesn't exist
         try:
@@ -154,14 +147,50 @@ class QdrantDatabase(DatabaseBase):
             else:
                 self.logger.debug(f"System queue collection already exists")
         except Exception as e:
-            if "already exists" in str(e).lower() or "already exists" in str(e).lower():
-                # Another instance beat us to it - that's fine
+            if "already exists" in str(e).lower():
                 self.logger.info(f"System queue collection already exists")
             else:
                 self.logger.error(f"Failed to create system queue collection: {e}")
                 raise
 
+        # Create the system metrics collection if it doesn't exist
+        try:
+            if not await self.client.collection_exists(self.metrics_collection):
+                self.logger.info(f"Creating system metrics collection")
 
+                await self.client.create_collection(
+                    collection_name=self.metrics_collection,
+                    vectors_config={
+                        "dummy": rest.VectorParams(
+                            size=1,
+                            distance=rest.Distance.DOT
+                        )
+                    }
+                )
+
+                await self.client.create_payload_index(
+                    collection_name=self.metrics_collection,
+                    field_name="key",
+                    field_schema=rest.PayloadSchemaType.KEYWORD
+                )
+                await self.client.create_payload_index(
+                    collection_name=self.metrics_collection,
+                    field_name="bucket_seconds",
+                    field_schema=rest.PayloadSchemaType.INTEGER
+                )
+                await self.client.create_payload_index(
+                    collection_name=self.metrics_collection,
+                    field_name="bucket_start",
+                    field_schema=rest.PayloadSchemaType.INTEGER
+                )
+            else:
+                self.logger.debug(f"System metrics collection already exists")
+        except Exception as e:
+            if "already exists" in str(e).lower():
+                self.logger.info(f"System metrics collection already exists")
+            else:
+                self.logger.error(f"Failed to create system metrics collection: {e}")
+                raise
 
     async def create_collection(self, collection_name: str, config: CollectionConfigInternal) -> bool:
         """
@@ -1099,6 +1128,106 @@ class QdrantDatabase(DatabaseBase):
         return DocumentStatusResponse(
             statuses=statuses
         )
+
+    async def append_metric_buckets(self, hostname: str, source: str, buckets: List[MetricsBucket]) -> None:
+        if not buckets:
+            return
+
+        points = []
+        for bucket in buckets:
+            # Stable ID so re-inserting the same bucket is an upsert (idempotent on retry).
+            identity = f"{hostname}:{source}:{bucket.key}:{':'.join(bucket.dims)}:{bucket.bucket_start}:{bucket.bucket_seconds}"
+            point_id = self._string_to_uuid(identity)
+            points.append(rest.PointStruct(
+                id=point_id,
+                vector={"dummy": [0.0]},
+                payload={
+                    "hostname": hostname,
+                    "source": source,
+                    "key": bucket.key,
+                    "dims": bucket.dims,
+                    "bucket_start": bucket.bucket_start,
+                    "bucket_seconds": bucket.bucket_seconds,
+                    "value": bucket.value,
+                    "n": bucket.n,
+                },
+            ))
+
+        await self.client.upsert(
+            collection_name=self.metrics_collection,
+            points=points,
+        )
+
+    async def trim_metric_buckets(self, bucket_seconds: int, cutoff: float) -> None:
+        await self.client.delete(
+            collection_name=self.metrics_collection,
+            points_selector=rest.Filter(
+                must=[
+                    rest.FieldCondition(
+                        key="bucket_seconds",
+                        match=rest.MatchValue(value=bucket_seconds),
+                    ),
+                    rest.FieldCondition(
+                        key="bucket_start",
+                        range=rest.Range(lt=cutoff),
+                    ),
+                ]
+            ),
+        )
+
+    async def query_metric_buckets(
+        self,
+        bucket_seconds: int,
+        since: float,
+        until: float,
+        keys: Optional[List[str]] = None,
+    ) -> List[MetricsBucket]:
+        must = [
+            rest.FieldCondition(
+                key="bucket_seconds",
+                match=rest.MatchValue(value=bucket_seconds),
+            ),
+            rest.FieldCondition(
+                key="bucket_start",
+                range=rest.Range(gte=since, lt=until),
+            ),
+        ]
+        if keys:
+            must.append(rest.FieldCondition(
+                key="key",
+                match=rest.MatchAny(any=keys),
+            ))
+
+        scroll_filter = rest.Filter(must=must)
+        order_by = rest.OrderBy(key="bucket_start", direction=rest.Direction.ASC)
+
+        results: List[MetricsBucket] = []
+        offset = None
+        while True:
+            points, next_offset = await self.client.scroll(
+                collection_name=self.metrics_collection,
+                scroll_filter=scroll_filter,
+                order_by=order_by,
+                offset=offset,
+                limit=1000,
+                with_payload=True,
+                with_vectors=False,
+            )
+            for point in points:
+                p = point.payload
+                results.append(MetricsBucket(
+                    key=p["key"],
+                    dims=p.get("dims", []),
+                    bucket_start=p["bucket_start"],
+                    bucket_seconds=p["bucket_seconds"],
+                    value=p["value"],
+                    n=p.get("n"),
+                ))
+            if next_offset is None:
+                break
+            offset = next_offset
+
+        return results
 
     async def validate_features(self, config: CollectionConfig) -> None:
         """

@@ -6,6 +6,7 @@ from heapq import nlargest
 import uuid
 import asyncio
 
+from ..models.cluster import MetricsBucket
 from ..models.document import Document, DocumentWithVectors, SearchResult, QueueDocument, QueueInfo, DocumentStatusResponse
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig
 from ..common import (
@@ -41,6 +42,7 @@ class DatabaseBase(ABC):
         """Enumeration of system collection types."""
         META = "meta"
         QUEUE = "queue"
+        METRICS = "metrics"
 
     
     def __init__(self, connection_string: str, logger, **kwargs):
@@ -58,9 +60,9 @@ class DatabaseBase(ABC):
         # Use provided logger
         self.logger = logger
         
-        # Set the system meta collection name
         self.meta_collection = self.get_sys_collection_name(self.SysCollectionType.META)
         self.queue_collection = self.get_sys_collection_name(self.SysCollectionType.QUEUE)
+        self.metrics_collection = self.get_sys_collection_name(self.SysCollectionType.METRICS)
     
     @abstractmethod
     async def probe(self) -> None:
@@ -529,5 +531,49 @@ class DatabaseBase(ABC):
         Args:
             collection_name: Name of the collection
             stats: Dict with structure: {"doc_count": int, "avgdls": {"field_vector_name": float, ...}}
+        """
+        pass
+
+    @abstractmethod
+    async def append_metric_buckets(self, hostname: str, source: str, buckets: List[MetricsBucket]) -> None:
+        """
+        Persist completed metric buckets for this node. Implementations should upsert on
+        (hostname, source, key, dims, bucket_start, bucket_seconds).
+
+        Args:
+            hostname: Reporting node hostname
+            source: Reporting node source identifier (e.g. 'router', 'api')
+            buckets: Completed, immutable metric buckets to persist
+        """
+        pass
+
+    @abstractmethod
+    async def trim_metric_buckets(self, bucket_seconds: int, cutoff: float) -> None:
+        """
+        Delete metric buckets older than the given cutoff timestamp.
+
+        Args:
+            bucket_seconds: Resolution of buckets to trim (e.g. 60 for 1m, 300 for 5m)
+            cutoff: Unix timestamp; buckets with bucket_start < cutoff are deleted
+        """
+        pass
+
+    @abstractmethod
+    async def query_metric_buckets(
+        self,
+        bucket_seconds: int,
+        since: float,
+        until: float,
+        keys: Optional[List[str]] = None,
+    ) -> List[MetricsBucket]:
+        """
+        Return stored buckets for the given resolution and time range, ordered by
+        bucket_start ascending.
+
+        Args:
+            bucket_seconds: Resolution to query (e.g. 60 for 1m, 300 for 5m)
+            since: Inclusive start unix timestamp
+            until: Exclusive end unix timestamp
+            keys: If provided, restrict results to these metric keys; None returns all keys
         """
         pass

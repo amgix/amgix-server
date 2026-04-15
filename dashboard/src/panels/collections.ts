@@ -386,6 +386,11 @@ export class CollectionsPanel extends DashboardPanel {
   private statsPollGeneration = 0
   private queueTotalSample: { t: number; total: number } | null = null
 
+  override deactivate(): void {
+    this.clearStatsPoll()
+    this.statsPollGeneration += 1
+  }
+
   init(api: AmgixApi): void {
     const $nav = $('#panel-collections [data-collections-nav]')
     const $detail = $('#panel-collections [data-collections-detail]')
@@ -562,9 +567,15 @@ export class CollectionsPanel extends DashboardPanel {
     if (generation !== this.statsPollGeneration) {
       return
     }
+    if ($('#panel-collections').prop('hidden')) {
+      return
+    }
     try {
       const collStats = await api.getCollectionStats({ collectionName: name })
       if (generation !== this.statsPollGeneration) {
+        return
+      }
+      if ($('#panel-collections').prop('hidden')) {
         return
       }
       const docCount = collStats.doc_count

@@ -1,7 +1,6 @@
 /* tslint:disable */
 /* eslint-disable */
 export * from './BulkUploadRequest';
-export * from './ClusterView';
 export * from './CollectionConfig';
 export * from './CollectionExistsResponse';
 export * from './CollectionStatsResponse';
@@ -13,6 +12,9 @@ export * from './DocumentStatusResponse';
 export * from './HTTPValidationError';
 export * from './MetadataFilter';
 export * from './MetadataIndex';
+export * from './MetricTrend';
+export * from './Metrics';
+export * from './MetricsBucket';
 export * from './NodeMetricSeries';
 export * from './NodeView';
 export * from './OkResponse';

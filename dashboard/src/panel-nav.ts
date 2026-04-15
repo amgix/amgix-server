@@ -3,17 +3,24 @@ import $ from 'jquery'
 
 import type { DashboardPanel } from './panels/panel-base'
 import { HomePanel } from './panels/home'
+import { ClusterMapPanel } from './panels/cluster-map'
 import { CollectionsPanel } from './panels/collections'
 import { QueryPanel } from './panels/query'
 
-export type PanelId = 'home' | 'collections' | 'query'
+export type PanelId = 'home' | 'cluster-map' | 'collections' | 'query'
 
 function isPanelId(value: string | undefined): value is PanelId {
-  return value === 'home' || value === 'collections' || value === 'query'
+  return (
+    value === 'home' ||
+    value === 'cluster-map' ||
+    value === 'collections' ||
+    value === 'query'
+  )
 }
 
 const panels: Record<PanelId, DashboardPanel> = {
   home: new HomePanel(),
+  'cluster-map': new ClusterMapPanel(),
   collections: new CollectionsPanel(),
   query: new QueryPanel(),
 }
@@ -25,7 +32,7 @@ function hashPanelId(): string {
   return window.location.hash.replace(/^#/, '').trim().toLowerCase()
 }
 
-/** Panel to show from the current URL hash (`#home`, `#collections`, `#query`). Invalid or missing → `home`. */
+/** Panel to show from the current URL hash (`#home`, `#cluster-map`, …). Invalid or missing → `home`. */
 export function initialPanelIdFromHash(): PanelId {
   const raw = hashPanelId()
   if (isPanelId(raw)) {
@@ -42,6 +49,10 @@ function renderPanel(id: PanelId): void {
   const api = dashboardApi
   if (!api) {
     throw new Error('initDashboardNav(api) must run before showPanel')
+  }
+
+  if (activePanel != null) {
+    panels[activePanel].deactivate()
   }
 
   $('[data-panel]').each(function () {

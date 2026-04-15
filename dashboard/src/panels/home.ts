@@ -1,7 +1,7 @@
 import {
   ResponseError,
   type AmgixApi,
-  type ClusterView,
+  type Metrics,
   type NodeMetricSeries,
   type NodeView,
   type ReadyResponse,
@@ -31,9 +31,13 @@ Chart.register(LineController, LineElement, PointElement, CategoryScale, LinearS
 const HOME_READY_POLL_MS = 10_000
 
 const HOME_METRICS_TAB_API_ID = 'dashboard-home-metrics-tab-api'
+const HOME_METRICS_TAB_INDEXING_ID = 'dashboard-home-metrics-tab-indexing'
 const HOME_METRICS_TAB_ENCODER_ID = 'dashboard-home-metrics-tab-encoder'
 const HOME_METRICS_PANEL_API_ID = 'dashboard-home-metrics-panel-api'
+const HOME_METRICS_PANEL_INDEXING_ID = 'dashboard-home-metrics-panel-indexing'
 const HOME_METRICS_PANEL_ENCODER_ID = 'dashboard-home-metrics-panel-encoder'
+
+type HomeMetricsTabPanel = 'api' | 'indexing' | 'encoder'
 
 /** Cluster table embedding columns use this rolling window (seconds). */
 const CLUSTER_METRICS_WINDOW_SEC = 30
@@ -62,8 +66,8 @@ function buildClusterChartEvenXTicks(min: number, max: number, count: number): T
 }
 
 /** Survives full page reload; same origin only. */
-const CLUSTER_CHART_STORAGE_KEY = 'amgix.dashboard.clusterThroughputHistory.v1'
-const CLUSTER_API_CHART_STORAGE_KEY = 'amgix.dashboard.apiMetricsHistory.v1'
+const CLUSTER_CHART_STORAGE_KEY = 'amgix.dashboard.clusterThroughputHistory.v2'
+const CLUSTER_API_CHART_STORAGE_KEY = 'amgix.dashboard.apiMetricsHistory.v2'
 
 function clusterHelpIcon(tip: string): JQuery<HTMLElement> {
   return $('<button>', {
@@ -93,17 +97,17 @@ function clusterBatchesColumnHelpText(): string {
 
 function clusterRateColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Documents embedded per second, originating on this node, over the last ${w}s.`
+  return `Passages embedded per second, originating on this node, over the last ${w}s.`
 }
 
 function clusterInferMsColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Local model inference time per document, in ms, over the last ${w}s.`
+  return `Local model inference time per passage, in ms, over the last ${w}s.`
 }
 
 function clusterPipeMsColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Routed inference time per document, in ms, as seen by the originating encoder (includes RPC if the request was forwarded to another node), over the last ${w}s.`
+  return `Routed inference time per passage, in ms, as seen by the originating encoder (includes RPC if the request was forwarded to another node), over the last ${w}s.`
 }
 
 function clusterErrPerSecColumnHelpText(): string {
@@ -113,7 +117,7 @@ function clusterErrPerSecColumnHelpText(): string {
 
 function clusterChartHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Inference and routed latency per document over time, ${w}s rolling window.`
+  return `Inference and routed latency per passage over time, ${w}s rolling window.`
 }
 
 function clusterApiChartHelpText(): string {
@@ -190,6 +194,9 @@ function formatRequestError(context: string, err: unknown): string {
 
 async function fetchReadiness(): Promise<ReadyResponse> {
   const res = await fetch('/v1/health/ready')
+  if (!res.ok) {
+    throw new Error(`Readiness request failed (HTTP ${res.status})`)
+  }
   return (await res.json()) as ReadyResponse
 }
 
@@ -233,19 +240,34 @@ function readinessLabel(ok: boolean): string {
   return ok ? 'Ready' : 'Not ready'
 }
 
+function nodeMeta(node: NodeView): Record<string, unknown> {
+  const meta = (node as NodeView & { meta?: Record<string, unknown> }).meta
+  return meta != null && typeof meta === 'object' ? (meta as Record<string, unknown>) : {}
+}
+
+function nodeMetaBool(node: NodeView, key: string, fallback: boolean = false): boolean {
+  const value = nodeMeta(node)[key]
+  return typeof value === 'boolean' ? value : fallback
+}
+
+function nodeMetaArrayLength(node: NodeView, key: string): number {
+  const value = nodeMeta(node)[key]
+  return Array.isArray(value) ? value.length : 0
+}
+
 function formatLoadModelsCell(node: NodeView): string {
-  if (!node.load_models) {
+  if (!nodeMetaBool(node, 'load_models')) {
     return 'No'
   }
-  const n = (node.loaded_models ?? []).length
+  const n = nodeMetaArrayLength(node, 'loaded_models')
   return `Yes (${n})`
 }
 
 function formatGpuStatus(node: NodeView): string {
-  if (!node.gpu_support) {
+  if (!nodeMetaBool(node, 'gpu_support')) {
     return 'n/a'
   }
-  if (node.gpu_available) {
+  if (nodeMetaBool(node, 'gpu_available')) {
     return 'Yes'
   }
   return 'Undetected'
@@ -258,12 +280,12 @@ function getNodeMetricWindowSample(s: NodeMetricSeries): WindowSample | undefine
   if (w == null) {
     return undefined
   }
-  return w[clusterMetricsWindowKey] ?? w[CLUSTER_METRICS_WINDOW_SEC]
+  return w[clusterMetricsWindowKey]
 }
 
 function getMetricWindowSampleByFirstKey(list: NodeMetricSeries[], name: string): WindowSample | undefined {
   for (const s of list) {
-    if (s.key[0] === name) {
+    if (s.key === name) {
       return getNodeMetricWindowSample(s)
     }
   }
@@ -279,7 +301,7 @@ function formatApiRateCell(list: NodeMetricSeries[], rateKey: string): string {
   if (!Number.isFinite(v)) {
     return ''
   }
-  return formatClusterRpsCell(v)
+  return formatClusterRpsCell(v / CLUSTER_METRICS_WINDOW_SEC)
 }
 
 function formatApiAvgMsCell(list: NodeMetricSeries[], msKey: string): string {
@@ -292,7 +314,7 @@ function formatApiAvgMsCell(list: NodeMetricSeries[], msKey: string): string {
   if (!Number.isFinite(n) || n <= 0 || !Number.isFinite(v)) {
     return ''
   }
-  return formatClusterAvgMsCell(v)
+  return formatClusterAvgMsCell(v / n)
 }
 
 function formatApiHttpErrorsRateCell(list: NodeMetricSeries[]): string {
@@ -311,7 +333,7 @@ function formatApiHttpErrorsRateCell(list: NodeMetricSeries[]): string {
   if (!saw) {
     return ''
   }
-  return formatClusterRpsCell(sum)
+  return formatClusterRpsCell(sum / CLUSTER_METRICS_WINDOW_SEC)
 }
 
 function formatApiMetricsCells(node: NodeView): {
@@ -343,23 +365,20 @@ function formatApiMetricsCells(node: NodeView): {
   }
 }
 
-/** Stable merge key for dimensions key[1..3] (vector type, model, revision). */
+/** Stable merge key for dimensions (vector type, model, revision). */
 function seriesDimKey(s: NodeMetricSeries): string {
-  const k = s.key
-  if (k.length < 4) {
-    return k.join('\0')
-  }
-  return `${k[1]}\0${k[2] ?? ''}\0${k[3] ?? ''}`
+  const d = s.dims ?? []
+  return `${d[0] ?? ''}\0${d[1] ?? ''}\0${d[2] ?? ''}`
 }
 
 function seriesDisplayLabel(s: NodeMetricSeries): string {
-  const k = s.key
-  const model = (k[2] ?? '').trim()
-  const revision = (k[3] ?? '').trim()
+  const d = s.dims ?? []
+  const model = (d[1] ?? '').trim()
+  const revision = (d[2] ?? '').trim()
   if (model !== '') {
     return revision !== '' ? `${model} (${revision})` : model
   }
-  return k[1] ?? ''
+  return d[0] ?? ''
 }
 
 /** Cluster grid: fixed decimal places for rates (docs/s, err/s). */
@@ -431,49 +450,45 @@ function formatEmbeddingMetricsCells(node: NodeView): {
   const list = node.metrics ?? []
   let sawAny = false
   let totalBatches = 0
-  let sumDocsRps = 0
-  let weightedMs = 0
-  let msN = 0
-  let weightedOriginMs = 0
-  let originN = 0
+  let sumPassagesRps = 0
+  let totalInferenceMs = 0
+  let totalPassages = 0
+  let totalOriginMs = 0
+  let totalOriginPassages = 0
   let sumErrorsInWindow = 0
   for (const s of list) {
-    const name = s.key[0]
+    const name = s.key
     const ws = getNodeMetricWindowSample(s)
     if (ws == null) {
       continue
     }
-    const n = Number(ws.n)
     const v = Number(ws.value)
-    if (name === 'batches_origin') {
-      sawAny = true
-      if (Number.isFinite(n) && n > 0) {
-        totalBatches += Math.trunc(n)
-      }
-    } else if (name === 'docs_origin') {
+    if (name === 'embed_batches_origin') {
       sawAny = true
       if (Number.isFinite(v)) {
-        sumDocsRps += v
+        totalBatches += Math.trunc(v)
       }
-    } else if (name === 'inference_ms_per_doc') {
-      if (Number.isFinite(n) && n > 0) {
+    } else if (name === 'embed_passages_origin') {
+      sawAny = true
+      if (Number.isFinite(v)) {
+        sumPassagesRps += v
+        totalOriginPassages += v
+      }
+    } else if (name === 'embed_inference_ms') {
+      if (Number.isFinite(v)) {
         sawAny = true
-        const ni = Math.trunc(n)
-        if (Number.isFinite(v)) {
-          weightedMs += v * ni
-          msN += ni
-        }
+        totalInferenceMs += v
       }
-    } else if (name === 'inference_origin_ms_per_doc') {
-      if (Number.isFinite(n) && n > 0) {
+    } else if (name === 'embed_passages') {
+      if (Number.isFinite(v)) {
+        totalPassages += v
+      }
+    } else if (name === 'embed_inference_origin_ms') {
+      if (Number.isFinite(v)) {
         sawAny = true
-        const ni = Math.trunc(n)
-        if (Number.isFinite(v)) {
-          weightedOriginMs += v * ni
-          originN += ni
-        }
+        totalOriginMs += v
       }
-    } else if (name === 'inference_origin_errors') {
+    } else if (name === 'embed_inference_origin_errors') {
       sawAny = true
       if (Number.isFinite(v)) {
         sumErrorsInWindow += v
@@ -483,12 +498,11 @@ function formatEmbeddingMetricsCells(node: NodeView): {
   if (!sawAny) {
     return { rps: '', avgMs: '', e2eAvgMs: '', requests: '', errPerSec: '' }
   }
-  const errPerSec =
-    CLUSTER_METRICS_WINDOW_SEC > 0 ? sumErrorsInWindow / CLUSTER_METRICS_WINDOW_SEC : 0
+  const errPerSec = sumErrorsInWindow / CLUSTER_METRICS_WINDOW_SEC
   return {
-    rps: formatClusterRpsCell(sumDocsRps),
-    avgMs: msN > 0 ? formatClusterAvgMsCell(weightedMs / msN) : '',
-    e2eAvgMs: originN > 0 ? formatClusterAvgMsCell(weightedOriginMs / originN) : '',
+    rps: formatClusterRpsCell(sumPassagesRps / CLUSTER_METRICS_WINDOW_SEC),
+    avgMs: totalPassages > 0 ? formatClusterAvgMsCell(totalInferenceMs / totalPassages) : '',
+    e2eAvgMs: totalOriginPassages > 0 ? formatClusterAvgMsCell(totalOriginMs / totalOriginPassages) : '',
     requests: String(totalBatches),
     errPerSec: formatClusterRpsCell(errPerSec),
   }
@@ -529,7 +543,7 @@ type ClusterThroughputAgg = {
   globalE2eMs: number | null
 }
 
-function aggregateClusterThroughput(view: ClusterView | null): ClusterThroughputAgg {
+function aggregateClusterThroughput(view: Metrics | null): ClusterThroughputAgg {
   const empty: ClusterThroughputAgg = {
     chartRows: [],
     globalAvgMs: null,
@@ -539,75 +553,67 @@ function aggregateClusterThroughput(view: ClusterView | null): ClusterThroughput
     return empty
   }
 
-  const byKey = new Map<string, { label: string; weightedMsSum: number; nSum: number }>()
-  let weightedAvgSum = 0
-  let weightedAvgN = 0
-  let weightedE2eSum = 0
-  let weightedE2eN = 0
+  // Per-dim-key accumulators for local inference ms/passage
+  const byKey = new Map<string, { label: string; totalMs: number; totalPassages: number }>()
+  let globalInferenceMs = 0
+  let globalPassages = 0
+  let globalOriginMs = 0
+  let globalOriginPassages = 0
 
   for (const node of Object.values(view.nodes)) {
+    // Collect per-dim totals for embed_inference_ms and embed_passages
+    const msByDim = new Map<string, { label: string; ms: number }>()
+    const passagesByDim = new Map<string, number>()
     for (const s of node.metrics ?? []) {
-      if (s.key[0] !== 'inference_ms_per_doc') {
-        continue
-      }
       const wm = getNodeMetricWindowSample(s)
       if (wm == null) {
         continue
       }
-      const n = Number(wm.n)
-      if (!Number.isFinite(n) || n <= 0) {
+      const v = Number(wm.value)
+      if (!Number.isFinite(v)) {
         continue
       }
-      const ni = Math.trunc(n)
-      const key = seriesDimKey(s)
-      const label = seriesDisplayLabel(s)
-      let cur = byKey.get(key)
-      if (!cur) {
-        cur = { label, weightedMsSum: 0, nSum: 0 }
-        byKey.set(key, cur)
-      }
-
-      const avgMs = Number(wm.value)
-      if (Number.isFinite(avgMs)) {
-        cur.weightedMsSum += avgMs * ni
-        cur.nSum += ni
-        weightedAvgSum += avgMs * ni
-        weightedAvgN += ni
+      const dimKey = seriesDimKey(s)
+      if (s.key === 'embed_inference_ms') {
+        const existing = msByDim.get(dimKey)
+        msByDim.set(dimKey, { label: seriesDisplayLabel(s), ms: (existing?.ms ?? 0) + v })
+        globalInferenceMs += v
+      } else if (s.key === 'embed_passages') {
+        passagesByDim.set(dimKey, (passagesByDim.get(dimKey) ?? 0) + v)
+        globalPassages += v
+      } else if (s.key === 'embed_inference_origin_ms') {
+        globalOriginMs += v
+      } else if (s.key === 'embed_passages_origin') {
+        globalOriginPassages += v
       }
     }
-    for (const s of node.metrics ?? []) {
-      if (s.key[0] !== 'inference_origin_ms_per_doc') {
+    for (const [dimKey, { label, ms }] of msByDim.entries()) {
+      const passages = passagesByDim.get(dimKey) ?? 0
+      if (passages <= 0) {
         continue
       }
-      const wm = getNodeMetricWindowSample(s)
-      if (wm == null) {
-        continue
+      let cur = byKey.get(dimKey)
+      if (!cur) {
+        cur = { label, totalMs: 0, totalPassages: 0 }
+        byKey.set(dimKey, cur)
       }
-      const n = Number(wm.n)
-      if (!Number.isFinite(n) || n <= 0) {
-        continue
-      }
-      const ni = Math.trunc(n)
-      const e2e = Number(wm.value)
-      if (Number.isFinite(e2e)) {
-        weightedE2eSum += e2e * ni
-        weightedE2eN += ni
-      }
+      cur.totalMs += ms
+      cur.totalPassages += passages
     }
   }
 
   const chartRows = Array.from(byKey.entries())
-    .filter(([, v]) => v.nSum > 0)
+    .filter(([, v]) => v.totalPassages > 0)
     .map(([key, v]) => ({
       key,
       label: v.label,
-      inferenceMeanMs: v.weightedMsSum / v.nSum,
+      inferenceMeanMs: v.totalMs / v.totalPassages,
     }))
     .sort((a, b) => b.inferenceMeanMs - a.inferenceMeanMs)
   return {
     chartRows,
-    globalAvgMs: weightedAvgN > 0 ? weightedAvgSum / weightedAvgN : null,
-    globalE2eMs: weightedE2eN > 0 ? weightedE2eSum / weightedE2eN : null,
+    globalAvgMs: globalPassages > 0 ? globalInferenceMs / globalPassages : null,
+    globalE2eMs: globalOriginPassages > 0 ? globalOriginMs / globalOriginPassages : null,
   }
 }
 
@@ -615,6 +621,10 @@ function sortApiNodeEntries(entries: Array<[string, NodeView]>): Array<[string, 
   const copy = [...entries]
   copy.sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }))
   return copy
+}
+
+function formatEncoderRoleCell(role: string): string {
+  return role === 'all' ? 'idx/qry' : role
 }
 
 function sortEncoderNodeEntries(entries: Array<[string, NodeView]>): Array<[string, NodeView]> {
@@ -655,13 +665,13 @@ type ApiMetricsHistoryPoint = {
   errRps: number | null
 }
 
-/** Cluster-wide API aggregates; err4xx/err5xx are for Cluster Info, errRps is their sum (chart). */
+/** Cluster-wide API aggregates; err4xx/err5xx are for Cluster Overview, errRps is their sum (chart). */
 type AggregateApiChartMetrics = Omit<ApiMetricsHistoryPoint, 't'> & {
   err4xxRps: number | null
   err5xxRps: number | null
 }
 
-function aggregateApiChartMetrics(view: ClusterView | null): AggregateApiChartMetrics {
+function aggregateApiChartMetrics(view: Metrics | null): AggregateApiChartMetrics {
   const empty: AggregateApiChartMetrics = {
     allRps: null,
     allMs: null,
@@ -712,9 +722,8 @@ function aggregateApiChartMetrics(view: ClusterView | null): AggregateApiChartMe
       const v = Number(wsAllM.value)
       const n = Number(wsAllM.n)
       if (Number.isFinite(v) && Number.isFinite(n) && n > 0) {
-        const ni = Math.trunc(n)
-        allMsSumVN += v * ni
-        allMsSumN += ni
+        allMsSumVN += v
+        allMsSumN += Math.trunc(n)
       }
     }
 
@@ -731,9 +740,8 @@ function aggregateApiChartMetrics(view: ClusterView | null): AggregateApiChartMe
       const v = Number(wsSm.value)
       const n = Number(wsSm.n)
       if (Number.isFinite(v) && Number.isFinite(n) && n > 0) {
-        const ni = Math.trunc(n)
-        searchMsSumVN += v * ni
-        searchMsSumN += ni
+        searchMsSumVN += v
+        searchMsSumN += Math.trunc(n)
       }
     }
 
@@ -753,9 +761,8 @@ function aggregateApiChartMetrics(view: ClusterView | null): AggregateApiChartMe
         const v = Number(ws.value)
         const n = Number(ws.n)
         if (Number.isFinite(v) && Number.isFinite(n) && n > 0) {
-          const ni = Math.trunc(n)
-          ingestMsSumVN += v * ni
-          ingestMsSumN += ni
+          ingestMsSumVN += v
+          ingestMsSumN += Math.trunc(n)
         }
       }
     }
@@ -779,16 +786,17 @@ function aggregateApiChartMetrics(view: ClusterView | null): AggregateApiChartMe
   }
 
   const sawAnyErr = sawErr4xx || sawErr5xx
+  const w = CLUSTER_METRICS_WINDOW_SEC
   return {
-    allRps: sawAllRps ? sumAllRps : null,
+    allRps: sawAllRps ? sumAllRps / w : null,
     allMs: allMsSumN > 0 ? allMsSumVN / allMsSumN : null,
-    searchRps: sawSearchRps ? sumSearchRps : null,
+    searchRps: sawSearchRps ? sumSearchRps / w : null,
     searchMs: searchMsSumN > 0 ? searchMsSumVN / searchMsSumN : null,
-    ingestRps: sawIngestRps ? sumIngestRps : null,
+    ingestRps: sawIngestRps ? sumIngestRps / w : null,
     ingestMs: ingestMsSumN > 0 ? ingestMsSumVN / ingestMsSumN : null,
-    err4xxRps: sawErr4xx ? sumErr4xx : null,
-    err5xxRps: sawErr5xx ? sumErr5xx : null,
-    errRps: sawAnyErr ? sumErr4xx + sumErr5xx : null,
+    err4xxRps: sawErr4xx ? sumErr4xx / w : null,
+    err5xxRps: sawErr5xx ? sumErr5xx / w : null,
+    errRps: sawAnyErr ? (sumErr4xx + sumErr5xx) / w : null,
   }
 }
 
@@ -1141,6 +1149,11 @@ export class HomePanel extends DashboardPanel {
   private clusterSeriesLabels = new Map<string, string>()
   private apiMetricsRequestsChart: Chart<'line'> | null = null
   private apiMetricsLatenciesChart: Chart<'line'> | null = null
+
+  override deactivate(): void {
+    this.clearReadyPoll()
+    this.readyPollGeneration += 1
+  }
   private apiMetricsHistory: ApiMetricsHistoryPoint[] = []
 
   init(api: AmgixApi): void {
@@ -1263,7 +1276,7 @@ export class HomePanel extends DashboardPanel {
     this.clusterThroughputChart = null
   }
 
-  private refreshClusterThroughputChart($root: JQuery<HTMLElement>, view: ClusterView | null): void {
+  private refreshClusterThroughputChart($root: JQuery<HTMLElement>, view: Metrics | null): void {
     const $canvas = $root.find('[data-home-cluster-throughput-chart]')
     const canvas = $canvas.get(0) as HTMLCanvasElement | undefined
     const $wrap = $root.find('[data-home-cluster-chart-wrap]')
@@ -1327,7 +1340,7 @@ export class HomePanel extends DashboardPanel {
       label: 'Inference Latency',
       data: this.clusterThroughputHistory.map((pt) => ({
         x: pt.t,
-        y: typeof pt.avgMs === 'number' && Number.isFinite(pt.avgMs) ? pt.avgMs : 0,
+        y: typeof pt.avgMs === 'number' && Number.isFinite(pt.avgMs) ? pt.avgMs : null,
       })),
       borderColor: avgLineColor,
       backgroundColor: avgLineColor,
@@ -1343,7 +1356,7 @@ export class HomePanel extends DashboardPanel {
       label: 'Routed Latency',
       data: this.clusterThroughputHistory.map((pt) => ({
         x: pt.t,
-        y: typeof pt.e2eMs === 'number' && Number.isFinite(pt.e2eMs) ? pt.e2eMs : 0,
+        y: typeof pt.e2eMs === 'number' && Number.isFinite(pt.e2eMs) ? pt.e2eMs : null,
       })),
       borderColor: e2eLineColor,
       backgroundColor: e2eLineColor,
@@ -1364,7 +1377,7 @@ export class HomePanel extends DashboardPanel {
           const y = pt.byKey.get(key)
           return {
             x: pt.t,
-            y: typeof y === 'number' && Number.isFinite(y) ? y : 0,
+            y: typeof y === 'number' && Number.isFinite(y) ? y : null,
           }
         }),
         borderColor: batchColors[i]!,
@@ -1538,7 +1551,7 @@ export class HomePanel extends DashboardPanel {
     }
   }
 
-  private refreshApiMetricsChart($root: JQuery<HTMLElement>, view: ClusterView | null): void {
+  private refreshApiMetricsChart($root: JQuery<HTMLElement>, view: Metrics | null): void {
     const $reqCanvas = $root.find('[data-home-api-requests-metrics-chart]')
     const reqCanvas = $reqCanvas.get(0) as HTMLCanvasElement | undefined
     const $reqWrap = $root.find('[data-home-api-requests-chart-wrap]')
@@ -1590,13 +1603,13 @@ export class HomePanel extends DashboardPanel {
     }
     saveApiMetricsHistoryToStorage(this.apiMetricsHistory)
 
-    const yNum = (v: number | null) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+    const yNum = (v: number | null) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
-    /** Same hues for All / Search / Ingest on both requests and latency charts. */
+    /** Same hues for Req / Search / Ingest on both requests and latency charts. */
     const apiGroupColors = ['#8b5cf6', '#38bdf8', '#f59e0b']
     const apiErrorsReqColor = '#dc2626'
 
-    const line = (label: string, color: string, pick: (pt: ApiMetricsHistoryPoint) => number) => ({
+    const line = (label: string, color: string, pick: (pt: ApiMetricsHistoryPoint) => number | null) => ({
       label,
       data: this.apiMetricsHistory.map((pt) => ({ x: pt.t, y: pick(pt) })),
       borderColor: color,
@@ -1611,14 +1624,14 @@ export class HomePanel extends DashboardPanel {
     })
 
     const datasetsRps = [
-      line('All', apiGroupColors[0]!, (pt) => yNum(pt.allRps)),
+      line('Req', apiGroupColors[0]!, (pt) => yNum(pt.allRps)),
       line('Search', apiGroupColors[1]!, (pt) => yNum(pt.searchRps)),
       line('Ingest', apiGroupColors[2]!, (pt) => yNum(pt.ingestRps)),
       line('Err/s', apiErrorsReqColor, (pt) => yNum(pt.errRps)),
     ]
 
     const datasetsMs = [
-      line('All', apiGroupColors[0]!, (pt) => yNum(pt.allMs)),
+      line('Req', apiGroupColors[0]!, (pt) => yNum(pt.allMs)),
       line('Search', apiGroupColors[1]!, (pt) => yNum(pt.searchMs)),
       line('Ingest', apiGroupColors[2]!, (pt) => yNum(pt.ingestMs)),
     ]
@@ -1681,32 +1694,46 @@ export class HomePanel extends DashboardPanel {
     }
   }
 
-  private activateHomeMetricsTab($root: JQuery<HTMLElement>, panel: 'api' | 'encoder'): void {
+  private activateHomeMetricsTab($root: JQuery<HTMLElement>, panel: HomeMetricsTabPanel): void {
     const $apiPanel = $root.find('[data-home-metrics-tab-panel="api"]')
+    const $indexingPanel = $root.find('[data-home-metrics-tab-panel="indexing"]')
     const $encPanel = $root.find('[data-home-metrics-tab-panel="encoder"]')
     const $btnApi = $root.find('[data-home-metrics-tab="api"]')
+    const $btnIndexing = $root.find('[data-home-metrics-tab="indexing"]')
     const $btnEnc = $root.find('[data-home-metrics-tab="encoder"]')
-    if (!$apiPanel.length || !$encPanel.length || !$btnApi.length || !$btnEnc.length) {
+    if (
+      !$apiPanel.length ||
+      !$indexingPanel.length ||
+      !$encPanel.length ||
+      !$btnApi.length ||
+      !$btnIndexing.length ||
+      !$btnEnc.length
+    ) {
       return
     }
     const showApi = panel === 'api'
+    const showIndexing = panel === 'indexing'
+    const showEncoder = panel === 'encoder'
     $btnApi.attr('aria-selected', showApi ? 'true' : 'false')
-    $btnEnc.attr('aria-selected', showApi ? 'false' : 'true')
+    $btnIndexing.attr('aria-selected', showIndexing ? 'true' : 'false')
+    $btnEnc.attr('aria-selected', showEncoder ? 'true' : 'false')
     $btnApi.attr('tabindex', showApi ? '0' : '-1')
-    $btnEnc.attr('tabindex', showApi ? '-1' : '0')
+    $btnIndexing.attr('tabindex', showIndexing ? '0' : '-1')
+    $btnEnc.attr('tabindex', showEncoder ? '0' : '-1')
     $apiPanel.prop('hidden', !showApi)
-    $encPanel.prop('hidden', showApi)
+    $indexingPanel.prop('hidden', !showIndexing)
+    $encPanel.prop('hidden', !showEncoder)
     window.requestAnimationFrame(() => {
       if (showApi) {
         this.apiMetricsRequestsChart?.resize()
         this.apiMetricsLatenciesChart?.resize()
-      } else {
+      } else if (showEncoder) {
         this.clusterThroughputChart?.resize()
       }
     })
   }
 
-  private applyClusterInfoToDom($root: JQuery<HTMLElement>, view: ClusterView | null): void {
+  private applyClusterInfoToDom($root: JQuery<HTMLElement>, view: Metrics | null): void {
     if (!$root.find('[data-home-cluster-info]').length) {
       return
     }
@@ -1741,7 +1768,7 @@ export class HomePanel extends DashboardPanel {
     const thr = aggregateClusterThroughput(view)
     const $inferMs = $root.find('[data-home-cluster-info="infer-ms"]')
     if (thr.globalAvgMs != null && Number.isFinite(thr.globalAvgMs)) {
-      $inferMs.text(`${formatClusterAvgMsCell(thr.globalAvgMs)} ms/doc`)
+      $inferMs.text(`${formatClusterAvgMsCell(thr.globalAvgMs)} ms/passage`)
     } else {
       $inferMs.text(dash)
     }
@@ -1759,7 +1786,7 @@ export class HomePanel extends DashboardPanel {
     }
   }
 
-  private applyClusterViewToDom($root: JQuery<HTMLElement>, view: ClusterView | null): void {
+  private applyClusterViewToDom($root: JQuery<HTMLElement>, view: Metrics | null): void {
     try {
       this.applyClusterTablesAndChartsToDom($root, view)
     } finally {
@@ -1767,7 +1794,7 @@ export class HomePanel extends DashboardPanel {
     }
   }
 
-  private applyClusterTablesAndChartsToDom($root: JQuery<HTMLElement>, view: ClusterView | null): void {
+  private applyClusterTablesAndChartsToDom($root: JQuery<HTMLElement>, view: Metrics | null): void {
     const CLUSTER_API_COLSPAN = 13
     const CLUSTER_ENCODER_COLSPAN = 10
     const $apiTbody = $root.find('[data-home-api-cluster-tbody]')
@@ -1787,7 +1814,7 @@ export class HomePanel extends DashboardPanel {
             $('<td>', {
               class: 'dashboard-home-cluster-placeholder',
               colspan: CLUSTER_API_COLSPAN,
-              text: 'Cluster view unavailable.',
+              text: 'Metrics unavailable.',
             }),
           ),
         )
@@ -1798,7 +1825,7 @@ export class HomePanel extends DashboardPanel {
             $('<td>', {
               class: 'dashboard-home-cluster-placeholder',
               colspan: CLUSTER_ENCODER_COLSPAN,
-              text: 'Cluster view unavailable.',
+              text: 'Metrics unavailable.',
             }),
           ),
         )
@@ -1814,7 +1841,7 @@ export class HomePanel extends DashboardPanel {
             $('<td>', {
               class: 'dashboard-home-cluster-placeholder',
               colspan: CLUSTER_API_COLSPAN,
-              text: 'No API nodes in cluster view.',
+              text: 'No API nodes reported.',
             }),
           ),
         )
@@ -1825,7 +1852,7 @@ export class HomePanel extends DashboardPanel {
             $('<td>', {
               class: 'dashboard-home-cluster-placeholder',
               colspan: CLUSTER_ENCODER_COLSPAN,
-              text: 'No encoder nodes in cluster view.',
+              text: 'No encoder nodes reported.',
             }),
           ),
         )
@@ -1842,7 +1869,7 @@ export class HomePanel extends DashboardPanel {
             $('<td>', {
               class: 'dashboard-home-cluster-placeholder',
               colspan: CLUSTER_API_COLSPAN,
-              text: 'No API nodes in cluster view.',
+              text: 'No API nodes reported.',
             }),
           ),
         )
@@ -1882,7 +1909,7 @@ export class HomePanel extends DashboardPanel {
             $('<td>', {
               class: 'dashboard-home-cluster-placeholder',
               colspan: CLUSTER_ENCODER_COLSPAN,
-              text: 'No encoder nodes in cluster view.',
+              text: 'No encoder nodes reported.',
             }),
           ),
         )
@@ -1897,10 +1924,10 @@ export class HomePanel extends DashboardPanel {
           }
           $encTbody.append(
             $('<tr>').append(
-              $('<td>', { class: 'dashboard-home-v', text: node.role }),
+              $('<td>', { class: 'dashboard-home-v', text: formatEncoderRoleCell(node.role) }),
               $nodeTd,
               $('<td>', { class: 'dashboard-home-v', text: formatLoadModelsCell(node) }),
-              $('<td>', { class: 'dashboard-home-v', text: node.at_capacity ? 'Yes' : 'No' }),
+              $('<td>', { class: 'dashboard-home-v', text: nodeMetaBool(node, 'at_capacity') ? 'Yes' : 'No' }),
               $('<td>', { class: 'dashboard-home-v', text: formatGpuStatus(node) }),
               $('<td>', { class: 'dashboard-home-v', text: m.requests }),
               $('<td>', { class: 'dashboard-home-v', text: m.rps }),
@@ -1937,16 +1964,16 @@ export class HomePanel extends DashboardPanel {
     if ($('#panel-home').prop('hidden')) {
       return
     }
-    let clusterView: ClusterView | null = null
+    let metrics: Metrics | null = null
     try {
-      clusterView = await api.clusterView()
+      metrics = await api.metricsCurrent()
     } catch {
-      clusterView = null
+      metrics = null
     }
     if (generation !== this.readyPollGeneration) {
       return
     }
-    this.applyClusterViewToDom($root, clusterView)
+    this.applyClusterViewToDom($root, metrics)
     try {
       const ready = await fetchReadiness()
       if (generation !== this.readyPollGeneration) {
@@ -1966,10 +1993,10 @@ export class HomePanel extends DashboardPanel {
     $root.empty().append($('<p>', { class: 'dashboard-home-loading', text: 'Loading…' }))
 
     try {
-      const [info, ready, clusterView] = await Promise.all([
+      const [info, ready, metrics] = await Promise.all([
         api.systemInfo(),
         fetchReadiness(),
-        api.clusterView().catch((): null => null),
+        api.metricsCurrent().catch((): null => null),
       ])
       if (generation !== this.readyPollGeneration) {
         return
@@ -2034,7 +2061,7 @@ export class HomePanel extends DashboardPanel {
           $('<th>', {
             class: 'dashboard-home-table-heading',
             colspan: 2,
-            text: 'Cluster Info',
+            text: 'Cluster Overview',
           }),
         ),
       )
@@ -2094,7 +2121,7 @@ export class HomePanel extends DashboardPanel {
             $('<th>', {
               class: 'dashboard-home-table-heading',
               colspan: 13,
-              text: 'API nodes',
+              text: 'API Nodes',
             }),
           ),
         )
@@ -2102,16 +2129,16 @@ export class HomePanel extends DashboardPanel {
           $('<tr>', { class: 'dashboard-home-cluster-colhead' }).append(
             $('<th>', { text: 'Role' }),
             $('<th>', { text: 'Node' }),
-            clusterThWithHelp('All/s', clusterApiAllReqColumnHelpText()),
-            clusterThWithHelp('All ms', clusterApiAllMsColumnHelpText()),
+            clusterThWithHelp('Req/s', clusterApiAllReqColumnHelpText()),
+            clusterThWithHelp('ms/Req', clusterApiAllMsColumnHelpText()),
             clusterThWithHelp('Async/s', clusterApiAsyncReqColumnHelpText()),
-            clusterThWithHelp('Async ms', clusterApiAsyncMsColumnHelpText()),
+            clusterThWithHelp('ms/Async', clusterApiAsyncMsColumnHelpText()),
             clusterThWithHelp('Sync/s', clusterApiSyncReqColumnHelpText()),
-            clusterThWithHelp('Sync ms', clusterApiSyncMsColumnHelpText()),
+            clusterThWithHelp('ms/Sync', clusterApiSyncMsColumnHelpText()),
             clusterThWithHelp('Bulk/s', clusterApiBulkReqColumnHelpText()),
-            clusterThWithHelp('Bulk ms', clusterApiBulkMsColumnHelpText()),
+            clusterThWithHelp('ms/Bulk', clusterApiBulkMsColumnHelpText()),
             clusterThWithHelp('Srch/s', clusterApiSearchReqColumnHelpText()),
-            clusterThWithHelp('Srch ms', clusterApiSearchMsColumnHelpText()),
+            clusterThWithHelp('ms/Srch', clusterApiSearchMsColumnHelpText()),
             clusterThWithHelp('Err/s', clusterApiErrPerSecColumnHelpText()),
           ),
         )
@@ -2199,7 +2226,7 @@ export class HomePanel extends DashboardPanel {
             $('<th>', {
               class: 'dashboard-home-table-heading',
               colspan: 10,
-              text: 'Encoder nodes',
+              text: 'Encoder Nodes',
             }),
           ),
         )
@@ -2208,12 +2235,12 @@ export class HomePanel extends DashboardPanel {
             $('<th>', { text: 'Role' }),
             $('<th>', { text: 'Node' }),
             $('<th>', { text: 'Models' }),
-            $('<th>', { text: 'Capacity' }),
+            $('<th>', { text: 'At Capacity' }),
             $('<th>', { text: 'GPU' }),
             clusterThWithHelp('Batches', clusterBatchesColumnHelpText()),
-            clusterThWithHelp('Docs/s', clusterRateColumnHelpText()),
-            clusterThWithHelp('Infer ms', clusterInferMsColumnHelpText()),
-            clusterThWithHelp('Routed ms', clusterPipeMsColumnHelpText()),
+            clusterThWithHelp('Passages/s', clusterRateColumnHelpText()),
+            clusterThWithHelp('Infer ms/Passage', clusterInferMsColumnHelpText()),
+            clusterThWithHelp('Routed ms/Passage', clusterPipeMsColumnHelpText()),
             clusterThWithHelp('Err/s', clusterErrPerSecColumnHelpText()),
           ),
         )
@@ -2235,12 +2262,25 @@ export class HomePanel extends DashboardPanel {
           tabindex: '0',
         },
       })
+      const $btnIndexingMetrics = $('<button>', {
+        type: 'button',
+        role: 'tab',
+        class: 'dashboard-home-metrics-tab',
+        id: HOME_METRICS_TAB_INDEXING_ID,
+        text: 'Indexing Metrics',
+        attr: {
+          'aria-selected': 'false',
+          'aria-controls': HOME_METRICS_PANEL_INDEXING_ID,
+          'data-home-metrics-tab': 'indexing',
+          tabindex: '-1',
+        },
+      })
       const $btnEncoderMetrics = $('<button>', {
         type: 'button',
         role: 'tab',
         class: 'dashboard-home-metrics-tab',
         id: HOME_METRICS_TAB_ENCODER_ID,
-        text: 'Encoder Metrics',
+        text: 'Embedding Metrics',
         attr: {
           'aria-selected': 'false',
           'aria-controls': HOME_METRICS_PANEL_ENCODER_ID,
@@ -2252,7 +2292,7 @@ export class HomePanel extends DashboardPanel {
         role: 'tablist',
         class: 'dashboard-home-metrics-tablist',
         'aria-label': 'Cluster metrics',
-      }).append($btnApiMetrics, $btnEncoderMetrics)
+      }).append($btnApiMetrics, $btnIndexingMetrics, $btnEncoderMetrics)
 
       const $apiMetricsPanel = $('<div>', {
         class: 'dashboard-home-cluster-tables dashboard-home-metrics-tab-panel',
@@ -2264,6 +2304,16 @@ export class HomePanel extends DashboardPanel {
         },
       }).append($apiChartsRow, $apiClusterTable)
 
+      const $indexingMetricsPanel = $('<div>', {
+        class: 'dashboard-home-cluster-tables dashboard-home-metrics-tab-panel',
+        id: HOME_METRICS_PANEL_INDEXING_ID,
+        role: 'tabpanel',
+        attr: {
+          'data-home-metrics-tab-panel': 'indexing',
+          'aria-labelledby': HOME_METRICS_TAB_INDEXING_ID,
+        },
+      })
+
       const $encoderMetricsPanel = $('<div>', {
         class: 'dashboard-home-cluster-tables dashboard-home-metrics-tab-panel',
         id: HOME_METRICS_PANEL_ENCODER_ID,
@@ -2274,16 +2324,23 @@ export class HomePanel extends DashboardPanel {
         },
       }).append($clusterChartSection, $encoderClusterTable)
 
+      $indexingMetricsPanel.prop('hidden', true)
       $encoderMetricsPanel.prop('hidden', true)
 
       const $metricsShell = $('<div>', { class: 'dashboard-home-metrics-shell' }).append(
         $metricsTabList,
         $apiMetricsPanel,
+        $indexingMetricsPanel,
         $encoderMetricsPanel,
       )
 
+      const metricsTabOrder = ['api', 'indexing', 'encoder'] as const satisfies readonly HomeMetricsTabPanel[]
+
       $btnApiMetrics.on('click', () => {
         this.activateHomeMetricsTab($root, 'api')
+      })
+      $btnIndexingMetrics.on('click', () => {
+        this.activateHomeMetricsTab($root, 'indexing')
       })
       $btnEncoderMetrics.on('click', () => {
         this.activateHomeMetricsTab($root, 'encoder')
@@ -2294,23 +2351,30 @@ export class HomePanel extends DashboardPanel {
           return
         }
         e.preventDefault()
-        const current = $btnApiMetrics.attr('aria-selected') === 'true' ? 'api' : 'encoder'
-        let next: 'api' | 'encoder'
-        if (key === 'Home') {
-          next = 'api'
-        } else if (key === 'End') {
-          next = 'encoder'
-        } else if (key === 'ArrowRight') {
-          next = current === 'api' ? 'encoder' : 'api'
-        } else {
-          next = current === 'encoder' ? 'api' : 'encoder'
+        let current: HomeMetricsTabPanel = 'encoder'
+        if ($btnApiMetrics.attr('aria-selected') === 'true') {
+          current = 'api'
+        } else if ($btnIndexingMetrics.attr('aria-selected') === 'true') {
+          current = 'indexing'
         }
+        const idx = metricsTabOrder.indexOf(current)
+        let nextIdx: number
+        if (key === 'Home') {
+          nextIdx = 0
+        } else if (key === 'End') {
+          nextIdx = metricsTabOrder.length - 1
+        } else if (key === 'ArrowRight') {
+          nextIdx = (idx + 1) % metricsTabOrder.length
+        } else {
+          nextIdx = (idx - 1 + metricsTabOrder.length) % metricsTabOrder.length
+        }
+        const next = metricsTabOrder[nextIdx]!
         this.activateHomeMetricsTab($root, next)
         $root.find(`[data-home-metrics-tab="${next}"]`).get(0)?.focus()
       })
 
       $root.empty().append($topBand, $metricsShell)
-      this.applyClusterViewToDom($root, clusterView)
+      this.applyClusterViewToDom($root, metrics)
 
       this.readyPollTimer = window.setInterval(() => {
         void this.pollHomeRefresh(api, $root, generation)

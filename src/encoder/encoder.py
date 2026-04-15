@@ -17,6 +17,8 @@ from .encoder_base import EncoderBase, EncoderServiceRunner
 from .embed_router_service import EmbedRouterService
 
 from src.core.models.vector import CollectionConfigInternal, SearchQuery, VectorConfigInternal, VectorSearchWeight, ModelValidationResponse, ModelValidationResult
+from src.core.common.metrics_definitions import MetricKey
+from src.core.common.metrics_service import MetricsService
 from src.core.common import VectorType, QueuedDocumentStatus, MAX_QUEUE_DELIVERY_ATTEMPTS, MAX_DB_RETRIES
 from src.core.models.document import Document, SearchResult, QueueDocument
 from src.core.common.bunny_talk import BunnyTalk
@@ -42,6 +44,17 @@ class VectorizationException(Exception):
     pass
 
 class EncoderService(EncoderBase):
+    def __init__(self, logger, database, bunny_talk, router=None, lock_client=None):
+        super().__init__(logger, database, bunny_talk, router, lock_client)
+        self.index_metrics = MetricsService(
+            amqp_url=AMGIX_AMQP_URL,
+            logger=self.logger,
+            hostname=HOSTNAME,
+            source="index",
+            role="index",
+            windows=[30, 60],
+            database=database,
+        )
     
     async def startup(self):
         await self.bunny_talk.listen(
@@ -64,6 +77,7 @@ class EncoderService(EncoderBase):
             routing_key="ping-encoder",
             handler=self.ping
         )
+        self.index_metrics.start_reporting()
         self.logger.info("Registered document_upsert handler for 'documents' and 'documents-bulk' queues")
 
     async def ping(self) -> bool:
@@ -71,6 +85,7 @@ class EncoderService(EncoderBase):
 
     async def document_upsert(self, queue_id: str) -> None:
         try_count = 0  # Initialize try_count outside try/except
+        t0 = time.perf_counter_ns()
 
         self.bunny_talk.log_trace_context(f"EncoderService: queue_id {queue_id}")
 
@@ -144,6 +159,7 @@ class EncoderService(EncoderBase):
                             await self.database.delete_from_queue([queue_id])
                         except Exception as queue_error:
                             self.logger.error(f"Failed to delete queue entry {queue_id} after successful processing: {str(queue_error)}")
+                        self.index_metrics.record(MetricKey.INDEX_QUEUE_DOCS_SKIPPED_STALE)
                         return
                 
                 try:
@@ -187,6 +203,11 @@ class EncoderService(EncoderBase):
                         if existing_document and field_vector_name in existing_document.token_lengths:
                             updates[field_vector_name]["old_sum_token_lengths"] += existing_document.token_lengths[field_vector_name]
                 
+                if is_new:
+                    self.index_metrics.record(MetricKey.INDEX_QUEUE_DOCS_NEW)
+                else:
+                    self.index_metrics.record(MetricKey.INDEX_QUEUE_DOCS_UPDATED)
+
                 if updates:
                     await self.bunny_talk.talk("collection-stats", collection_name=collection_name, updates=updates)
             
@@ -225,6 +246,10 @@ class EncoderService(EncoderBase):
                 
             try:
                 await self.database.update_queue_status([queue_id], status, new_try_count, error_msg)
+                if status == QueuedDocumentStatus.FAILED:
+                        self.index_metrics.record(MetricKey.INDEX_QUEUE_FAILED)
+                elif status == QueuedDocumentStatus.REQUEUED:
+                        self.index_metrics.record(MetricKey.INDEX_QUEUE_REQUEUED)
             except Exception as queue_error:
                 self.logger.error(f"Failed to update queue status for queue entry {queue_id}: {str(queue_error)}")
 
@@ -232,6 +257,8 @@ class EncoderService(EncoderBase):
                 delay = min(2 * new_try_count + random.uniform(0.1, 1.5), _MAX_RETRY_SLEEP_SECONDS)
                 await asyncio.sleep(delay)
                 raise e
+        finally:
+            self.index_metrics.record(MetricKey.INDEX_QUEUE_JOB_MS, (time.perf_counter_ns() - t0) / 1_000_000.0, n=1)
 
     async def document_upsert_bulk(self, queue_ids: List[str]) -> None:
         if not queue_ids:
@@ -239,37 +266,21 @@ class EncoderService(EncoderBase):
 
         self.bunny_talk.log_trace_context(f"EncoderService: bulk processing {len(queue_ids)} queue_ids")
 
+        t0 = time.perf_counter_ns()
         try:
-            queue_docs = await self.database.get_from_queue(queue_ids)
-        except AmgixNotFound as e:
-            self.logger.error(str(e))
-            return
-
-
-        collection_name = queue_docs[0].collection_name
-
-        try:
-            collection_config, from_cache = await EncoderBase.get_collection_info_cached(self.database, collection_name)
-            if not collection_config:
-                error_msg = f"Collection configuration not found for {get_user_collection_name(collection_name)}"
-                self.logger.error(error_msg)
-                new_try_count = queue_docs[0].try_count + 1
-                try:
-                    await self.database.update_queue_status(queue_ids, QueuedDocumentStatus.FAILED, new_try_count, error_msg)
-                except Exception as queue_error:
-                    self.logger.error(f"Failed to update queue status: {str(queue_error)}")
+            try:
+                queue_docs = await self.database.get_from_queue(queue_ids)
+            except AmgixNotFound as e:
+                self.logger.error(str(e))
                 return
 
-            if collection_config.collection_id != queue_docs[0].collection_id:
-                if from_cache:
-                    self.logger.warning(
-                        f"Collection id mismatch for {get_user_collection_name(collection_name)}; invalidating cache and refetching."
-                    )
-                    EncoderBase.invalidate_collection_cache(collection_name)
-                    collection_config, _ = await EncoderBase.get_collection_info_cached(self.database, collection_name)
+            collection_name = queue_docs[0].collection_name
 
+            try:
+                collection_config, from_cache = await EncoderBase.get_collection_info_cached(self.database, collection_name)
                 if not collection_config:
                     error_msg = f"Collection configuration not found for {get_user_collection_name(collection_name)}"
+                    self.logger.error(error_msg)
                     new_try_count = queue_docs[0].try_count + 1
                     try:
                         await self.database.update_queue_status(queue_ids, QueuedDocumentStatus.FAILED, new_try_count, error_msg)
@@ -278,137 +289,170 @@ class EncoderService(EncoderBase):
                     return
 
                 if collection_config.collection_id != queue_docs[0].collection_id:
-                    error_msg = (
-                        f"Collection configuration changed during processing. Documents were queued for collection_id {queue_docs[0].collection_id}, "
-                        f"but current collection has collection_id {collection_config.collection_id}. Please re-upload the documents."
-                    )
-                    new_try_count = queue_docs[0].try_count + 1
-                    try:
-                        await self.database.update_queue_status(queue_ids, QueuedDocumentStatus.FAILED, new_try_count, error_msg)
-                    except Exception as queue_error:
-                        self.logger.error(f"Failed to update queue status: {str(queue_error)}")
-                    return
+                    if from_cache:
+                        self.logger.warning(
+                            f"Collection id mismatch for {get_user_collection_name(collection_name)}; invalidating cache and refetching."
+                        )
+                        EncoderBase.invalidate_collection_cache(collection_name)
+                        collection_config, _ = await EncoderBase.get_collection_info_cached(self.database, collection_name)
 
-            # Acquire all document locks in single batch
-            lock_names = [f"doc-{self.database._string_to_uuid(f"{collection_name}-{qd.doc_id}")}" for qd in queue_docs]
-            async with self.lock_client.acquire(lock_names, timeout=5.0):
+                    if not collection_config:
+                        error_msg = f"Collection configuration not found for {get_user_collection_name(collection_name)}"
+                        new_try_count = queue_docs[0].try_count + 1
+                        try:
+                            await self.database.update_queue_status(queue_ids, QueuedDocumentStatus.FAILED, new_try_count, error_msg)
+                        except Exception as queue_error:
+                            self.logger.error(f"Failed to update queue status: {str(queue_error)}")
+                        return
 
-                existing_docs = await self.database.get_documents(collection_name, [qd.doc_id for qd in queue_docs], suppress_not_found=True)
+                    if collection_config.collection_id != queue_docs[0].collection_id:
+                        error_msg = (
+                            f"Collection configuration changed during processing. Documents were queued for collection_id {queue_docs[0].collection_id}, "
+                            f"but current collection has collection_id {collection_config.collection_id}. Please re-upload the documents."
+                        )
+                        new_try_count = queue_docs[0].try_count + 1
+                        try:
+                            await self.database.update_queue_status(queue_ids, QueuedDocumentStatus.FAILED, new_try_count, error_msg)
+                        except Exception as queue_error:
+                            self.logger.error(f"Failed to update queue status: {str(queue_error)}")
+                        return
 
-                existing_docs_map = {}
-                for queue_doc, existing_doc in zip(queue_docs, existing_docs):
-                    if existing_doc is not None:
-                        existing_docs_map[queue_doc.doc_id] = existing_doc
+                # Acquire all document locks in single batch
+                lock_names = [f"doc-{self.database._string_to_uuid(f"{collection_name}-{qd.doc_id}")}" for qd in queue_docs]
+                async with self.lock_client.acquire(lock_names, timeout=5.0):
 
-                documents_to_process = []
-                documents_to_skip = []
-                is_new_flags = []
+                    existing_docs = await self.database.get_documents(collection_name, [qd.doc_id for qd in queue_docs], suppress_not_found=True)
+
+                    existing_docs_map = {}
+                    for queue_doc, existing_doc in zip(queue_docs, existing_docs):
+                        if existing_doc is not None:
+                            existing_docs_map[queue_doc.doc_id] = existing_doc
+
+                    documents_to_process = []
+                    documents_to_skip = []
+                    is_new_flags = []
                 
-                for queue_doc in queue_docs:
-                    existing_doc = existing_docs_map.get(queue_doc.doc_id)
-                    if existing_doc is not None and queue_doc.document.timestamp <= existing_doc.timestamp:
-                        documents_to_skip.append(queue_doc)
-                    else:
-                        documents_to_process.append(queue_doc)
-                        is_new_flags.append(existing_doc is None)
-
-                if documents_to_skip:
-                    await self.database.delete_from_queue([qd.queue_id for qd in documents_to_skip])
-
-                if not documents_to_process:
-                    return
-
-                documents = [qd.document for qd in documents_to_process]
-                
-                stats = await self.database.get_collection_stats(collection_name)
-                avgdls = stats.get("avgdls", {})
-                
-                for config in collection_config.vectors:
-                    if config.type in VectorType.custom_tokenization():
-                        for field in config.index_fields:
-                            field_vector_name = f"{field}_{config.name}"
-                            if field_vector_name not in avgdls:
-                                avgdls[field_vector_name] = 50.0
-                
-                avgdl_dict = avgdls
-                
-                docs_with_vectors = await Vectorizer.vectorize_documents(self.router, documents, collection_config.vectors, avgdl_dict=avgdl_dict)
-
-                # Count docs once for the batch
-                new_doc_count_batch = sum(1 for is_new in is_new_flags if is_new)
-                update_doc_count_batch = len(is_new_flags) - new_doc_count_batch
-
-                updates: Dict[str, Dict[str, int]] = {}
-                for doc_idx, doc_with_vectors in enumerate(docs_with_vectors):
-                    is_new = is_new_flags[doc_idx]
-                    doc_id = documents_to_process[doc_idx].doc_id
-                    existing_doc = existing_docs_map.get(doc_id)
-                    
-                    for field_vector_name, token_length in doc_with_vectors.token_lengths.items():
-                        if field_vector_name not in updates:
-                            updates[field_vector_name] = {
-                                "new_doc_count": new_doc_count_batch,
-                                "new_sum_token_lengths": 0,
-                                "update_doc_count": update_doc_count_batch,
-                                "update_sum_token_lengths": 0,
-                                "old_sum_token_lengths": 0
-                            }
-                        
-                        if is_new:
-                            updates[field_vector_name]["new_sum_token_lengths"] += token_length
+                    for queue_doc in queue_docs:
+                        existing_doc = existing_docs_map.get(queue_doc.doc_id)
+                        if existing_doc is not None and queue_doc.document.timestamp <= existing_doc.timestamp:
+                            documents_to_skip.append(queue_doc)
                         else:
-                            updates[field_vector_name]["update_sum_token_lengths"] += token_length
-                            if existing_doc and field_vector_name in existing_doc.token_lengths:
-                                updates[field_vector_name]["old_sum_token_lengths"] += existing_doc.token_lengths[field_vector_name]
+                            documents_to_process.append(queue_doc)
+                            is_new_flags.append(existing_doc is None)
 
-                new_docs = []
-                existing_docs_list = []
-                for i, is_new in enumerate(is_new_flags):
-                    if is_new:
-                        new_docs.append(docs_with_vectors[i])
-                    else:
-                        existing_docs_list.append(docs_with_vectors[i])
+                    if documents_to_skip:
+                        self.index_metrics.record(MetricKey.INDEX_QUEUE_DOCS_SKIPPED_STALE, float(len(documents_to_skip)))
+                        await self.database.delete_from_queue([qd.queue_id for qd in documents_to_skip])
 
-                if new_docs:
-                    await self.database.add_documents(collection_name, new_docs, is_new=True, store_content=collection_config.store_content, collection_config=collection_config, lock_client=self.lock_client)
-                if existing_docs_list:
-                    await self.database.add_documents(collection_name, existing_docs_list, is_new=False, store_content=collection_config.store_content, collection_config=collection_config, lock_client=self.lock_client)
+                    if not documents_to_process:
+                        return
+
+                    documents = [qd.document for qd in documents_to_process]
                 
-                if updates:
-                    await self.bunny_talk.talk("collection-stats", collection_name=collection_name, updates=updates)
-                    # await self.update_collection_stats(collection_name=collection_name, updates=updates)
+                    stats = await self.database.get_collection_stats(collection_name)
+                    avgdls = stats.get("avgdls", {})
                 
-                await self.database.delete_from_queue([qd.queue_id for qd in documents_to_process])
-
-        except Exception as e:
-            self.logger.error(f"Failed to process bulk documents: {str(e)}")
-            
-            new_try_count = queue_docs[0].try_count + 1
-            
-            if isinstance(e, ValueError):
-                status = QueuedDocumentStatus.FAILED
-            elif isinstance(e, VectorizationException):
-                status = (
-                    QueuedDocumentStatus.REQUEUED
-                    if new_try_count < MAX_QUEUE_DELIVERY_ATTEMPTS
-                    else QueuedDocumentStatus.FAILED
-                )
-            else:
-                status = (
-                    QueuedDocumentStatus.REQUEUED
-                    if new_try_count < MAX_DB_RETRIES
-                    else QueuedDocumentStatus.FAILED
-                )
+                    for config in collection_config.vectors:
+                        if config.type in VectorType.custom_tokenization():
+                            for field in config.index_fields:
+                                field_vector_name = f"{field}_{config.name}"
+                                if field_vector_name not in avgdls:
+                                    avgdls[field_vector_name] = 50.0
                 
-            try:
-                await self.database.update_queue_status(queue_ids, status, new_try_count, str(e))
-            except Exception as queue_error:
-                self.logger.error(f"Failed to update queue status: {str(queue_error)}")
+                    avgdl_dict = avgdls
+                
+                    docs_with_vectors = await Vectorizer.vectorize_documents(self.router, documents, collection_config.vectors, avgdl_dict=avgdl_dict)
 
-            if status == QueuedDocumentStatus.REQUEUED:
-                delay = min(2 * new_try_count + random.uniform(0.1, 1.5), _MAX_RETRY_SLEEP_SECONDS)
-                await asyncio.sleep(delay)
-                raise e
+                    # Count docs once for the batch
+                    new_doc_count_batch = sum(1 for is_new in is_new_flags if is_new)
+                    update_doc_count_batch = len(is_new_flags) - new_doc_count_batch
+
+                    updates: Dict[str, Dict[str, int]] = {}
+                    for doc_idx, doc_with_vectors in enumerate(docs_with_vectors):
+                        is_new = is_new_flags[doc_idx]
+                        doc_id = documents_to_process[doc_idx].doc_id
+                        existing_doc = existing_docs_map.get(doc_id)
+                    
+                        for field_vector_name, token_length in doc_with_vectors.token_lengths.items():
+                            if field_vector_name not in updates:
+                                updates[field_vector_name] = {
+                                    "new_doc_count": new_doc_count_batch,
+                                    "new_sum_token_lengths": 0,
+                                    "update_doc_count": update_doc_count_batch,
+                                    "update_sum_token_lengths": 0,
+                                    "old_sum_token_lengths": 0
+                                }
+                        
+                            if is_new:
+                                updates[field_vector_name]["new_sum_token_lengths"] += token_length
+                            else:
+                                updates[field_vector_name]["update_sum_token_lengths"] += token_length
+                                if existing_doc and field_vector_name in existing_doc.token_lengths:
+                                    updates[field_vector_name]["old_sum_token_lengths"] += existing_doc.token_lengths[field_vector_name]
+
+                    new_docs = []
+                    existing_docs_list = []
+                    for i, is_new in enumerate(is_new_flags):
+                        if is_new:
+                            new_docs.append(docs_with_vectors[i])
+                        else:
+                            existing_docs_list.append(docs_with_vectors[i])
+
+                    if new_docs:
+                        await self.database.add_documents(collection_name, new_docs, is_new=True, store_content=collection_config.store_content, collection_config=collection_config, lock_client=self.lock_client)
+                    if existing_docs_list:
+                        await self.database.add_documents(collection_name, existing_docs_list, is_new=False, store_content=collection_config.store_content, collection_config=collection_config, lock_client=self.lock_client)
+                
+                    if updates:
+                        await self.bunny_talk.talk("collection-stats", collection_name=collection_name, updates=updates)
+                        # await self.update_collection_stats(collection_name=collection_name, updates=updates)
+                
+                    await self.database.delete_from_queue([qd.queue_id for qd in documents_to_process])
+
+                    if new_doc_count_batch:
+                        self.index_metrics.record(MetricKey.INDEX_QUEUE_DOCS_NEW, float(new_doc_count_batch))
+                    if update_doc_count_batch:
+                        self.index_metrics.record(MetricKey.INDEX_QUEUE_DOCS_UPDATED, float(update_doc_count_batch))
+                    nq = len(queue_ids)
+                    if nq > 0:
+                        self.index_metrics.record(MetricKey.INDEX_BULK_BATCHES)
+                        self.index_metrics.record(MetricKey.INDEX_BULK_BATCH_SIZE, float(nq), n=1)
+
+            except Exception as e:
+                self.logger.error(f"Failed to process bulk documents: {str(e)}")
+                
+                new_try_count = queue_docs[0].try_count + 1
+                
+                if isinstance(e, ValueError):
+                    status = QueuedDocumentStatus.FAILED
+                elif isinstance(e, VectorizationException):
+                    status = (
+                        QueuedDocumentStatus.REQUEUED
+                        if new_try_count < MAX_QUEUE_DELIVERY_ATTEMPTS
+                        else QueuedDocumentStatus.FAILED
+                    )
+                else:
+                    status = (
+                        QueuedDocumentStatus.REQUEUED
+                        if new_try_count < MAX_DB_RETRIES
+                        else QueuedDocumentStatus.FAILED
+                    )
+                    
+                try:
+                    await self.database.update_queue_status(queue_ids, status, new_try_count, str(e))
+                    if status == QueuedDocumentStatus.FAILED:
+                        self.index_metrics.record(MetricKey.INDEX_BULK_FAILED)
+                    elif status == QueuedDocumentStatus.REQUEUED:
+                        self.index_metrics.record(MetricKey.INDEX_BULK_REQUEUED)
+                except Exception as queue_error:
+                    self.logger.error(f"Failed to update queue status: {str(queue_error)}")
+
+                if status == QueuedDocumentStatus.REQUEUED:
+                    delay = min(2 * new_try_count + random.uniform(0.1, 1.5), _MAX_RETRY_SLEEP_SECONDS)
+                    await asyncio.sleep(delay)
+                    raise e
+        finally:
+            self.index_metrics.record(MetricKey.INDEX_BULK_JOB_MS, (time.perf_counter_ns() - t0) / 1_000_000.0, n=1)
 
     async def update_collection_stats(
         self, 

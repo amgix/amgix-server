@@ -14,23 +14,23 @@
 
 import { mapValues } from '../runtime';
 /**
- * Aggregated value and sample count for a single rolling window.
+ * Mergeable numerator/denominator stats for a single window.
  * @export
  * @interface WindowSample
  */
 export interface WindowSample {
     /**
-     * Aggregated value (rate/sec, average, or sum depending on the metric)
+     * Mergeable numerator for the window
      * @type {number}
      * @memberof WindowSample
      */
     value: number;
     /**
-     * Number of samples in this window
+     * Mergeable denominator for average-like metrics
      * @type {number}
      * @memberof WindowSample
      */
-    n: number;
+    n?: number;
 }
 
 /**
@@ -38,7 +38,6 @@ export interface WindowSample {
  */
 export function instanceOfWindowSample(value: object): value is WindowSample {
     if (!('value' in value) || value['value'] === undefined) return false;
-    if (!('n' in value) || value['n'] === undefined) return false;
     return true;
 }
 
@@ -53,7 +52,7 @@ export function WindowSampleFromJSONTyped(json: any, ignoreDiscriminator: boolea
     return {
         
         'value': json['value'],
-        'n': json['n'],
+        'n': json['n'] == null ? undefined : json['n'],
     };
 }
 

@@ -7,7 +7,7 @@ from .enums import *
 from .functions import *
 from .cache import AMGIXCache
 from .embed_router import EmbedRouter
-from .rolling_metrics import RollingMetrics
+from .metrics_service import MetricsService
 
 __all__ = [
     # Constants
@@ -33,6 +33,10 @@ __all__ = [
     "MAX_SEARCH_LIMIT",
     "MAX_STATUS_LENGTH",
     "UUID_LENGTH",
+    "MAX_HOSTNAME_LENGTH",
+    "MAX_METRIC_SOURCE_LENGTH",
+    "MAX_METRIC_KEY_LENGTH",
+    "MAX_METRIC_DIMS_LENGTH",
     "MODEL_CACHE_SIZE",
     "DEFAULT_DB_POOL_SIZE",
     "RPC_TIMEOUT_SECONDS",
@@ -83,5 +87,5 @@ __all__ = [
     "AMGIXCache",
     "BunnyLock",
     "EmbedRouter",
-    "RollingMetrics",
+    "MetricsService",
 ]

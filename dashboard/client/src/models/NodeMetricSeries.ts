@@ -22,21 +22,27 @@ import {
 } from './WindowSample';
 
 /**
- * One metric stream on a node with rolling-window snapshots.
+ * One metric stream on a node with mergeable window stats.
  * 
- * key[0] is the metric name (e.g. 'batches', 'inference_ms', 'inference_origin_ms', 'hops').
- * key[1:] are optional dimensions (e.g. vector type, model name, revision).
+ * key is the metric name (e.g. 'batches', 'inference_ms', 'inference_origin_ms', 'hops').
+ * dims are optional dimensions (e.g. vector type, model name, revision).
  * windows are keyed by window size in seconds.
  * @export
  * @interface NodeMetricSeries
  */
 export interface NodeMetricSeries {
     /**
-     * Compound key: [metric_name, *dimensions]
+     * Metric name
+     * @type {string}
+     * @memberof NodeMetricSeries
+     */
+    key: string;
+    /**
+     * Optional metric dimensions
      * @type {Array<string>}
      * @memberof NodeMetricSeries
      */
-    key: Array<string>;
+    dims?: Array<string>;
     /**
      * Rolling-window snapshots keyed by window size in seconds
      * @type {{ [key: string]: WindowSample; }}
@@ -70,6 +76,7 @@ export function NodeMetricSeriesFromJSONTyped(json: any, ignoreDiscriminator: bo
     return {
         
         'key': json['key'],
+        'dims': json['dims'] == null ? undefined : json['dims'],
         'windows': json['windows'] == null ? undefined : (mapValues(json['windows'], WindowSampleFromJSON)),
         'last_seen': json['last_seen'] == null ? undefined : json['last_seen'],
     };
@@ -87,6 +94,7 @@ export function NodeMetricSeriesToJSONTyped(value?: NodeMetricSeries | null, ign
     return {
         
         'key': value['key'],
+        'dims': value['dims'],
         'windows': value['windows'] == null ? undefined : (mapValues(value['windows'], WindowSampleToJSON)),
         'last_seen': value['last_seen'],
     };

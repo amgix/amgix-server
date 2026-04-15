@@ -33,6 +33,10 @@ MAX_SEARCH_QUERY_LENGTH = 10000  # Maximum length for search queries
 MAX_SEARCH_LIMIT = 100  # Maximum limit for search results returned
 MAX_STATUS_LENGTH = 8  # Length of longest status value ("requeued")
 UUID_LENGTH = 36  # Length for UUID strings
+MAX_HOSTNAME_LENGTH = 253        # RFC 1035 DNS hostname maximum
+MAX_METRIC_SOURCE_LENGTH = 32    # Internal source identifier (e.g. 'api', 'router', 'index')
+MAX_METRIC_KEY_LENGTH = 64       # Metric key name
+MAX_METRIC_DIMS_LENGTH = 512     # JSON-serialized metric dimensions list
 
 # Cache sizes
 MODEL_CACHE_SIZE = int(os.getenv("AMGIX_MODEL_CACHE_SIZE", "100"))  # Maximum number of models to cache
