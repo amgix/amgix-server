@@ -24,6 +24,7 @@ import {
 import $ from 'jquery'
 
 import { hideDashboardError, showDashboardError } from '../error-bar'
+import { formatDashboardRouteHash, parseDashboardRouteHash, type HomeMetricsTabId } from '../route-hash'
 import { DashboardPanel } from './panel-base'
 
 Chart.register(LineController, LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend)
@@ -36,8 +37,6 @@ const HOME_METRICS_TAB_ENCODER_ID = 'dashboard-home-metrics-tab-encoder'
 const HOME_METRICS_PANEL_API_ID = 'dashboard-home-metrics-panel-api'
 const HOME_METRICS_PANEL_INDEXING_ID = 'dashboard-home-metrics-panel-indexing'
 const HOME_METRICS_PANEL_ENCODER_ID = 'dashboard-home-metrics-panel-encoder'
-
-type HomeMetricsTabPanel = 'api' | 'indexing' | 'encoder'
 
 /** Cluster table embedding columns use this rolling window (seconds). */
 const CLUSTER_METRICS_WINDOW_SEC = 30
@@ -1154,6 +1153,17 @@ export class HomePanel extends DashboardPanel {
     this.clearReadyPoll()
     this.readyPollGeneration += 1
   }
+
+  applyMetricsTabFromRoute(tab: HomeMetricsTabId): void {
+    const $root = $('#panel-home [data-home-root]')
+    if (!$root.length) {
+      return
+    }
+    if (!$root.find('[data-home-metrics-tab]').length) {
+      return
+    }
+    this.activateHomeMetricsTab($root, tab)
+  }
   private apiMetricsHistory: ApiMetricsHistoryPoint[] = []
 
   init(api: AmgixApi): void {
@@ -1694,7 +1704,7 @@ export class HomePanel extends DashboardPanel {
     }
   }
 
-  private activateHomeMetricsTab($root: JQuery<HTMLElement>, panel: HomeMetricsTabPanel): void {
+  private activateHomeMetricsTab($root: JQuery<HTMLElement>, panel: HomeMetricsTabId): void {
     const $apiPanel = $root.find('[data-home-metrics-tab-panel="api"]')
     const $indexingPanel = $root.find('[data-home-metrics-tab-panel="indexing"]')
     const $encPanel = $root.find('[data-home-metrics-tab-panel="encoder"]')
@@ -2334,16 +2344,16 @@ export class HomePanel extends DashboardPanel {
         $encoderMetricsPanel,
       )
 
-      const metricsTabOrder = ['api', 'indexing', 'encoder'] as const satisfies readonly HomeMetricsTabPanel[]
+      const metricsTabOrder = ['api', 'indexing', 'encoder'] as const satisfies readonly HomeMetricsTabId[]
 
       $btnApiMetrics.on('click', () => {
-        this.activateHomeMetricsTab($root, 'api')
+        window.location.hash = formatDashboardRouteHash('home', 'api')
       })
       $btnIndexingMetrics.on('click', () => {
-        this.activateHomeMetricsTab($root, 'indexing')
+        window.location.hash = formatDashboardRouteHash('home', 'indexing')
       })
       $btnEncoderMetrics.on('click', () => {
-        this.activateHomeMetricsTab($root, 'encoder')
+        window.location.hash = formatDashboardRouteHash('home', 'encoder')
       })
       $metricsTabList.on('keydown', (e) => {
         const key = e.key
@@ -2351,7 +2361,7 @@ export class HomePanel extends DashboardPanel {
           return
         }
         e.preventDefault()
-        let current: HomeMetricsTabPanel = 'encoder'
+        let current: HomeMetricsTabId = 'encoder'
         if ($btnApiMetrics.attr('aria-selected') === 'true') {
           current = 'api'
         } else if ($btnIndexingMetrics.attr('aria-selected') === 'true') {
@@ -2369,11 +2379,13 @@ export class HomePanel extends DashboardPanel {
           nextIdx = (idx - 1 + metricsTabOrder.length) % metricsTabOrder.length
         }
         const next = metricsTabOrder[nextIdx]!
-        this.activateHomeMetricsTab($root, next)
+        window.location.hash = formatDashboardRouteHash('home', next)
         $root.find(`[data-home-metrics-tab="${next}"]`).get(0)?.focus()
       })
 
       $root.empty().append($topBand, $metricsShell)
+      const route = parseDashboardRouteHash(window.location.hash.replace(/^#/, '').trim().toLowerCase())
+      this.activateHomeMetricsTab($root, route.homeMetricsTab)
       this.applyClusterViewToDom($root, metrics)
 
       this.readyPollTimer = window.setInterval(() => {

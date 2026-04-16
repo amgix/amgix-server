@@ -6,13 +6,18 @@ import { HomePanel } from './panels/home'
 import { ClusterMapPanel } from './panels/cluster-map'
 import { CollectionsPanel } from './panels/collections'
 import { QueryPanel } from './panels/query'
+import {
+  formatDashboardRouteHash,
+  parseDashboardRouteHash,
+  type DashboardPanelId,
+} from './route-hash'
 
-export type PanelId = 'home' | 'cluster-map' | 'collections' | 'query'
+export type PanelId = DashboardPanelId
 
 function isPanelId(value: string | undefined): value is PanelId {
   return (
     value === 'home' ||
-    value === 'cluster-map' ||
+    value === 'clustermap' ||
     value === 'collections' ||
     value === 'query'
   )
@@ -20,7 +25,7 @@ function isPanelId(value: string | undefined): value is PanelId {
 
 const panels: Record<PanelId, DashboardPanel> = {
   home: new HomePanel(),
-  'cluster-map': new ClusterMapPanel(),
+  clustermap: new ClusterMapPanel(),
   collections: new CollectionsPanel(),
   query: new QueryPanel(),
 }
@@ -32,23 +37,10 @@ function hashPanelId(): string {
   return window.location.hash.replace(/^#/, '').trim().toLowerCase()
 }
 
-/** Panel to show from the current URL hash (`#home`, `#cluster-map`, …). Invalid or missing → `home`. */
-export function initialPanelIdFromHash(): PanelId {
-  const raw = hashPanelId()
-  if (isPanelId(raw)) {
-    return raw
-  }
-  return 'home'
-}
-
-function renderPanel(id: PanelId): void {
-  if (activePanel === id) {
-    return
-  }
-
+function renderPanelSwitch(id: PanelId): void {
   const api = dashboardApi
   if (!api) {
-    throw new Error('initDashboardNav(api) must run before showPanel')
+    throw new Error('initDashboardNav(api) must run before applyRouteFromHash')
   }
 
   if (activePanel != null) {
@@ -74,11 +66,25 @@ function renderPanel(id: PanelId): void {
   panels[id].init(api)
 }
 
+export function applyRouteFromHash(): void {
+  const raw = hashPanelId()
+  const parsed = parseDashboardRouteHash(raw)
+  if (raw !== parsed.canonicalFragment) {
+    window.location.hash = parsed.canonicalFragment
+    return
+  }
+
+  if (parsed.panel !== activePanel) {
+    renderPanelSwitch(parsed.panel)
+  } else if (parsed.panel === 'home') {
+    ;(panels.home as HomePanel).applyMetricsTabFromRoute(parsed.homeMetricsTab)
+  }
+}
+
 export function showPanel(id: PanelId): void {
-  renderPanel(id)
-  const canonical = `#${id}`
-  if (window.location.hash !== canonical) {
-    window.location.hash = id
+  const frag = formatDashboardRouteHash(id, 'api')
+  if (hashPanelId() !== frag) {
+    window.location.hash = frag
   }
 }
 
@@ -90,9 +96,15 @@ export function initDashboardNav(api: AmgixApi): void {
       return
     }
     if (activePanel === panelId) {
-      const api = dashboardApi
-      if (api) {
-        panels[panelId].refresh(api)
+      if (panelId === 'home') {
+        const desired = formatDashboardRouteHash('home', 'api')
+        if (hashPanelId() !== desired) {
+          window.location.hash = desired
+        }
+      }
+      const apiRef = dashboardApi
+      if (apiRef) {
+        panels[panelId].refresh(apiRef)
       }
       return
     }
@@ -100,14 +112,8 @@ export function initDashboardNav(api: AmgixApi): void {
   })
 
   $(window).on('hashchange', () => {
-    const raw = hashPanelId()
-    const id: PanelId = isPanelId(raw) ? raw : 'home'
-    if (!isPanelId(raw)) {
-      if (window.location.hash !== `#${id}`) {
-        window.location.hash = id
-        return
-      }
-    }
-    renderPanel(id)
+    applyRouteFromHash()
   })
+
+  applyRouteFromHash()
 }

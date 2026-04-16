@@ -16,7 +16,7 @@ import { MDCTopAppBar } from '@material/top-app-bar/component'
 import { AmgixApi, Configuration } from '@amgix/amgix-client'
 
 import { initDashboardErrorBar } from './error-bar'
-import { initDashboardNav, initialPanelIdFromHash, showPanel } from './panel-nav'
+import { initDashboardNav } from './panel-nav'
 import { initDashboardThemeToggle } from './theme'
 
 function amgixApiBasePath(): string {
@@ -42,5 +42,4 @@ $(() => {
   initDashboardErrorBar()
   initDashboardNav(amgixApi)
   initDashboardThemeToggle($('#theme-toggle'))
-  showPanel(initialPanelIdFromHash())
 })
