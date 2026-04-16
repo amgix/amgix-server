@@ -23,13 +23,15 @@ import {
   type Scale,
   type Tick,
 } from 'chart.js'
+import zoomPlugin from 'chartjs-plugin-zoom'
+import type { ZoomPluginOptions } from 'chartjs-plugin-zoom/types/options'
 import $ from 'jquery'
 
 import { hideDashboardError, showDashboardError } from '../error-bar'
 import { formatDashboardRouteHash, parseDashboardRouteHash, type HomeMetricsTabId } from '../route-hash'
 import { DashboardPanel } from './panel-base'
 
-Chart.register(LineController, LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend)
+Chart.register(LineController, LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend, zoomPlugin)
 
 const HOME_READY_POLL_MS = 10_000
 
@@ -1764,6 +1766,18 @@ function clusterChartDevicePixelRatio(): number {
   return d != null && d > 0 ? d : 1
 }
 
+const HOME_LINE_CHART_ZOOM: ZoomPluginOptions = {
+  pan: {
+    enabled: true,
+    mode: 'x',
+  },
+  zoom: {
+    mode: 'x',
+    wheel: { enabled: true },
+    pinch: { enabled: true },
+  },
+}
+
 function buildApiMetricsChartOptions(
   cutoff: number,
   now: number,
@@ -1813,6 +1827,7 @@ function buildApiMetricsChartOptions(
           },
         },
       },
+      zoom: HOME_LINE_CHART_ZOOM,
     },
     scales: {
       x: {
@@ -2010,11 +2025,15 @@ export class HomePanel extends DashboardPanel {
     yAxisTitle: string,
   ): void {
     const xScale = ch.options.scales?.x
-    if (xScale && typeof xScale === 'object' && 'min' in xScale && 'max' in xScale) {
+    if (xScale && typeof xScale === 'object' && 'min' in xScale && 'max' in xScale && !ch.isZoomedOrPanned()) {
       ;(xScale as { min?: number; max?: number }).min = cutoff
       ;(xScale as { min?: number; max?: number }).max = now
     }
     ch.options.color = tickColor
+    const plSync = ch.options.plugins as Record<string, unknown> | undefined
+    if (plSync) {
+      plSync.zoom = HOME_LINE_CHART_ZOOM
+    }
     if (ch.options.font && typeof ch.options.font === 'object') {
       const f = ch.options.font as { family?: string; size?: number }
       f.family = chartFont.family
@@ -2299,6 +2318,7 @@ export class HomePanel extends DashboardPanel {
                 },
               },
             },
+            zoom: HOME_LINE_CHART_ZOOM,
           },
           scales: {
             x: {
@@ -2350,7 +2370,7 @@ export class HomePanel extends DashboardPanel {
       const ch = this.clusterThroughputChart
       ch.data.datasets = datasets as typeof ch.data.datasets
       const xScale = ch.options.scales?.x
-      if (xScale && typeof xScale === 'object' && 'min' in xScale && 'max' in xScale) {
+      if (xScale && typeof xScale === 'object' && 'min' in xScale && 'max' in xScale && !ch.isZoomedOrPanned()) {
         ;(xScale as { min?: number; max?: number }).min = cutoff
         ;(xScale as { min?: number; max?: number }).max = now
       }
@@ -2359,6 +2379,10 @@ export class HomePanel extends DashboardPanel {
         ;(leg as { display?: boolean }).display = false
       }
       ch.options.color = tickColor
+      const plEnc = ch.options.plugins as Record<string, unknown> | undefined
+      if (plEnc) {
+        plEnc.zoom = HOME_LINE_CHART_ZOOM
+      }
       const xs = ch.options.scales?.x
       if (xs && typeof xs === 'object') {
         const gx = (xs as { grid?: { color?: string }; ticks?: { color?: string } }).grid
@@ -2790,6 +2814,14 @@ export class HomePanel extends DashboardPanel {
     $root.find('[data-home-chart-history-range]').val(v)
   }
 
+  private resetHomeChartZoom(): void {
+    const mode = 'none' as const
+    this.clusterThroughputChart?.resetZoom(mode)
+    this.indexingLatencyChart?.resetZoom(mode)
+    this.apiMetricsRequestsChart?.resetZoom(mode)
+    this.apiMetricsLatenciesChart?.resetZoom(mode)
+  }
+
   private async onHomeChartHistoryRangeChanged(
     api: AmgixApi,
     $root: JQuery<HTMLElement>,
@@ -2800,6 +2832,7 @@ export class HomePanel extends DashboardPanel {
     }
     this.homeChartHistoryMs = nextMs
     this.syncHomeChartHistorySelects($root)
+    this.resetHomeChartZoom()
     this.apiChartBuckets.clear()
     this.encoderChartBuckets.clear()
     this.indexingChartBuckets.clear()
