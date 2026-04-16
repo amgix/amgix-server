@@ -548,6 +548,26 @@ body {
   justify-self: end;
 }
 
+.dashboard-home-cluster-chart-hint-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  justify-self: end;
+  min-width: 0;
+}
+
+.dashboard-home-chart-history-range {
+  max-width: 9.5rem;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.8125rem;
+  padding: 0.15rem 0.35rem;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
+  background: var(--bg);
+  color: var(--text);
+}
+
 .dashboard-home-cluster-help {
   display: inline-flex;
   align-items: center;

@@ -43,16 +43,55 @@ const HOME_METRICS_PANEL_ENCODER_ID = 'dashboard-home-metrics-panel-encoder'
 /** Home tables and live chart labels use this rolling window (seconds). */
 const CLUSTER_METRICS_WINDOW_SEC = 60
 
-/** Cluster charts: visible history span. */
-const CLUSTER_CHART_HISTORY_MS = 10 * 60 * 1000
+/** Default visible history span for cluster charts (ms). */
+const DEFAULT_HOME_CHART_HISTORY_MS = 10 * 60 * 1000
 
-/** Rolling patch window for `/metrics/trends` on each poll (closed buckets may land slightly late). */
-const CLUSTER_CHART_PATCH_MS = 2 * 60 * 1000
+/** 1m metric buckets are retained for 24h; 5m buckets for 7d. */
+const HOME_CHART_HISTORY_ONE_DAY_MS = 24 * 60 * 60 * 1000
+const HOME_CHART_HISTORY_SEVEN_DAYS_MS = 7 * HOME_CHART_HISTORY_ONE_DAY_MS
+
+const HOME_CHART_HISTORY_OPTIONS: ReadonlyArray<{ label: string; valueMs: number }> = [
+  { label: '10 m', valueMs: 10 * 60 * 1000 },
+  { label: '30 m', valueMs: 30 * 60 * 1000 },
+  { label: '1 h', valueMs: 60 * 60 * 1000 },
+  { label: '6 h', valueMs: 6 * 60 * 60 * 1000 },
+  { label: '12 h', valueMs: 12 * 60 * 60 * 1000 },
+  { label: '1 d', valueMs: HOME_CHART_HISTORY_ONE_DAY_MS },
+  { label: '2 d', valueMs: 2 * HOME_CHART_HISTORY_ONE_DAY_MS },
+  { label: '3 d', valueMs: 3 * HOME_CHART_HISTORY_ONE_DAY_MS },
+  { label: '7 d', valueMs: HOME_CHART_HISTORY_SEVEN_DAYS_MS },
+]
 
 /** Chart live tail + SQL buckets: 60s aligns with persisted 1-minute metric buckets. */
 const HOME_CHART_METRICS_LIVE_WINDOW_SEC = 60 as const
 
-const HOME_CHART_TREND_RESOLUTION = 60 as const
+function homeChartTrendResolutionSec(historyMs: number): 60 | 300 {
+  return historyMs <= HOME_CHART_HISTORY_ONE_DAY_MS ? 60 : 300
+}
+
+function homeChartTrendPatchMs(historyMs: number, resolutionSec: 60 | 300): number {
+  if (resolutionSec >= 300) {
+    return Math.min(historyMs, 20 * 60 * 1000)
+  }
+  return Math.min(historyMs, 2 * 60 * 1000)
+}
+
+/** X-axis tick label for linear time scale (value is epoch ms). */
+function formatClusterChartXAxisTickLabel(valueMs: number, spanMs: number): string {
+  if (!Number.isFinite(valueMs) || !Number.isFinite(spanMs) || spanMs <= 0) {
+    return ''
+  }
+  const d = new Date(valueMs)
+  if (spanMs <= HOME_CHART_HISTORY_ONE_DAY_MS) {
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  }
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
 
 const API_CHART_TREND_KEYS = [
   'api_requests',
@@ -202,11 +241,11 @@ function clusterByModelErrHelpText(): string {
 }
 
 function clusterChartHelpText(): string {
-  return `Inference and routed latency per passage. History uses 1-minute buckets from the server; the right edge is a ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s rolling snapshot.`
+  return `Inference and routed latency per passage. History uses persisted SQL buckets: 1-minute resolution for spans up to 24 hours, 5-minute resolution for longer spans (up to 7 days of retention). The right edge is a ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s rolling snapshot from current metrics.`
 }
 
 function clusterApiChartHelpText(): string {
-  return `API request rate and mean latency. History uses 1-minute buckets (cluster-wide); the right edge is a ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s rolling snapshot.`
+  return `API request rate and mean latency. History uses persisted SQL buckets: 1-minute resolution for spans up to 24 hours, 5-minute resolution for longer spans (up to 7 days of retention). The right edge is a ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s rolling snapshot from current metrics.`
 }
 
 function clusterApiAllReqColumnHelpText(): string {
@@ -1443,6 +1482,7 @@ function buildApiMetricsChartOptions(
   yAxisTitle: string,
   latencyTooltip: boolean,
 ): ChartOptions<'line'> {
+  const spanMs = now - cutoff
   return {
     color: tickColor,
     devicePixelRatio: clusterChartDevicePixelRatio(),
@@ -1505,10 +1545,7 @@ function buildApiMetricsChartOptions(
             if (!Number.isFinite(n)) {
               return ''
             }
-            return new Date(n).toLocaleTimeString(undefined, {
-              hour: '2-digit',
-              minute: '2-digit',
-            })
+            return formatClusterChartXAxisTickLabel(n, spanMs)
           },
         },
       },
@@ -1591,6 +1628,9 @@ export class HomePanel extends DashboardPanel {
   private apiChartBuckets = new Map<number, ApiMetricsHistoryPoint>()
   /** Latest snapshot for chart live tail and tables (same 60s current payload). */
   private metricsChartLiveView: Metrics | null = null
+  /** Visible SQL history span for cluster charts (encoder + API). */
+  private homeChartHistoryMs = DEFAULT_HOME_CHART_HISTORY_MS
+  private homeChartRangeListenerAttached = false
 
   override deactivate(): void {
     this.clearReadyPoll()
@@ -1704,18 +1744,32 @@ export class HomePanel extends DashboardPanel {
         t.bodyFont.size = chartFont.tooltipPx
       }
     }
+    const spanMs = now - cutoff
     const xs = ch.options.scales?.x
     if (xs && typeof xs === 'object') {
       const gx = (xs as { grid?: { color?: string }; ticks?: { color?: string; font?: { family?: string; size?: number } } }).grid
       if (gx) {
         gx.color = gridColor
       }
-      const tx = (xs as { ticks?: { color?: string; font?: { family?: string; size?: number } } }).ticks
+      const tx = (xs as {
+        ticks?: {
+          color?: string
+          font?: { family?: string; size?: number }
+          callback?: (tickValue: string | number, index: number, ticks: unknown) => string | string[]
+        }
+      }).ticks
       if (tx) {
         tx.color = tickColor
         if (tx.font) {
           tx.font.family = chartFont.family
           tx.font.size = chartFont.tickPx
+        }
+        tx.callback = (tickValue: string | number) => {
+          const n = typeof tickValue === 'number' ? tickValue : Number(tickValue)
+          if (!Number.isFinite(n)) {
+            return ''
+          }
+          return formatClusterChartXAxisTickLabel(n, spanMs)
         }
       }
     }
@@ -1773,7 +1827,8 @@ export class HomePanel extends DashboardPanel {
     }
 
     const now = Date.now()
-    const cutoff = now - CLUSTER_CHART_HISTORY_MS
+    const cutoff = now - this.homeChartHistoryMs
+    const spanMs = now - cutoff
     const liveView = this.metricsChartLiveView
     const aggLive = aggregateClusterThroughput(liveView, HOME_CHART_METRICS_LIVE_WINDOW_SEC)
     for (const row of aggLive.chartRows) {
@@ -1971,10 +2026,7 @@ export class HomePanel extends DashboardPanel {
                   if (!Number.isFinite(n)) {
                     return ''
                   }
-                  return new Date(n).toLocaleTimeString(undefined, {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })
+                  return formatClusterChartXAxisTickLabel(n, spanMs)
                 },
               },
             },
@@ -2017,9 +2069,21 @@ export class HomePanel extends DashboardPanel {
         if (gx) {
           gx.color = gridColor
         }
-        const tx = (xs as { ticks?: { color?: string } }).ticks
+        const tx = (xs as {
+          ticks?: {
+            color?: string
+            callback?: (tickValue: string | number, index: number, ticks: unknown) => string | string[]
+          }
+        }).ticks
         if (tx) {
           tx.color = tickColor
+          tx.callback = (tickValue: string | number) => {
+            const n = typeof tickValue === 'number' ? tickValue : Number(tickValue)
+            if (!Number.isFinite(n)) {
+              return ''
+            }
+            return formatClusterChartXAxisTickLabel(n, spanMs)
+          }
         }
       }
       const ys = ch.options.scales?.y
@@ -2077,7 +2141,7 @@ export class HomePanel extends DashboardPanel {
     }
 
     const now = Date.now()
-    const cutoff = now - CLUSTER_CHART_HISTORY_MS
+    const cutoff = now - this.homeChartHistoryMs
     const liveView = this.metricsChartLiveView
     const aggLive = aggregateApiChartMetrics(liveView, HOME_CHART_METRICS_LIVE_WINDOW_SEC)
     const livePoint: ApiMetricsHistoryPoint | null =
@@ -2302,6 +2366,54 @@ export class HomePanel extends DashboardPanel {
     }
   }
 
+  private trendResolutionSec(): 60 | 300 {
+    return homeChartTrendResolutionSec(this.homeChartHistoryMs)
+  }
+
+  private chartTrendPatchMs(): number {
+    return homeChartTrendPatchMs(this.homeChartHistoryMs, this.trendResolutionSec())
+  }
+
+  private homeChartHistoryLabel(): string {
+    return HOME_CHART_HISTORY_OPTIONS.find((o) => o.valueMs === this.homeChartHistoryMs)?.label ?? 'custom'
+  }
+
+  private buildHomeChartHistorySelect(): JQuery<HTMLElement> {
+    const $sel = $('<select>', {
+      class: 'dashboard-home-chart-history-range',
+      attr: { 'data-home-chart-history-range': '', 'aria-label': 'Historical chart range' },
+    })
+    for (const opt of HOME_CHART_HISTORY_OPTIONS) {
+      $sel.append($('<option>', { value: String(opt.valueMs), text: opt.label }))
+    }
+    $sel.val(String(this.homeChartHistoryMs))
+    return $sel
+  }
+
+  private syncHomeChartHistorySelects($root: JQuery<HTMLElement>): void {
+    const v = String(this.homeChartHistoryMs)
+    $root.find('[data-home-chart-history-range]').val(v)
+  }
+
+  private async onHomeChartHistoryRangeChanged(
+    api: AmgixApi,
+    $root: JQuery<HTMLElement>,
+    nextMs: number,
+  ): Promise<void> {
+    if (nextMs > HOME_CHART_HISTORY_SEVEN_DAYS_MS) {
+      return
+    }
+    this.homeChartHistoryMs = nextMs
+    this.syncHomeChartHistorySelects($root)
+    this.apiChartBuckets.clear()
+    this.encoderChartBuckets.clear()
+    const tab = readHomeMetricsTabFromDom($root)
+    if (tab === 'api' || tab === 'encoder') {
+      await this.bootstrapHomeChartTrends(api, $root, tab, this.readyPollGeneration)
+    }
+    this.refreshVisibleHomeCharts($root)
+  }
+
   private async bootstrapHomeChartTrends(
     api: AmgixApi,
     $root: JQuery<HTMLElement>,
@@ -2312,27 +2424,28 @@ export class HomePanel extends DashboardPanel {
       return
     }
     const until = new Date()
-    const since = new Date(until.getTime() - CLUSTER_CHART_HISTORY_MS)
+    const since = new Date(until.getTime() - this.homeChartHistoryMs)
     const keys = tab === 'api' ? [...API_CHART_TREND_KEYS] : [...ENCODER_CHART_TREND_KEYS]
+    const resolution = this.trendResolutionSec()
     try {
       const trends = await api.metricsTrends({
         since,
         until,
-        resolution: HOME_CHART_TREND_RESOLUTION,
+        resolution,
         keys,
       })
       if (generation !== this.readyPollGeneration) {
         return
       }
-      const cutoffSec = bucketStartCutoffSec(CLUSTER_CHART_HISTORY_MS, Date.now())
+      const cutoffSec = bucketStartCutoffSec(this.homeChartHistoryMs, Date.now())
       if (tab === 'api') {
-        const m = apiMetricTrendsToPointsByBucketStart(trends, HOME_CHART_METRICS_LIVE_WINDOW_SEC)
+        const m = apiMetricTrendsToPointsByBucketStart(trends, resolution)
         for (const [k, v] of m) {
           this.apiChartBuckets.set(k, v)
         }
         trimChartBucketMap(this.apiChartBuckets, cutoffSec)
       } else {
-        const m = encoderMetricTrendsToPointsByBucketStart(trends, HOME_CHART_METRICS_LIVE_WINDOW_SEC)
+        const m = encoderMetricTrendsToPointsByBucketStart(trends, resolution)
         for (const [k, v] of m) {
           this.encoderChartBuckets.set(k, v)
         }
@@ -2615,27 +2728,29 @@ export class HomePanel extends DashboardPanel {
 
     if (tab === 'api' || tab === 'encoder') {
       const until = new Date()
-      const since = new Date(until.getTime() - CLUSTER_CHART_PATCH_MS)
+      const patchMs = this.chartTrendPatchMs()
+      const since = new Date(until.getTime() - patchMs)
       const keys = tab === 'api' ? [...API_CHART_TREND_KEYS] : [...ENCODER_CHART_TREND_KEYS]
+      const resolution = this.trendResolutionSec()
       try {
         const trends = await api.metricsTrends({
           since,
           until,
-          resolution: HOME_CHART_TREND_RESOLUTION,
+          resolution,
           keys,
         })
         if (generation !== this.readyPollGeneration) {
           return
         }
-        const cutoffSec = bucketStartCutoffSec(CLUSTER_CHART_HISTORY_MS, Date.now())
+        const cutoffSec = bucketStartCutoffSec(this.homeChartHistoryMs, Date.now())
         if (tab === 'api') {
-          const patch = apiMetricTrendsToPointsByBucketStart(trends, HOME_CHART_METRICS_LIVE_WINDOW_SEC)
+          const patch = apiMetricTrendsToPointsByBucketStart(trends, resolution)
           for (const [k, v] of patch) {
             this.apiChartBuckets.set(k, v)
           }
           trimChartBucketMap(this.apiChartBuckets, cutoffSec)
         } else {
-          const patch = encoderMetricTrendsToPointsByBucketStart(trends, HOME_CHART_METRICS_LIVE_WINDOW_SEC)
+          const patch = encoderMetricTrendsToPointsByBucketStart(trends, resolution)
           for (const [k, v] of patch) {
             this.encoderChartBuckets.set(k, v)
           }
@@ -2778,7 +2893,10 @@ export class HomePanel extends DashboardPanel {
               attr: { 'aria-hidden': 'true' },
             }),
             $('<span>', { class: 'dashboard-home-cluster-chart-title', text: 'Inference Latencies' }),
-            clusterHelpIcon(clusterChartHelpText()),
+            $('<div>', { class: 'dashboard-home-cluster-chart-hint-actions' }).append(
+              this.buildHomeChartHistorySelect(),
+              clusterHelpIcon(clusterChartHelpText()),
+            ),
           ),
           $('<div>', {
             class: 'dashboard-home-cluster-chart-canvas-wrap',
@@ -2786,7 +2904,7 @@ export class HomePanel extends DashboardPanel {
           }).append(
             $('<canvas>', {
               attr: { 'data-home-cluster-throughput-chart': '' },
-              'aria-label': `Cluster inference and routed latency over time, per document; 1-minute history and ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s live snapshot`,
+              'aria-label': `Cluster inference and routed latency over time, per document; ${this.homeChartHistoryLabel()} history and ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s live snapshot`,
             }),
           ),
           $('<ul>', {
@@ -2847,7 +2965,10 @@ export class HomePanel extends DashboardPanel {
                 class: 'dashboard-home-cluster-chart-title',
                 text: 'Cluster API Requests',
               }),
-              clusterHelpIcon(clusterApiChartHelpText()),
+              $('<div>', { class: 'dashboard-home-cluster-chart-hint-actions' }).append(
+                this.buildHomeChartHistorySelect(),
+                clusterHelpIcon(clusterApiChartHelpText()),
+              ),
             ),
             $('<div>', {
               class: 'dashboard-home-cluster-chart-canvas-wrap',
@@ -2855,7 +2976,7 @@ export class HomePanel extends DashboardPanel {
             }).append(
               $('<canvas>', {
                 attr: { 'data-home-api-requests-metrics-chart': '' },
-                'aria-label': `Cluster API request rate; 1-minute history and ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s live snapshot`,
+                'aria-label': `Cluster API request rate; ${this.homeChartHistoryLabel()} history and ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s live snapshot`,
               }),
             ),
             $('<ul>', {
@@ -2882,7 +3003,10 @@ export class HomePanel extends DashboardPanel {
                 class: 'dashboard-home-cluster-chart-title',
                 text: 'Cluster API Latencies',
               }),
-              clusterHelpIcon(clusterApiChartHelpText()),
+              $('<div>', { class: 'dashboard-home-cluster-chart-hint-actions' }).append(
+                this.buildHomeChartHistorySelect(),
+                clusterHelpIcon(clusterApiChartHelpText()),
+              ),
             ),
             $('<div>', {
               class: 'dashboard-home-cluster-chart-canvas-wrap',
@@ -2890,7 +3014,7 @@ export class HomePanel extends DashboardPanel {
             }).append(
               $('<canvas>', {
                 attr: { 'data-home-api-latencies-metrics-chart': '' },
-                'aria-label': `Cluster API mean latency; 1-minute history and ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s live snapshot`,
+                'aria-label': `Cluster API mean latency; ${this.homeChartHistoryLabel()} history and ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s live snapshot`,
               }),
             ),
             $('<ul>', {
@@ -3083,6 +3207,16 @@ export class HomePanel extends DashboardPanel {
       })
 
       $root.empty().append($topBand, $metricsShell)
+      if (!this.homeChartRangeListenerAttached) {
+        this.homeChartRangeListenerAttached = true
+        $root.on('change', '[data-home-chart-history-range]', (e) => {
+          const raw = Number((e.target as HTMLSelectElement).value)
+          if (!Number.isFinite(raw)) {
+            return
+          }
+          void this.onHomeChartHistoryRangeChanged(api, $root, raw)
+        })
+      }
       this.activateHomeMetricsTab($root, route.homeMetricsTab)
       this.applyClusterViewToDom($root, metrics)
       void this.bootstrapHomeChartTrends(api, $root, route.homeMetricsTab, generation)
