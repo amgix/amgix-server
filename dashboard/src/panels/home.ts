@@ -1735,13 +1735,22 @@ function readHomeMetricsTabFromDom($root: JQuery<HTMLElement>): HomeMetricsTabId
   return 'encoder'
 }
 
-function readClusterChartThemeColors(): { grid: string; tick: string } {
+function readClusterChartThemeColors(): {
+  grid: string
+  tick: string
+  tooltipBg: string
+  tooltipBorder: string
+} {
   const s = getComputedStyle(document.documentElement)
   const grid = s.getPropertyValue('--chart-cluster-grid').trim()
   const tick = s.getPropertyValue('--chart-cluster-tick').trim()
+  const tooltipBg = s.getPropertyValue('--chart-cluster-tooltip-bg').trim()
+  const tooltipBorder = s.getPropertyValue('--chart-cluster-tooltip-border').trim()
   return {
     grid: grid || 'rgba(120, 120, 120, 0.18)',
     tick: tick || '#555555',
+    tooltipBg: tooltipBg || 'rgba(255, 255, 255, 0.78)',
+    tooltipBorder: tooltipBorder || 'rgba(0, 0, 0, 0.1)',
   }
 }
 
@@ -1783,6 +1792,8 @@ function buildApiMetricsChartOptions(
   now: number,
   gridColor: string,
   tickColor: string,
+  tooltipBg: string,
+  tooltipBorder: string,
   chartFont: ReturnType<typeof readClusterChartFont>,
   yAxisTitle: string,
   latencyTooltip: boolean,
@@ -1804,6 +1815,11 @@ function buildApiMetricsChartOptions(
         display: false,
       },
       tooltip: {
+        backgroundColor: tooltipBg,
+        borderColor: tooltipBorder,
+        borderWidth: 1,
+        titleColor: tickColor,
+        bodyColor: tickColor,
         titleFont: { family: chartFont.family, size: chartFont.tooltipPx },
         bodyFont: { family: chartFont.family, size: chartFont.tooltipPx },
         callbacks: {
@@ -2021,6 +2037,8 @@ export class HomePanel extends DashboardPanel {
     now: number,
     gridColor: string,
     tickColor: string,
+    tooltipBg: string,
+    tooltipBorder: string,
     chartFont: ReturnType<typeof readClusterChartFont>,
     yAxisTitle: string,
   ): void {
@@ -2042,9 +2060,19 @@ export class HomePanel extends DashboardPanel {
     const tip = ch.options.plugins?.tooltip
     if (tip && typeof tip === 'object') {
       const t = tip as {
+        backgroundColor?: string
+        borderColor?: string
+        borderWidth?: number
+        titleColor?: string
+        bodyColor?: string
         titleFont?: { family?: string; size?: number }
         bodyFont?: { family?: string; size?: number }
       }
+      t.backgroundColor = tooltipBg
+      t.borderColor = tooltipBorder
+      t.borderWidth = 1
+      t.titleColor = tickColor
+      t.bodyColor = tickColor
       if (t.titleFont) {
         t.titleFont.family = chartFont.family
         t.titleFont.size = chartFont.tooltipPx
@@ -2252,7 +2280,7 @@ export class HomePanel extends DashboardPanel {
 
     $canvasWrap.css('height', '150px')
 
-    const { grid: gridColor, tick: tickColor } = readClusterChartThemeColors()
+    const { grid: gridColor, tick: tickColor, tooltipBg, tooltipBorder } = readClusterChartThemeColors()
     const chartFont = readClusterChartFont()
 
     const legendItems = [
@@ -2298,6 +2326,11 @@ export class HomePanel extends DashboardPanel {
               display: false,
             },
             tooltip: {
+              backgroundColor: tooltipBg,
+              borderColor: tooltipBorder,
+              borderWidth: 1,
+              titleColor: tickColor,
+              bodyColor: tickColor,
               titleFont: { family: chartFont.family, size: chartFont.tooltipPx },
               bodyFont: { family: chartFont.family, size: chartFont.tooltipPx },
               callbacks: {
@@ -2382,6 +2415,21 @@ export class HomePanel extends DashboardPanel {
       const plEnc = ch.options.plugins as Record<string, unknown> | undefined
       if (plEnc) {
         plEnc.zoom = HOME_LINE_CHART_ZOOM
+      }
+      const tipEnc = ch.options.plugins?.tooltip
+      if (tipEnc && typeof tipEnc === 'object') {
+        const te = tipEnc as {
+          backgroundColor?: string
+          borderColor?: string
+          borderWidth?: number
+          titleColor?: string
+          bodyColor?: string
+        }
+        te.backgroundColor = tooltipBg
+        te.borderColor = tooltipBorder
+        te.borderWidth = 1
+        te.titleColor = tickColor
+        te.bodyColor = tickColor
       }
       const xs = ch.options.scales?.x
       if (xs && typeof xs === 'object') {
@@ -2499,7 +2547,7 @@ export class HomePanel extends DashboardPanel {
 
     $canvasWrap.css('height', '150px')
 
-    const { grid: gridColor, tick: tickColor } = readClusterChartThemeColors()
+    const { grid: gridColor, tick: tickColor, tooltipBg, tooltipBorder } = readClusterChartThemeColors()
     const chartFont = readClusterChartFont()
 
     const legendItems = [
@@ -2522,13 +2570,33 @@ export class HomePanel extends DashboardPanel {
       const config: ChartConfiguration<'line'> = {
         type: 'line',
         data: { datasets },
-        options: buildApiMetricsChartOptions(cutoff, now, gridColor, tickColor, chartFont, 'Milliseconds', true),
+        options: buildApiMetricsChartOptions(
+          cutoff,
+          now,
+          gridColor,
+          tickColor,
+          tooltipBg,
+          tooltipBorder,
+          chartFont,
+          'Milliseconds',
+          true,
+        ),
       }
       this.indexingLatencyChart = new Chart(ctx, config)
     } else {
       const ch = this.indexingLatencyChart
       ch.data.datasets = datasets as typeof ch.data.datasets
-      this.syncSingleYAxisApiMetricsChartTheme(ch, cutoff, now, gridColor, tickColor, chartFont, 'Milliseconds')
+      this.syncSingleYAxisApiMetricsChartTheme(
+        ch,
+        cutoff,
+        now,
+        gridColor,
+        tickColor,
+        tooltipBg,
+        tooltipBorder,
+        chartFont,
+        'Milliseconds',
+      )
     }
   }
 
@@ -2613,7 +2681,7 @@ export class HomePanel extends DashboardPanel {
     $reqCanvasWrap.css('height', '150px')
     $latCanvasWrap.css('height', '150px')
 
-    const { grid: gridColor, tick: tickColor } = readClusterChartThemeColors()
+    const { grid: gridColor, tick: tickColor, tooltipBg, tooltipBorder } = readClusterChartThemeColors()
     const chartFont = readClusterChartFont()
 
     const legendItemsRps = [
@@ -2638,12 +2706,32 @@ export class HomePanel extends DashboardPanel {
       this.apiMetricsRequestsChart = new Chart(ctx, {
         type: 'line',
         data: { datasets: datasetsRps },
-        options: buildApiMetricsChartOptions(cutoff, now, gridColor, tickColor, chartFont, 'Reqs/s', false),
+        options: buildApiMetricsChartOptions(
+          cutoff,
+          now,
+          gridColor,
+          tickColor,
+          tooltipBg,
+          tooltipBorder,
+          chartFont,
+          'Reqs/s',
+          false,
+        ),
       })
     } else {
       const ch = this.apiMetricsRequestsChart
       ch.data.datasets = datasetsRps as typeof ch.data.datasets
-      this.syncSingleYAxisApiMetricsChartTheme(ch, cutoff, now, gridColor, tickColor, chartFont, 'Reqs/s')
+      this.syncSingleYAxisApiMetricsChartTheme(
+        ch,
+        cutoff,
+        now,
+        gridColor,
+        tickColor,
+        tooltipBg,
+        tooltipBorder,
+        chartFont,
+        'Reqs/s',
+      )
     }
 
     if (this.apiMetricsLatenciesChart == null) {
@@ -2659,6 +2747,8 @@ export class HomePanel extends DashboardPanel {
           now,
           gridColor,
           tickColor,
+          tooltipBg,
+          tooltipBorder,
           chartFont,
           'Milliseconds',
           true,
@@ -2667,7 +2757,17 @@ export class HomePanel extends DashboardPanel {
     } else {
       const ch = this.apiMetricsLatenciesChart
       ch.data.datasets = datasetsMs as typeof ch.data.datasets
-      this.syncSingleYAxisApiMetricsChartTheme(ch, cutoff, now, gridColor, tickColor, chartFont, 'Milliseconds')
+      this.syncSingleYAxisApiMetricsChartTheme(
+        ch,
+        cutoff,
+        now,
+        gridColor,
+        tickColor,
+        tooltipBg,
+        tooltipBorder,
+        chartFont,
+        'Milliseconds',
+      )
     }
   }
 

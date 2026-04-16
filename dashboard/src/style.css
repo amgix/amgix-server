@@ -22,6 +22,8 @@
   --chart-cluster-border: color-mix(in srgb, var(--text) 14%, transparent);
   --chart-cluster-grid: color-mix(in srgb, var(--text) 14%, transparent);
   --chart-cluster-tick: color-mix(in srgb, var(--text) 62%, var(--bg));
+  --chart-cluster-tooltip-bg: color-mix(in srgb, var(--bg) 76%, transparent);
+  --chart-cluster-tooltip-border: color-mix(in srgb, var(--text) 22%, transparent);
   --error-bar-bg: #f5e6e6;
   --error-bar-text: #991b1b;
 
@@ -57,6 +59,8 @@
   --chart-cluster-border: color-mix(in srgb, var(--text) 22%, transparent);
   --chart-cluster-grid: color-mix(in srgb, var(--text) 22%, transparent);
   --chart-cluster-tick: color-mix(in srgb, var(--text) 85%, var(--bg));
+  --chart-cluster-tooltip-bg: color-mix(in srgb, var(--bg) 72%, transparent);
+  --chart-cluster-tooltip-border: color-mix(in srgb, var(--text) 30%, transparent);
   --error-bar-bg: #2a1a1c;
   --error-bar-text: #fecaca;
 }
