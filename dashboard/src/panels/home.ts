@@ -115,6 +115,21 @@ const ENCODER_CHART_TREND_KEYS = [
   'embed_passages_origin',
 ] as const
 
+/** Persisted trend keys for the indexing job-latency chart (cluster-wide means). */
+const INDEXING_CHART_TREND_KEYS = ['index_queue_job_ms', 'index_bulk_job_ms'] as const
+
+const HOME_INDEXING_TABLE_EXTRA_KEYS = [
+  'index_queue_docs_skipped_stale',
+  'index_queue_docs_new',
+  'index_queue_docs_updated',
+  'index_queue_failed',
+  'index_queue_requeued',
+  'index_bulk_batches',
+  'index_bulk_batch_size',
+  'index_bulk_failed',
+  'index_bulk_requeued',
+] as const
+
 const HOME_CLUSTER_INFO_API_KEYS = [
   'api_requests',
   'api_request_ms',
@@ -136,15 +151,22 @@ function homeEncoderTableMetricKeys(): string[] {
   return uniqStrings([...HOME_ENCODER_TABLE_EXTRA_KEYS, ...ENCODER_CHART_TREND_KEYS])
 }
 
+function homeIndexingTableMetricKeys(): string[] {
+  return uniqStrings([...HOME_INDEXING_TABLE_EXTRA_KEYS, ...INDEXING_CHART_TREND_KEYS])
+}
+
 /** Keys for GET /metrics/current: visible tab tables + cluster overview strip. */
 function homeMetricsCurrentKeys(tab: HomeMetricsTabId): string[] {
   const apiOverview = [...HOME_CLUSTER_INFO_API_KEYS]
   const encOverview = [...ENCODER_CHART_TREND_KEYS]
   if (tab === 'api') {
-    return uniqStrings([...API_CHART_TREND_KEYS, ...encOverview])
+    return uniqStrings([...API_CHART_TREND_KEYS, ...encOverview, ...INDEXING_CHART_TREND_KEYS])
   }
   if (tab === 'encoder') {
-    return uniqStrings([...homeEncoderTableMetricKeys(), ...apiOverview])
+    return uniqStrings([...homeEncoderTableMetricKeys(), ...apiOverview, ...INDEXING_CHART_TREND_KEYS])
+  }
+  if (tab === 'indexing') {
+    return uniqStrings([...homeIndexingTableMetricKeys(), ...apiOverview, ...encOverview])
   }
   return uniqStrings([...apiOverview, ...encOverview])
 }
@@ -241,11 +263,69 @@ function clusterByModelErrHelpText(): string {
 }
 
 function clusterChartHelpText(): string {
-  return `Inference and routed latency per passage. History uses persisted SQL buckets: 1-minute resolution for spans up to 24 hours, 5-minute resolution for longer spans (up to 7 days of retention). The right edge is a ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s rolling snapshot from current metrics.`
+  return 'Inference latency is model time per passage on the node that ran the model. Routed latency is end-to-end time per passage on the node that received the request (includes RPC when work is forwarded to another encoder).'
 }
 
-function clusterApiChartHelpText(): string {
-  return `API request rate and mean latency. History uses persisted SQL buckets: 1-minute resolution for spans up to 24 hours, 5-minute resolution for longer spans (up to 7 days of retention). The right edge is a ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s rolling snapshot from current metrics.`
+function indexingClusterChartHelpText(): string {
+  return 'Single-doc queue job is wall time to finish one single-document queue item. Bulk batch job is wall time to finish one bulk indexing batch. Values are cluster-wide means (milliseconds).'
+}
+
+function clusterIndexingDocsPerSecHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `New plus updated documents per second from single-document index queue jobs, over the last ${w}s.`
+}
+
+function clusterIndexingStalePerSecHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Documents skipped as stale from the single-document queue, per second, over the last ${w}s.`
+}
+
+function clusterIndexingQueueFailHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Single-document queue jobs marked failed, per second, over the last ${w}s.`
+}
+
+function clusterIndexingQueueRequeueHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Single-document queue jobs requeued for retry, per second, over the last ${w}s.`
+}
+
+function clusterIndexingQueueJobMsHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Mean wall time in ms per completed single-document queue job on this node, over the last ${w}s.`
+}
+
+function clusterIndexingBulkBatchesHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Bulk indexing batches completed per second, over the last ${w}s.`
+}
+
+function clusterIndexingBulkBatchSizeHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Mean documents per completed bulk batch on this node, over the last ${w}s.`
+}
+
+function clusterIndexingBulkJobMsHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Mean wall time in ms per completed bulk indexing batch on this node, over the last ${w}s.`
+}
+
+function clusterIndexingBulkFailHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Bulk indexing batches marked failed, per second, over the last ${w}s.`
+}
+
+function clusterIndexingBulkRequeueHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Bulk indexing batches requeued for retry, per second, over the last ${w}s.`
+}
+
+function clusterApiRequestsChartHelpText(): string {
+  return 'Requests per second: total traffic, search, document uploads (async, sync, and bulk combined), and HTTP errors (4xx and 5xx).'
+}
+
+function clusterApiLatenciesChartHelpText(): string {
+  return 'Mean HTTP request latency in milliseconds per series: all requests, search, and document uploads (async, sync, and bulk combined).'
 }
 
 function clusterApiAllReqColumnHelpText(): string {
@@ -844,6 +924,95 @@ function formatEmbeddingMetricsCells(node: NodeView): {
   }
 }
 
+function formatIndexingSumRateCell(list: NodeMetricSeries[], keys: readonly string[]): string {
+  let sum = 0
+  let saw = false
+  for (const name of keys) {
+    const ws = getMetricWindowSampleByFirstKey(list, name)
+    if (ws != null) {
+      const v = Number(ws.value)
+      if (Number.isFinite(v)) {
+        sum += v
+        saw = true
+      }
+    }
+  }
+  if (!saw) {
+    return ''
+  }
+  return formatClusterRpsCell(sum / CLUSTER_METRICS_WINDOW_SEC)
+}
+
+function formatIndexingSingleSumRateCell(list: NodeMetricSeries[], key: string): string {
+  return formatIndexingSumRateCell(list, [key])
+}
+
+/**
+ * Table cells for index queue + bulk counters (rates where appropriate) and mean job times.
+ * Metrics are not broken down by vector model.
+ */
+function formatIndexingMetricsCells(node: NodeView): {
+  docsPerSec: string
+  stalePerSec: string
+  queueFailPerSec: string
+  queueRequeuePerSec: string
+  queueJobMs: string
+  bulkBatchesPerSec: string
+  bulkBatchSize: string
+  bulkJobMs: string
+  bulkFailPerSec: string
+  bulkRequeuePerSec: string
+} {
+  const list = node.metrics ?? []
+  const docsPerSec = formatIndexingSumRateCell(list, ['index_queue_docs_new', 'index_queue_docs_updated'])
+  const stalePerSec = formatIndexingSingleSumRateCell(list, 'index_queue_docs_skipped_stale')
+  const queueFailPerSec = formatIndexingSingleSumRateCell(list, 'index_queue_failed')
+  const queueRequeuePerSec = formatIndexingSingleSumRateCell(list, 'index_queue_requeued')
+  const queueJobMs = formatApiAvgMsCell(list, 'index_queue_job_ms')
+  const bulkBatchesPerSec = formatIndexingSingleSumRateCell(list, 'index_bulk_batches')
+  const bulkBatchSize = formatApiAvgMsCell(list, 'index_bulk_batch_size')
+  const bulkJobMs = formatApiAvgMsCell(list, 'index_bulk_job_ms')
+  const bulkFailPerSec = formatIndexingSingleSumRateCell(list, 'index_bulk_failed')
+  const bulkRequeuePerSec = formatIndexingSingleSumRateCell(list, 'index_bulk_requeued')
+  const empty =
+    docsPerSec === '' &&
+    stalePerSec === '' &&
+    queueFailPerSec === '' &&
+    queueRequeuePerSec === '' &&
+    queueJobMs === '' &&
+    bulkBatchesPerSec === '' &&
+    bulkBatchSize === '' &&
+    bulkJobMs === '' &&
+    bulkFailPerSec === '' &&
+    bulkRequeuePerSec === ''
+  if (empty) {
+    return {
+      docsPerSec: '',
+      stalePerSec: '',
+      queueFailPerSec: '',
+      queueRequeuePerSec: '',
+      queueJobMs: '',
+      bulkBatchesPerSec: '',
+      bulkBatchSize: '',
+      bulkJobMs: '',
+      bulkFailPerSec: '',
+      bulkRequeuePerSec: '',
+    }
+  }
+  return {
+    docsPerSec,
+    stalePerSec,
+    queueFailPerSec,
+    queueRequeuePerSec,
+    queueJobMs,
+    bulkBatchesPerSec,
+    bulkBatchSize,
+    bulkJobMs,
+    bulkFailPerSec,
+    bulkRequeuePerSec,
+  }
+}
+
 /** Human-readable series name from merge key `type\\0model\\0revision`. */
 function labelFromVectorMetricsMergeKey(key: string): string {
   const parts = key.split('\0')
@@ -989,6 +1158,21 @@ function partitionApiAndEncoderNodes(
     }
   }
   return { api: sortApiNodeEntries(api), encoders: sortEncoderNodeEntries(encoders) }
+}
+
+function isIndexWorkerRole(role: string): boolean {
+  return role === 'index' || role === 'all'
+}
+
+/** Indexing workers only: nodes that run the index queue (excludes query-only roles). */
+function partitionIndexRoleNodes(nodes: { [key: string]: NodeView }): Array<[string, NodeView]> {
+  const rows: Array<[string, NodeView]> = []
+  for (const entry of Object.entries(nodes)) {
+    if (isIndexWorkerRole(entry[1].role)) {
+      rows.push(entry)
+    }
+  }
+  return sortEncoderNodeEntries(rows)
 }
 
 type ApiMetricsHistoryPoint = {
@@ -1409,6 +1593,82 @@ function encoderMetricTrendsToPointsByBucketStart(
   return out
 }
 
+type IndexingLatencyHistoryPoint = {
+  t: number
+  queueJobMs: number | null
+  bulkJobMs: number | null
+}
+
+function indexingLatencyPointFromBuckets(
+  buckets: MetricsBucket[],
+  bucketStartSec: number,
+): IndexingLatencyHistoryPoint | null {
+  let qV = 0
+  let qN = 0
+  let bV = 0
+  let bN = 0
+  for (const b of buckets) {
+    if (b.bucket_start !== bucketStartSec) {
+      continue
+    }
+    const v = b.value
+    if (!Number.isFinite(v)) {
+      continue
+    }
+    if (b.key === 'index_queue_job_ms') {
+      const n = b.n ?? 0
+      if (n > 0) {
+        qV += v
+        qN += n
+      }
+    } else if (b.key === 'index_bulk_job_ms') {
+      const n = b.n ?? 0
+      if (n > 0) {
+        bV += v
+        bN += n
+      }
+    }
+  }
+  const queueJobMs = qN > 0 ? qV / qN : null
+  const bulkJobMs = bN > 0 ? bV / bN : null
+  if (queueJobMs == null && bulkJobMs == null) {
+    return null
+  }
+  return {
+    t: bucketStartSec * 1000,
+    queueJobMs,
+    bulkJobMs,
+  }
+}
+
+function indexMetricTrendsToPointsByBucketStart(
+  trends: MetricTrend[],
+  expectedBucketSec: number,
+): Map<number, IndexingLatencyHistoryPoint> {
+  const byStart = new Map<number, MetricsBucket[]>()
+  for (const tr of trends) {
+    for (const b of tr.buckets ?? []) {
+      if (b.bucket_seconds !== expectedBucketSec) {
+        continue
+      }
+      if (b.key !== 'index_queue_job_ms' && b.key !== 'index_bulk_job_ms') {
+        continue
+      }
+      const arr = byStart.get(b.bucket_start) ?? []
+      arr.push(b)
+      byStart.set(b.bucket_start, arr)
+    }
+  }
+  const out = new Map<number, IndexingLatencyHistoryPoint>()
+  for (const [start, blist] of byStart) {
+    const pt = indexingLatencyPointFromBuckets(blist, start)
+    if (pt != null) {
+      out.set(start, pt)
+    }
+  }
+  return out
+}
+
 function sortedClusterThroughputPoints(
   store: Map<number, ClusterThroughputHistoryPoint>,
   live: ClusterThroughputHistoryPoint | null,
@@ -1416,6 +1676,66 @@ function sortedClusterThroughputPoints(
   nowMs: number,
 ): ClusterThroughputHistoryPoint[] {
   const rows: ClusterThroughputHistoryPoint[] = []
+  const sortedKeys = Array.from(store.keys())
+    .filter((k) => k * 1000 >= cutoffMs)
+    .sort((a, b) => a - b)
+  for (const k of sortedKeys) {
+    const row = store.get(k)
+    if (row != null) {
+      rows.push({ ...row, t: k * 1000 })
+    }
+  }
+  if (live != null) {
+    rows.push({ ...live, t: nowMs })
+  }
+  return rows
+}
+
+function weightedIndexingJobMsFromNodes(view: Metrics | null): {
+  queueJobMs: number | null
+  bulkJobMs: number | null
+} {
+  let qV = 0
+  let qN = 0
+  let bV = 0
+  let bN = 0
+  for (const node of Object.values(view?.nodes ?? {})) {
+    if (!isIndexWorkerRole(node.role)) {
+      continue
+    }
+    const list = node.metrics ?? []
+    for (const key of ['index_queue_job_ms', 'index_bulk_job_ms'] as const) {
+      const ws = getMetricWindowSampleByFirstKey(list, key)
+      if (ws == null) {
+        continue
+      }
+      const v = Number(ws.value)
+      const n = Number(ws.n)
+      if (!Number.isFinite(v) || !Number.isFinite(n) || n <= 0) {
+        continue
+      }
+      if (key === 'index_queue_job_ms') {
+        qV += v
+        qN += n
+      } else {
+        bV += v
+        bN += n
+      }
+    }
+  }
+  return {
+    queueJobMs: qN > 0 ? qV / qN : null,
+    bulkJobMs: bN > 0 ? bV / bN : null,
+  }
+}
+
+function sortedIndexingLatencyPoints(
+  store: Map<number, IndexingLatencyHistoryPoint>,
+  live: IndexingLatencyHistoryPoint | null,
+  cutoffMs: number,
+  nowMs: number,
+): IndexingLatencyHistoryPoint[] {
+  const rows: IndexingLatencyHistoryPoint[] = []
   const sortedKeys = Array.from(store.keys())
     .filter((k) => k * 1000 >= cutoffMs)
     .sort((a, b) => a - b)
@@ -1621,6 +1941,9 @@ export class HomePanel extends DashboardPanel {
   private clusterThroughputChart: Chart<'line'> | null = null
   /** bucket_start (unix seconds) → cluster-wide chart point for that minute */
   private encoderChartBuckets = new Map<number, ClusterThroughputHistoryPoint>()
+  private indexingLatencyChart: Chart<'line'> | null = null
+  /** bucket_start (unix seconds) → cluster-wide indexing latency snapshot for that bucket */
+  private indexingChartBuckets = new Map<number, IndexingLatencyHistoryPoint>()
   private clusterSeriesLabels = new Map<string, string>()
   private apiMetricsRequestsChart: Chart<'line'> | null = null
   private apiMetricsLatenciesChart: Chart<'line'> | null = null
@@ -1628,7 +1951,7 @@ export class HomePanel extends DashboardPanel {
   private apiChartBuckets = new Map<number, ApiMetricsHistoryPoint>()
   /** Latest snapshot for chart live tail and tables (same 60s current payload). */
   private metricsChartLiveView: Metrics | null = null
-  /** Visible SQL history span for cluster charts (encoder + API). */
+  /** Visible SQL history span for cluster charts (API, encoder, indexing). */
   private homeChartHistoryMs = DEFAULT_HOME_CHART_HISTORY_MS
   private homeChartRangeListenerAttached = false
 
@@ -1696,7 +2019,9 @@ export class HomePanel extends DashboardPanel {
     }
     this.destroyApiMetricsChart()
     this.destroyClusterThroughputChart()
+    this.destroyIndexingLatencyChart()
     this.encoderChartBuckets.clear()
+    this.indexingChartBuckets.clear()
     this.clusterSeriesLabels.clear()
     this.apiChartBuckets.clear()
     this.metricsChartLiveView = null
@@ -1814,6 +2139,11 @@ export class HomePanel extends DashboardPanel {
   private destroyClusterThroughputChart(): void {
     this.clusterThroughputChart?.destroy()
     this.clusterThroughputChart = null
+  }
+
+  private destroyIndexingLatencyChart(): void {
+    this.indexingLatencyChart?.destroy()
+    this.indexingLatencyChart = null
   }
 
   private refreshClusterThroughputChart($root: JQuery<HTMLElement>): void {
@@ -2114,6 +2444,104 @@ export class HomePanel extends DashboardPanel {
     }
   }
 
+  private refreshIndexingLatencyChart($root: JQuery<HTMLElement>): void {
+    const $canvas = $root.find('[data-home-indexing-latency-chart]')
+    const canvas = $canvas.get(0) as HTMLCanvasElement | undefined
+    const $wrap = $root.find('[data-home-indexing-chart-wrap]')
+    const $canvasWrap = $root.find('[data-home-indexing-chart-canvas-wrap]')
+    const $legendUl = $root.find('[data-home-indexing-chart-legend]')
+    if (!canvas || !$wrap.length || !$canvasWrap.length || !$legendUl.length) {
+      return
+    }
+
+    const now = Date.now()
+    const cutoff = now - this.homeChartHistoryMs
+    const liveView = this.metricsChartLiveView
+    const liveMs = weightedIndexingJobMsFromNodes(liveView)
+    const livePoint: IndexingLatencyHistoryPoint | null =
+      liveView != null && (liveMs.queueJobMs != null || liveMs.bulkJobMs != null)
+        ? {
+            t: now,
+            queueJobMs: liveMs.queueJobMs,
+            bulkJobMs: liveMs.bulkJobMs,
+          }
+        : null
+
+    const indexingHistory = sortedIndexingLatencyPoints(this.indexingChartBuckets, livePoint, cutoff, now)
+
+    const queueLineColor = '#2563eb'
+    const bulkLineColor = '#ea580c'
+
+    const queueMsDataset = {
+      label: 'Single-doc queue job',
+      data: indexingHistory.map((pt) => ({
+        x: pt.t,
+        y: pt.queueJobMs != null && Number.isFinite(pt.queueJobMs) ? pt.queueJobMs : null,
+      })),
+      borderColor: queueLineColor,
+      backgroundColor: queueLineColor,
+      borderWidth: 2,
+      fill: false,
+      tension: 0.4,
+      pointRadius: 0,
+      pointHoverRadius: 5,
+      pointHitRadius: 12,
+      spanGaps: false,
+    }
+    const bulkMsDataset = {
+      label: 'Bulk batch job',
+      data: indexingHistory.map((pt) => ({
+        x: pt.t,
+        y: pt.bulkJobMs != null && Number.isFinite(pt.bulkJobMs) ? pt.bulkJobMs : null,
+      })),
+      borderColor: bulkLineColor,
+      backgroundColor: bulkLineColor,
+      borderWidth: 2,
+      fill: false,
+      tension: 0.4,
+      pointRadius: 0,
+      pointHoverRadius: 5,
+      pointHitRadius: 12,
+      spanGaps: false,
+    }
+
+    const datasets = [queueMsDataset, bulkMsDataset]
+
+    $canvasWrap.css('height', '150px')
+
+    const { grid: gridColor, tick: tickColor } = readClusterChartThemeColors()
+    const chartFont = readClusterChartFont()
+
+    const legendItems = [
+      {
+        color: queueLineColor,
+        ...clusterChartLegendMsValue('Single-doc queue job', liveMs.queueJobMs),
+      },
+      {
+        color: bulkLineColor,
+        ...clusterChartLegendMsValue('Bulk batch job', liveMs.bulkJobMs),
+      },
+    ]
+    renderClusterChartHtmlLegend($legendUl, legendItems, tickColor)
+
+    if (this.indexingLatencyChart == null) {
+      const ctx = canvas.getContext('2d')
+      if (!ctx) {
+        return
+      }
+      const config: ChartConfiguration<'line'> = {
+        type: 'line',
+        data: { datasets },
+        options: buildApiMetricsChartOptions(cutoff, now, gridColor, tickColor, chartFont, 'Milliseconds', true),
+      }
+      this.indexingLatencyChart = new Chart(ctx, config)
+    } else {
+      const ch = this.indexingLatencyChart
+      ch.data.datasets = datasets as typeof ch.data.datasets
+      this.syncSingleYAxisApiMetricsChartTheme(ch, cutoff, now, gridColor, tickColor, chartFont, 'Milliseconds')
+    }
+  }
+
   private refreshApiMetricsChart($root: JQuery<HTMLElement>): void {
     const $reqCanvas = $root.find('[data-home-api-requests-metrics-chart]')
     const reqCanvas = $reqCanvas.get(0) as HTMLCanvasElement | undefined
@@ -2288,6 +2716,8 @@ export class HomePanel extends DashboardPanel {
       if (showApi) {
         this.apiMetricsRequestsChart?.resize()
         this.apiMetricsLatenciesChart?.resize()
+      } else if (showIndexing) {
+        this.indexingLatencyChart?.resize()
       } else if (showEncoder) {
         this.clusterThroughputChart?.resize()
       }
@@ -2357,9 +2787,13 @@ export class HomePanel extends DashboardPanel {
 
   private refreshVisibleHomeCharts($root: JQuery<HTMLElement>): void {
     const $apiPanel = $root.find('[data-home-metrics-tab-panel="api"]')
+    const $indexingPanel = $root.find('[data-home-metrics-tab-panel="indexing"]')
     const $encPanel = $root.find('[data-home-metrics-tab-panel="encoder"]')
     if ($apiPanel.length && !$apiPanel.prop('hidden')) {
       this.refreshApiMetricsChart($root)
+    }
+    if ($indexingPanel.length && !$indexingPanel.prop('hidden')) {
+      this.refreshIndexingLatencyChart($root)
     }
     if ($encPanel.length && !$encPanel.prop('hidden')) {
       this.refreshClusterThroughputChart($root)
@@ -2372,10 +2806,6 @@ export class HomePanel extends DashboardPanel {
 
   private chartTrendPatchMs(): number {
     return homeChartTrendPatchMs(this.homeChartHistoryMs, this.trendResolutionSec())
-  }
-
-  private homeChartHistoryLabel(): string {
-    return HOME_CHART_HISTORY_OPTIONS.find((o) => o.valueMs === this.homeChartHistoryMs)?.label ?? 'custom'
   }
 
   private buildHomeChartHistorySelect(): JQuery<HTMLElement> {
@@ -2407,8 +2837,9 @@ export class HomePanel extends DashboardPanel {
     this.syncHomeChartHistorySelects($root)
     this.apiChartBuckets.clear()
     this.encoderChartBuckets.clear()
+    this.indexingChartBuckets.clear()
     const tab = readHomeMetricsTabFromDom($root)
-    if (tab === 'api' || tab === 'encoder') {
+    if (tab === 'api' || tab === 'encoder' || tab === 'indexing') {
       await this.bootstrapHomeChartTrends(api, $root, tab, this.readyPollGeneration)
     }
     this.refreshVisibleHomeCharts($root)
@@ -2420,12 +2851,14 @@ export class HomePanel extends DashboardPanel {
     tab: HomeMetricsTabId,
     generation: number,
   ): Promise<void> {
-    if (tab === 'indexing') {
-      return
-    }
     const until = new Date()
     const since = new Date(until.getTime() - this.homeChartHistoryMs)
-    const keys = tab === 'api' ? [...API_CHART_TREND_KEYS] : [...ENCODER_CHART_TREND_KEYS]
+    const keys =
+      tab === 'api'
+        ? [...API_CHART_TREND_KEYS]
+        : tab === 'encoder'
+          ? [...ENCODER_CHART_TREND_KEYS]
+          : [...INDEXING_CHART_TREND_KEYS]
     const resolution = this.trendResolutionSec()
     try {
       const trends = await api.metricsTrends({
@@ -2444,12 +2877,18 @@ export class HomePanel extends DashboardPanel {
           this.apiChartBuckets.set(k, v)
         }
         trimChartBucketMap(this.apiChartBuckets, cutoffSec)
-      } else {
+      } else if (tab === 'encoder') {
         const m = encoderMetricTrendsToPointsByBucketStart(trends, resolution)
         for (const [k, v] of m) {
           this.encoderChartBuckets.set(k, v)
         }
         trimChartBucketMap(this.encoderChartBuckets, cutoffSec)
+      } else {
+        const m = indexMetricTrendsToPointsByBucketStart(trends, resolution)
+        for (const [k, v] of m) {
+          this.indexingChartBuckets.set(k, v)
+        }
+        trimChartBucketMap(this.indexingChartBuckets, cutoffSec)
       }
       this.refreshVisibleHomeCharts($root)
     } catch {
@@ -2460,13 +2899,12 @@ export class HomePanel extends DashboardPanel {
   private async ensureChartTrendsForActiveTab(api: AmgixApi, $root: JQuery<HTMLElement>): Promise<void> {
     const generation = this.readyPollGeneration
     const tab = readHomeMetricsTabFromDom($root)
-    if (tab === 'indexing') {
-      return
-    }
     if (tab === 'api' && this.apiChartBuckets.size === 0) {
       await this.bootstrapHomeChartTrends(api, $root, 'api', generation)
     } else if (tab === 'encoder' && this.encoderChartBuckets.size === 0) {
       await this.bootstrapHomeChartTrends(api, $root, 'encoder', generation)
+    } else if (tab === 'indexing' && this.indexingChartBuckets.size === 0) {
+      await this.bootstrapHomeChartTrends(api, $root, 'indexing', generation)
     }
   }
 
@@ -2474,14 +2912,19 @@ export class HomePanel extends DashboardPanel {
     const CLUSTER_API_COLSPAN = 13
     const CLUSTER_ENCODER_COLSPAN = 10
     const CLUSTER_ENCODER_BY_MODEL_COLSPAN = 7
+    const CLUSTER_INDEXING_COLSPAN = 12
     const $apiTbody = $root.find('[data-home-api-cluster-tbody]')
     const $encTbody = $root.find('[data-home-cluster-tbody]')
     const $byModelTbody = $root.find('[data-home-encoder-by-model-tbody]')
+    const $indexingTbody = $root.find('[data-home-indexing-cluster-tbody]')
     const $apiPanel = $root.find('[data-home-metrics-tab-panel="api"]')
     const $encPanel = $root.find('[data-home-metrics-tab-panel="encoder"]')
+    const $indexingPanel = $root.find('[data-home-metrics-tab-panel="indexing"]')
     const showApiTable = $apiTbody.length > 0 && $apiPanel.length > 0 && !$apiPanel.prop('hidden')
     const showEncTable = $encTbody.length > 0 && $encPanel.length > 0 && !$encPanel.prop('hidden')
-    if (!showApiTable && !showEncTable) {
+    const showIndexingTable =
+      $indexingTbody.length > 0 && $indexingPanel.length > 0 && !$indexingPanel.prop('hidden')
+    if (!showApiTable && !showEncTable && !showIndexingTable) {
       this.refreshVisibleHomeCharts($root)
       return
     }
@@ -2493,6 +2936,9 @@ export class HomePanel extends DashboardPanel {
       if ($byModelTbody.length) {
         $byModelTbody.empty()
       }
+    }
+    if (showIndexingTable) {
+      $indexingTbody.empty()
     }
     const nodes = view?.nodes
     if (view == null || nodes === undefined) {
@@ -2528,6 +2974,17 @@ export class HomePanel extends DashboardPanel {
             ),
           )
         }
+      }
+      if (showIndexingTable) {
+        $indexingTbody.append(
+          $('<tr>').append(
+            $('<td>', {
+              class: 'dashboard-home-cluster-placeholder',
+              colspan: CLUSTER_INDEXING_COLSPAN,
+              text: 'Metrics unavailable.',
+            }),
+          ),
+        )
       }
       this.refreshVisibleHomeCharts($root)
       return
@@ -2566,10 +3023,22 @@ export class HomePanel extends DashboardPanel {
           )
         }
       }
+      if (showIndexingTable) {
+        $indexingTbody.append(
+          $('<tr>').append(
+            $('<td>', {
+              class: 'dashboard-home-cluster-placeholder',
+              colspan: CLUSTER_INDEXING_COLSPAN,
+              text: 'No index workers reported.',
+            }),
+          ),
+        )
+      }
       this.refreshVisibleHomeCharts($root)
       return
     }
     const { api: apiEntries, encoders: encoderEntries } = partitionApiAndEncoderNodes(nodes)
+    const indexEntries = partitionIndexRoleNodes(nodes)
     if (showApiTable) {
       if (apiEntries.length === 0) {
         $apiTbody.append(
@@ -2642,6 +3111,45 @@ export class HomePanel extends DashboardPanel {
               $('<td>', { class: 'dashboard-home-v', text: m.avgMs }),
               $('<td>', { class: 'dashboard-home-v', text: m.e2eAvgMs }),
               $('<td>', { class: 'dashboard-home-v', text: m.errPerSec }),
+            ),
+          )
+        }
+      }
+    }
+    if (showIndexingTable) {
+      if (indexEntries.length === 0) {
+        $indexingTbody.append(
+          $('<tr>').append(
+            $('<td>', {
+              class: 'dashboard-home-cluster-placeholder',
+              colspan: CLUSTER_INDEXING_COLSPAN,
+              text: 'No index or combined (idx/qry) nodes reported.',
+            }),
+          ),
+        )
+      } else {
+        for (const [hostname, node] of indexEntries) {
+          const m = formatIndexingMetricsCells(node)
+          const $nodeTd = $('<td>', { class: 'dashboard-home-v' })
+          if (node.is_leader) {
+            $nodeTd.append($('<strong>', { text: `${hostname}*` }))
+          } else {
+            $nodeTd.text(hostname)
+          }
+          $indexingTbody.append(
+            $('<tr>').append(
+              $('<td>', { class: 'dashboard-home-v', text: formatEncoderRoleCell(node.role) }),
+              $nodeTd,
+              $('<td>', { class: 'dashboard-home-v', text: m.docsPerSec }),
+              $('<td>', { class: 'dashboard-home-v', text: m.stalePerSec }),
+              $('<td>', { class: 'dashboard-home-v', text: m.queueFailPerSec }),
+              $('<td>', { class: 'dashboard-home-v', text: m.queueRequeuePerSec }),
+              $('<td>', { class: 'dashboard-home-v', text: m.queueJobMs }),
+              $('<td>', { class: 'dashboard-home-v', text: m.bulkBatchesPerSec }),
+              $('<td>', { class: 'dashboard-home-v', text: m.bulkBatchSize }),
+              $('<td>', { class: 'dashboard-home-v', text: m.bulkJobMs }),
+              $('<td>', { class: 'dashboard-home-v', text: m.bulkFailPerSec }),
+              $('<td>', { class: 'dashboard-home-v', text: m.bulkRequeuePerSec }),
             ),
           )
         }
@@ -2726,11 +3234,16 @@ export class HomePanel extends DashboardPanel {
     }
     this.metricsChartLiveView = metrics
 
-    if (tab === 'api' || tab === 'encoder') {
+    if (tab === 'api' || tab === 'encoder' || tab === 'indexing') {
       const until = new Date()
       const patchMs = this.chartTrendPatchMs()
       const since = new Date(until.getTime() - patchMs)
-      const keys = tab === 'api' ? [...API_CHART_TREND_KEYS] : [...ENCODER_CHART_TREND_KEYS]
+      const keys =
+        tab === 'api'
+          ? [...API_CHART_TREND_KEYS]
+          : tab === 'encoder'
+            ? [...ENCODER_CHART_TREND_KEYS]
+            : [...INDEXING_CHART_TREND_KEYS]
       const resolution = this.trendResolutionSec()
       try {
         const trends = await api.metricsTrends({
@@ -2749,12 +3262,18 @@ export class HomePanel extends DashboardPanel {
             this.apiChartBuckets.set(k, v)
           }
           trimChartBucketMap(this.apiChartBuckets, cutoffSec)
-        } else {
+        } else if (tab === 'encoder') {
           const patch = encoderMetricTrendsToPointsByBucketStart(trends, resolution)
           for (const [k, v] of patch) {
             this.encoderChartBuckets.set(k, v)
           }
           trimChartBucketMap(this.encoderChartBuckets, cutoffSec)
+        } else {
+          const patch = indexMetricTrendsToPointsByBucketStart(trends, resolution)
+          for (const [k, v] of patch) {
+            this.indexingChartBuckets.set(k, v)
+          }
+          trimChartBucketMap(this.indexingChartBuckets, cutoffSec)
         }
       } catch {
         if (generation !== this.readyPollGeneration) {
@@ -2904,7 +3423,8 @@ export class HomePanel extends DashboardPanel {
           }).append(
             $('<canvas>', {
               attr: { 'data-home-cluster-throughput-chart': '' },
-              'aria-label': `Cluster inference and routed latency over time, per document; ${this.homeChartHistoryLabel()} history and ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s live snapshot`,
+              'aria-label':
+                'Cluster inference and routed embedding latency per passage over the selected time range.',
             }),
           ),
           $('<ul>', {
@@ -2967,7 +3487,7 @@ export class HomePanel extends DashboardPanel {
               }),
               $('<div>', { class: 'dashboard-home-cluster-chart-hint-actions' }).append(
                 this.buildHomeChartHistorySelect(),
-                clusterHelpIcon(clusterApiChartHelpText()),
+                clusterHelpIcon(clusterApiRequestsChartHelpText()),
               ),
             ),
             $('<div>', {
@@ -2976,7 +3496,7 @@ export class HomePanel extends DashboardPanel {
             }).append(
               $('<canvas>', {
                 attr: { 'data-home-api-requests-metrics-chart': '' },
-                'aria-label': `Cluster API request rate; ${this.homeChartHistoryLabel()} history and ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s live snapshot`,
+                'aria-label': 'Cluster API request rate over the selected time range.',
               }),
             ),
             $('<ul>', {
@@ -3005,7 +3525,7 @@ export class HomePanel extends DashboardPanel {
               }),
               $('<div>', { class: 'dashboard-home-cluster-chart-hint-actions' }).append(
                 this.buildHomeChartHistorySelect(),
-                clusterHelpIcon(clusterApiChartHelpText()),
+                clusterHelpIcon(clusterApiLatenciesChartHelpText()),
               ),
             ),
             $('<div>', {
@@ -3014,7 +3534,7 @@ export class HomePanel extends DashboardPanel {
             }).append(
               $('<canvas>', {
                 attr: { 'data-home-api-latencies-metrics-chart': '' },
-                'aria-label': `Cluster API mean latency; ${this.homeChartHistoryLabel()} history and ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s live snapshot`,
+                'aria-label': 'Cluster API mean request latency over the selected time range.',
               }),
             ),
             $('<ul>', {
@@ -3137,6 +3657,78 @@ export class HomePanel extends DashboardPanel {
         },
       }).append($apiChartsRow, $apiClusterTable)
 
+      const CLUSTER_INDEXING_COLSPAN = 12
+      const $indexingChartSection = $('<section>', { class: 'dashboard-home-cluster-metrics' }).append(
+        $('<div>', {
+          class: 'dashboard-home-cluster-chart-inner',
+          attr: { 'data-home-indexing-chart-wrap': '' },
+        }).append(
+          $('<div>', {
+            class:
+              'dashboard-home-cluster-chart-hint-row dashboard-home-cluster-chart-hint-row--with-title',
+          }).append(
+            $('<span>', {
+              class: 'dashboard-home-cluster-chart-hint-spacer',
+              attr: { 'aria-hidden': 'true' },
+            }),
+            $('<span>', {
+              class: 'dashboard-home-cluster-chart-title',
+              text: 'Indexing job latency',
+            }),
+            $('<div>', { class: 'dashboard-home-cluster-chart-hint-actions' }).append(
+              this.buildHomeChartHistorySelect(),
+              clusterHelpIcon(indexingClusterChartHelpText()),
+            ),
+          ),
+          $('<div>', {
+            class: 'dashboard-home-cluster-chart-canvas-wrap',
+            attr: { 'data-home-indexing-chart-canvas-wrap': '' },
+          }).append(
+            $('<canvas>', {
+              attr: { 'data-home-indexing-latency-chart': '' },
+              'aria-label':
+                'Mean single-document queue job time vs mean bulk indexing batch time over the selected time range.',
+            }),
+          ),
+          $('<ul>', {
+            class: 'dashboard-home-cluster-chart-legend',
+            attr: { 'data-home-indexing-chart-legend': '' },
+            'aria-label': 'Indexing chart series',
+          }),
+        ),
+      )
+
+      const $indexingClusterThead = $('<thead>')
+        .append(
+          $('<tr>').append(
+            $('<th>', {
+              class: 'dashboard-home-table-heading',
+              colspan: CLUSTER_INDEXING_COLSPAN,
+              text: 'Index workers (index or idx/qry roles)',
+            }),
+          ),
+        )
+        .append(
+          $('<tr>', { class: 'dashboard-home-cluster-colhead' }).append(
+            $('<th>', { text: 'Role' }),
+            $('<th>', { text: 'Node' }),
+            clusterThWithHelp('Docs/s', clusterIndexingDocsPerSecHelpText()),
+            clusterThWithHelp('Stale/s', clusterIndexingStalePerSecHelpText()),
+            clusterThWithHelp('Q fail/s', clusterIndexingQueueFailHelpText()),
+            clusterThWithHelp('Q rq/s', clusterIndexingQueueRequeueHelpText()),
+            clusterThWithHelp('Q job ms', clusterIndexingQueueJobMsHelpText()),
+            clusterThWithHelp('Bulk/s', clusterIndexingBulkBatchesHelpText()),
+            clusterThWithHelp('Blk sz', clusterIndexingBulkBatchSizeHelpText()),
+            clusterThWithHelp('Blk ms', clusterIndexingBulkJobMsHelpText()),
+            clusterThWithHelp('Bl fail/s', clusterIndexingBulkFailHelpText()),
+            clusterThWithHelp('Bl rq/s', clusterIndexingBulkRequeueHelpText()),
+          ),
+        )
+
+      const $indexingClusterTable = $('<table>', {
+        class: 'dashboard-home-table dashboard-home-cluster-table dashboard-home-cluster-table--indexing',
+      }).append($indexingClusterThead, $('<tbody>', { attr: { 'data-home-indexing-cluster-tbody': '' } }))
+
       const $indexingMetricsPanel = $('<div>', {
         class: 'dashboard-home-cluster-tables dashboard-home-metrics-tab-panel',
         id: HOME_METRICS_PANEL_INDEXING_ID,
@@ -3145,7 +3737,7 @@ export class HomePanel extends DashboardPanel {
           'data-home-metrics-tab-panel': 'indexing',
           'aria-labelledby': HOME_METRICS_TAB_INDEXING_ID,
         },
-      })
+      }).append($indexingChartSection, $indexingClusterTable)
 
       const $encoderMetricsPanel = $('<div>', {
         class: 'dashboard-home-cluster-tables dashboard-home-metrics-tab-panel',
