@@ -33,7 +33,7 @@ const CLUSTER_MAP_GROUP_TITLE_HEIGHT = 26
 const CLUSTER_MAP_GROUP_TITLE_GAP = 12
 
 const CLUSTER_MAP_API_ROW_Y = 0
-/** API nodes: max per horizontal row (encoder-style grid uses3 per row). */
+/** API nodes: max per horizontal row (encoder-style grid uses 3 per row). */
 const CLUSTER_MAP_API_MAX_PER_ROW = 5
 /** Min space from bottom of API block to RabbitMQ node center when the broker is shown. */
 const CLUSTER_MAP_API_BROKER_GAP = 48

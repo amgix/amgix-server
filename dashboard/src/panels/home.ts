@@ -40,13 +40,10 @@ const HOME_METRICS_PANEL_API_ID = 'dashboard-home-metrics-panel-api'
 const HOME_METRICS_PANEL_INDEXING_ID = 'dashboard-home-metrics-panel-indexing'
 const HOME_METRICS_PANEL_ENCODER_ID = 'dashboard-home-metrics-panel-encoder'
 
-/** Home tables and live chart labels use this rolling window (seconds). */
 const CLUSTER_METRICS_WINDOW_SEC = 60
 
-/** Default visible history span for cluster charts (ms). */
 const DEFAULT_HOME_CHART_HISTORY_MS = 10 * 60 * 1000
 
-/** 1m metric buckets are retained for 24h; 5m buckets for 7d. */
 const HOME_CHART_HISTORY_ONE_DAY_MS = 24 * 60 * 60 * 1000
 const HOME_CHART_HISTORY_SEVEN_DAYS_MS = 7 * HOME_CHART_HISTORY_ONE_DAY_MS
 
@@ -62,7 +59,6 @@ const HOME_CHART_HISTORY_OPTIONS: ReadonlyArray<{ label: string; valueMs: number
   { label: '7 d', valueMs: HOME_CHART_HISTORY_SEVEN_DAYS_MS },
 ]
 
-/** Chart live tail + SQL buckets: 60s aligns with persisted 1-minute metric buckets. */
 const HOME_CHART_METRICS_LIVE_WINDOW_SEC = 60 as const
 
 function homeChartTrendResolutionSec(historyMs: number): 60 | 300 {
@@ -76,7 +72,6 @@ function homeChartTrendPatchMs(historyMs: number, resolutionSec: 60 | 300): numb
   return Math.min(historyMs, 2 * 60 * 1000)
 }
 
-/** X-axis tick label for linear time scale (value is epoch ms). */
 function formatClusterChartXAxisTickLabel(valueMs: number, spanMs: number): string {
   if (!Number.isFinite(valueMs) || !Number.isFinite(spanMs) || spanMs <= 0) {
     return ''
@@ -115,7 +110,6 @@ const ENCODER_CHART_TREND_KEYS = [
   'embed_passages_origin',
 ] as const
 
-/** Persisted trend keys for the indexing job-latency chart (cluster-wide means). */
 const INDEXING_CHART_TREND_KEYS = ['index_queue_job_ms', 'index_bulk_job_ms'] as const
 
 const HOME_INDEXING_TABLE_EXTRA_KEYS = [
@@ -155,7 +149,6 @@ function homeIndexingTableMetricKeys(): string[] {
   return uniqStrings([...HOME_INDEXING_TABLE_EXTRA_KEYS, ...INDEXING_CHART_TREND_KEYS])
 }
 
-/** Keys for GET /metrics/current: visible tab tables + cluster overview strip. */
 function homeMetricsCurrentKeys(tab: HomeMetricsTabId): string[] {
   const apiOverview = [...HOME_CLUSTER_INFO_API_KEYS]
   const encOverview = [...ENCODER_CHART_TREND_KEYS]
@@ -171,7 +164,6 @@ function homeMetricsCurrentKeys(tab: HomeMetricsTabId): string[] {
   return uniqStrings([...apiOverview, ...encOverview])
 }
 
-/** Evenly spaced time ticks from min..max (avoids Chart.js “nice” gaps at the edges). */
 const CLUSTER_CHART_X_TICK_COUNT = 7
 
 function buildClusterChartEvenXTicks(min: number, max: number, count: number): Tick[] {
@@ -408,7 +400,6 @@ function formatVersionLabel(raw: string): string {
   return t.startsWith('v') ? t : `v${t}`
 }
 
-/** Backend-reported DB version for display: optional leading `v`; strip legacy `db ` prefix. */
 function formatDatabaseVersionLabel(raw: string): string {
   let t = raw.trim().replace(/^db\s+/i, '')
   if (t.toLowerCase() === 'unknown') {
@@ -797,7 +788,6 @@ function formatApiMetricsCells(node: NodeView): {
   }
 }
 
-/** Stable merge key for dimensions (vector type, model, revision). */
 function seriesDimKey(s: NodeMetricSeries): string {
   const d = s.dims ?? []
   return `${d[0] ?? ''}\0${d[1] ?? ''}\0${d[2] ?? ''}`
@@ -813,7 +803,6 @@ function seriesDisplayLabel(s: NodeMetricSeries): string {
   return d[0] ?? ''
 }
 
-/** Cluster grid: fixed decimal places for rates (docs/s, err/s). */
 function formatClusterRpsCell(rps: number): string {
   if (!Number.isFinite(rps)) {
     return ''
@@ -821,7 +810,6 @@ function formatClusterRpsCell(rps: number): string {
   return new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(rps)
 }
 
-/** Cluster grid and chart: fixed decimal places for latency (ms). */
 function formatClusterAvgMsCell(ms: number): string {
   if (!Number.isFinite(ms)) {
     return ''
@@ -851,11 +839,6 @@ function clusterChartLegendRpsValue(baseLabel: string, y: number | null): {
   }
 }
 
-/**
- * Table cells: batches_origin (count), docs_origin (rate),
- * inference_ms_per_doc and inference_origin_ms_per_doc (latency),
- * inference_origin_errors (sum in window → per-second rate).
- */
 function formatEmbeddingMetricsCells(node: NodeView): {
   rps: string
   avgMs: string
@@ -947,10 +930,6 @@ function formatIndexingSingleSumRateCell(list: NodeMetricSeries[], key: string):
   return formatIndexingSumRateCell(list, [key])
 }
 
-/**
- * Table cells for index queue + bulk counters (rates where appropriate) and mean job times.
- * Metrics are not broken down by vector model.
- */
 function formatIndexingMetricsCells(node: NodeView): {
   docsPerSec: string
   stalePerSec: string
@@ -1013,7 +992,6 @@ function formatIndexingMetricsCells(node: NodeView): {
   }
 }
 
-/** Human-readable series name from merge key `type\\0model\\0revision`. */
 function labelFromVectorMetricsMergeKey(key: string): string {
   const parts = key.split('\0')
   const typ = parts[0] ?? ''
@@ -1025,7 +1003,6 @@ function labelFromVectorMetricsMergeKey(key: string): string {
   return typ
 }
 
-/** Chart legend/tooltip caption; strips legacy `dense_model: …` from storage and fixes type-only stubs. */
 function normalizeVectorSeriesLabelForKey(key: string, stored: string | undefined): string {
   if (stored != null && stored !== '') {
     const legacy = LEGACY_CHART_TYPE_MODEL_PREFIX.exec(stored)
@@ -1059,7 +1036,6 @@ function aggregateClusterThroughput(
     return empty
   }
 
-  // Per-dim-key accumulators for local inference ms/passage
   const byKey = new Map<string, { label: string; totalMs: number; totalPassages: number }>()
   let globalInferenceMs = 0
   let globalPassages = 0
@@ -1067,7 +1043,6 @@ function aggregateClusterThroughput(
   let globalOriginPassages = 0
 
   for (const node of Object.values(view.nodes)) {
-    // Collect per-dim totals for embed_inference_ms and embed_passages
     const msByDim = new Map<string, { label: string; ms: number }>()
     const passagesByDim = new Map<string, number>()
     for (const s of node.metrics ?? []) {
@@ -1164,7 +1139,6 @@ function isIndexWorkerRole(role: string): boolean {
   return role === 'index' || role === 'all'
 }
 
-/** Indexing workers only: nodes that run the index queue (excludes query-only roles). */
 function partitionIndexRoleNodes(nodes: { [key: string]: NodeView }): Array<[string, NodeView]> {
   const rows: Array<[string, NodeView]> = []
   for (const entry of Object.entries(nodes)) {
@@ -1186,7 +1160,6 @@ type ApiMetricsHistoryPoint = {
   errRps: number | null
 }
 
-/** byKey: cluster-wide weighted mean inference latency (ms) per vector merge key */
 type ClusterThroughputHistoryPoint = {
   t: number
   byKey: Map<string, number>
@@ -1194,7 +1167,6 @@ type ClusterThroughputHistoryPoint = {
   e2eMs: number | null
 }
 
-/** Cluster-wide API aggregates; err4xx/err5xx are for Cluster Overview, errRps is their sum (chart). */
 type AggregateApiChartMetrics = Omit<ApiMetricsHistoryPoint, 't'> & {
   err4xxRps: number | null
   err5xxRps: number | null
@@ -1771,7 +1743,6 @@ function readClusterChartThemeColors(): { grid: string; tick: string } {
   }
 }
 
-/** Match :root font family; axis sizes kept smaller than body text so they fit the chart. */
 function readClusterChartFont(): { family: string; tickPx: number; titlePx: number; tooltipPx: number } {
   const s = getComputedStyle(document.documentElement)
   const family = (s.fontFamily || '').trim() || 'system-ui, sans-serif'
@@ -1939,19 +1910,14 @@ export class HomePanel extends DashboardPanel {
   private readyPollGeneration = 0
   private homeApi: AmgixApi | null = null
   private clusterThroughputChart: Chart<'line'> | null = null
-  /** bucket_start (unix seconds) → cluster-wide chart point for that minute */
   private encoderChartBuckets = new Map<number, ClusterThroughputHistoryPoint>()
   private indexingLatencyChart: Chart<'line'> | null = null
-  /** bucket_start (unix seconds) → cluster-wide indexing latency snapshot for that bucket */
   private indexingChartBuckets = new Map<number, IndexingLatencyHistoryPoint>()
   private clusterSeriesLabels = new Map<string, string>()
   private apiMetricsRequestsChart: Chart<'line'> | null = null
   private apiMetricsLatenciesChart: Chart<'line'> | null = null
-  /** bucket_start (unix seconds) → API chart point for that minute */
   private apiChartBuckets = new Map<number, ApiMetricsHistoryPoint>()
-  /** Latest snapshot for chart live tail and tables (same 60s current payload). */
   private metricsChartLiveView: Metrics | null = null
-  /** Visible SQL history span for cluster charts (API, encoder, indexing). */
   private homeChartHistoryMs = DEFAULT_HOME_CHART_HISTORY_MS
   private homeChartRangeListenerAttached = false
 
@@ -2590,7 +2556,6 @@ export class HomePanel extends DashboardPanel {
 
     const yNum = (v: number | null) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
-    /** Same hues for Reqs / Search / Doc Uploads on both requests and latency charts. */
     const apiGroupColors = ['#8b5cf6', '#38bdf8', '#f59e0b']
     const apiErrorsReqColor = '#dc2626'
 
@@ -2892,7 +2857,6 @@ export class HomePanel extends DashboardPanel {
       }
       this.refreshVisibleHomeCharts($root)
     } catch {
-      // Charts stay empty or stale until the next poll or tab revisit.
     }
   }
 
@@ -3290,7 +3254,6 @@ export class HomePanel extends DashboardPanel {
       }
       this.applyReadinessToDom($root, ready)
     } catch {
-      // Transient failures: next interval retries (same as collections stats poll).
     }
   }
 
