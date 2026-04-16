@@ -13,6 +13,7 @@ models/DocumentStatusResponse.ts
 models/HTTPValidationError.ts
 models/MetadataFilter.ts
 models/MetadataIndex.ts
+models/MetricDefinitionItem.ts
 models/MetricTrend.ts
 models/Metrics.ts
 models/MetricsBucket.ts

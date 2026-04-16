@@ -22,7 +22,7 @@ from src.core.common.bunny_talk import BunnyTalk
 from src.core.common.lock_manager import LockService, LockClient
 from src.core.common.logging_config import configure_logging
 from src.core.models.cluster import Metrics, MetricTrend, MetricsBucket, MetricsPayload
-from src.core.common.metrics_definitions import MetricKey
+from src.core.common.metrics_definitions import METRIC_DEFINITIONS, MetricKey
 from src.core.models.document import (
     CollectionStatsResponse,
     Document,
@@ -76,6 +76,12 @@ class ReadyResponse(BaseModel):
 
 class VersionResponse(BaseModel):
     version: str
+
+
+class MetricDefinitionItem(BaseModel):
+    key: str = Field(..., description="Stable metric identifier")
+    unit: str = Field(..., description="Unit label (e.g. req, ms, batch)")
+    description: str = Field(..., description="Description of this metric")
 
 
 def _database_kind_label(connection_string: str) -> str:
@@ -387,6 +393,15 @@ async def metrics_trends(
     return [
         MetricTrend(key=key, bucket_seconds=resolution, buckets=key_buckets)
         for key, key_buckets in grouped.items()
+    ]
+
+
+@shared_router.get("/metrics/definitions", operation_id="metrics_definitions")
+async def metrics_definitions() -> List[MetricDefinitionItem]:
+    """Return catalog entries for all known metric keys, their units, and descriptions."""
+    return [
+        MetricDefinitionItem(key=key.value, unit=defn.unit, description=defn.description)
+        for key, defn in METRIC_DEFINITIONS.items()
     ]
 
 

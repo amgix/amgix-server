@@ -301,8 +301,8 @@ function buildMaterialIconNodeLabel(host: string, node: NodeView, bucket: Cluste
     const errText = apiClusterMapErrorsRateText(node)
     const reqLine =
       reqText !== ''
-        ? `<span class='dashboard-cluster-map-node-latency'>${escapeHtmlText(reqText)} req/s</span>`
-        : `<span class='dashboard-cluster-map-node-latency dashboard-cluster-map-node-latency--empty'>— req/s</span>`
+        ? `<span class='dashboard-cluster-map-node-latency'>${escapeHtmlText(reqText)} reqs/s</span>`
+        : `<span class='dashboard-cluster-map-node-latency dashboard-cluster-map-node-latency--empty'>— reqs/s</span>`
     const errLine =
       errText !== ''
         ? `<span class='dashboard-cluster-map-node-latency'>${escapeHtmlText(errText)} err/s</span>`

@@ -22,6 +22,7 @@ import type {
   Document,
   DocumentStatusResponse,
   HTTPValidationError,
+  MetricDefinitionItem,
   MetricTrend,
   Metrics,
   OkResponse,
@@ -47,6 +48,8 @@ import {
     DocumentStatusResponseToJSON,
     HTTPValidationErrorFromJSON,
     HTTPValidationErrorToJSON,
+    MetricDefinitionItemFromJSON,
+    MetricDefinitionItemToJSON,
     MetricTrendFromJSON,
     MetricTrendToJSON,
     MetricsFromJSON,
@@ -859,6 +862,45 @@ export class AmgixApi extends runtime.BaseAPI {
      */
     async metricsCurrent(requestParameters: MetricsCurrentRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Metrics> {
         const response = await this.metricsCurrentRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * Creates request options for metricsDefinitions without sending the request
+     */
+    async metricsDefinitionsRequestOpts(): Promise<runtime.RequestOpts> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+
+        let urlPath = `/v1/metrics/definitions`;
+
+        return {
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     * Return catalog entries for all known metric keys, their units, and descriptions.
+     * Metrics Definitions
+     */
+    async metricsDefinitionsRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<MetricDefinitionItem>>> {
+        const requestOptions = await this.metricsDefinitionsRequestOpts();
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) => jsonValue.map(MetricDefinitionItemFromJSON));
+    }
+
+    /**
+     * Return catalog entries for all known metric keys, their units, and descriptions.
+     * Metrics Definitions
+     */
+    async metricsDefinitions(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<MetricDefinitionItem>> {
+        const response = await this.metricsDefinitionsRaw(initOverrides);
         return await response.value();
     }
 

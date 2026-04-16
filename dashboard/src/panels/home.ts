@@ -122,7 +122,7 @@ function clusterChartHelpText(): string {
 
 function clusterApiChartHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `API request rate and mean latency over time. All traffic, search, and ingestion (async + sync + bulk), ${w}s rolling window per poll.`
+  return `API request rate and mean latency over time. All traffic, search, and doc uploads (async + sync + bulk), ${w}s rolling window per poll.`
 }
 
 function clusterApiAllReqColumnHelpText(): string {
@@ -1605,7 +1605,7 @@ export class HomePanel extends DashboardPanel {
 
     const yNum = (v: number | null) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
-    /** Same hues for Req / Search / Ingest on both requests and latency charts. */
+    /** Same hues for Reqs / Search / Doc Uploads on both requests and latency charts. */
     const apiGroupColors = ['#8b5cf6', '#38bdf8', '#f59e0b']
     const apiErrorsReqColor = '#dc2626'
 
@@ -1624,16 +1624,16 @@ export class HomePanel extends DashboardPanel {
     })
 
     const datasetsRps = [
-      line('Req', apiGroupColors[0]!, (pt) => yNum(pt.allRps)),
+      line('Reqs', apiGroupColors[0]!, (pt) => yNum(pt.allRps)),
       line('Search', apiGroupColors[1]!, (pt) => yNum(pt.searchRps)),
-      line('Ingest', apiGroupColors[2]!, (pt) => yNum(pt.ingestRps)),
+      line('Doc Uploads', apiGroupColors[2]!, (pt) => yNum(pt.ingestRps)),
       line('Err/s', apiErrorsReqColor, (pt) => yNum(pt.errRps)),
     ]
 
     const datasetsMs = [
-      line('Req', apiGroupColors[0]!, (pt) => yNum(pt.allMs)),
+      line('Reqs', apiGroupColors[0]!, (pt) => yNum(pt.allMs)),
       line('Search', apiGroupColors[1]!, (pt) => yNum(pt.searchMs)),
-      line('Ingest', apiGroupColors[2]!, (pt) => yNum(pt.ingestMs)),
+      line('Doc Uploads', apiGroupColors[2]!, (pt) => yNum(pt.ingestMs)),
     ]
 
     $reqCanvasWrap.css('height', '150px')
@@ -1661,12 +1661,12 @@ export class HomePanel extends DashboardPanel {
       this.apiMetricsRequestsChart = new Chart(ctx, {
         type: 'line',
         data: { datasets: datasetsRps },
-        options: buildApiMetricsChartOptions(cutoff, now, gridColor, tickColor, chartFont, 'Req/s', false),
+        options: buildApiMetricsChartOptions(cutoff, now, gridColor, tickColor, chartFont, 'Reqs/s', false),
       })
     } else {
       const ch = this.apiMetricsRequestsChart
       ch.data.datasets = datasetsRps as typeof ch.data.datasets
-      this.syncSingleYAxisApiMetricsChartTheme(ch, cutoff, now, gridColor, tickColor, chartFont, 'Req/s')
+      this.syncSingleYAxisApiMetricsChartTheme(ch, cutoff, now, gridColor, tickColor, chartFont, 'Reqs/s')
     }
 
     if (this.apiMetricsLatenciesChart == null) {
@@ -2129,8 +2129,8 @@ export class HomePanel extends DashboardPanel {
           $('<tr>', { class: 'dashboard-home-cluster-colhead' }).append(
             $('<th>', { text: 'Role' }),
             $('<th>', { text: 'Node' }),
-            clusterThWithHelp('Req/s', clusterApiAllReqColumnHelpText()),
-            clusterThWithHelp('ms/Req', clusterApiAllMsColumnHelpText()),
+            clusterThWithHelp('Reqs/s', clusterApiAllReqColumnHelpText()),
+            clusterThWithHelp('ms/req', clusterApiAllMsColumnHelpText()),
             clusterThWithHelp('Async/s', clusterApiAsyncReqColumnHelpText()),
             clusterThWithHelp('ms/Async', clusterApiAsyncMsColumnHelpText()),
             clusterThWithHelp('Sync/s', clusterApiSyncReqColumnHelpText()),

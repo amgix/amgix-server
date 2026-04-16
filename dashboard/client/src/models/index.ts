@@ -12,6 +12,7 @@ export * from './DocumentStatusResponse';
 export * from './HTTPValidationError';
 export * from './MetadataFilter';
 export * from './MetadataIndex';
+export * from './MetricDefinitionItem';
 export * from './MetricTrend';
 export * from './Metrics';
 export * from './MetricsBucket';
