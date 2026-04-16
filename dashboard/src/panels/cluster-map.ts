@@ -1094,6 +1094,7 @@ export class ClusterMapPanel extends DashboardPanel {
       cy.elements().remove()
       cy.add(elements)
     })
+    cy.nodes().panify()
 
     requestAnimationFrame(() => {
       cy.resize()
@@ -1174,6 +1175,8 @@ export class ClusterMapPanel extends DashboardPanel {
         },
       ],
     })
+
+    cy.nodes().panify()
 
     ;(cy as unknown as CytoscapeWithNodeHtmlLabel).nodeHtmlLabel(
       [
