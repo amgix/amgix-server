@@ -406,22 +406,31 @@ class MetricsService:
 
         if payload.query_view:
             window = payload.query_window
+            key_allow: Optional[frozenset[str]] = None
+            if payload.query_keys is not None and len(payload.query_keys) > 0:
+                key_allow = frozenset(payload.query_keys)
             with self._state_lock:
                 if self._hostname in self._cluster_view:
                     self._cluster_view[self._hostname].is_leader = True
                 nodes = {}
                 for hostname, node in self._cluster_view.items():
                     node_copy = node.model_copy(deep=True)
-                    if window is not None:
-                        node_copy.metrics = [
-                            NodeMetricSeries(
-                                key=s.key,
-                                dims=s.dims,
-                                windows={w: v for w, v in s.windows.items() if w == window},
-                                last_seen=s.last_seen,
+                    filtered: List[NodeMetricSeries] = []
+                    for s in node_copy.metrics:
+                        if key_allow is not None and s.key not in key_allow:
+                            continue
+                        if window is not None:
+                            filtered.append(
+                                NodeMetricSeries(
+                                    key=s.key,
+                                    dims=s.dims,
+                                    windows={w: v for w, v in s.windows.items() if w == window},
+                                    last_seen=s.last_seen,
+                                )
                             )
-                            for s in node_copy.metrics
-                        ]
+                        else:
+                            filtered.append(s.model_copy(deep=True))
+                    node_copy.metrics = filtered
                     nodes[hostname] = node_copy
             return Metrics(nodes=nodes)
 

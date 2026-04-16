@@ -12,7 +12,7 @@
     "@types/jquery": "^4.0.0",
     "@types/node": "^25.6.0",
     "typescript": "~6.0.2",
-    "vite": "^8.0.8"
+    "vite": "^7.3.2"
   },
   "dependencies": {
     "@fontsource/material-symbols-outlined": "^5.2.40",

@@ -119,13 +119,14 @@ export interface GetDocumentStatusRequest {
 }
 
 export interface MetricsCurrentRequest {
-    window?: MetricsCurrentWindowEnum;
+    window?: number;
+    keys?: Array<string>;
 }
 
 export interface MetricsTrendsRequest {
     since: Date;
     until: Date;
-    resolution?: MetricsTrendsResolutionEnum;
+    resolution?: number;
     keys?: Array<string>;
 }
 
@@ -832,6 +833,10 @@ export class AmgixApi extends runtime.BaseAPI {
             queryParameters['window'] = requestParameters['window'];
         }
 
+        if (requestParameters['keys'] != null) {
+            queryParameters['keys'] = requestParameters['keys'];
+        }
+
         const headerParameters: runtime.HTTPHeaders = {};
 
 
@@ -1280,20 +1285,3 @@ export class AmgixApi extends runtime.BaseAPI {
     }
 
 }
-
-/**
- * @export
- */
-export const MetricsCurrentWindowEnum = {
-    NUMBER_30: 30,
-    NUMBER_60: 60
-} as const;
-export type MetricsCurrentWindowEnum = typeof MetricsCurrentWindowEnum[keyof typeof MetricsCurrentWindowEnum];
-/**
- * @export
- */
-export const MetricsTrendsResolutionEnum = {
-    NUMBER_60: 60,
-    NUMBER_300: 300
-} as const;
-export type MetricsTrendsResolutionEnum = typeof MetricsTrendsResolutionEnum[keyof typeof MetricsTrendsResolutionEnum];

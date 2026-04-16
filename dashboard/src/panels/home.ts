@@ -1,7 +1,9 @@
 import {
   ResponseError,
   type AmgixApi,
+  type MetricTrend,
   type Metrics,
+  type MetricsBucket,
   type NodeMetricSeries,
   type NodeView,
   type ReadyResponse,
@@ -38,11 +40,75 @@ const HOME_METRICS_PANEL_API_ID = 'dashboard-home-metrics-panel-api'
 const HOME_METRICS_PANEL_INDEXING_ID = 'dashboard-home-metrics-panel-indexing'
 const HOME_METRICS_PANEL_ENCODER_ID = 'dashboard-home-metrics-panel-encoder'
 
-/** Cluster table embedding columns use this rolling window (seconds). */
-const CLUSTER_METRICS_WINDOW_SEC = 30
+/** Home tables and live chart labels use this rolling window (seconds). */
+const CLUSTER_METRICS_WINDOW_SEC = 60
 
-/** Cluster chart: client-side history span (API is snapshot-only). */
+/** Cluster charts: visible history span. */
 const CLUSTER_CHART_HISTORY_MS = 10 * 60 * 1000
+
+/** Rolling patch window for `/metrics/trends` on each poll (closed buckets may land slightly late). */
+const CLUSTER_CHART_PATCH_MS = 2 * 60 * 1000
+
+/** Chart live tail + SQL buckets: 60s aligns with persisted 1-minute metric buckets. */
+const HOME_CHART_METRICS_LIVE_WINDOW_SEC = 60 as const
+
+const HOME_CHART_TREND_RESOLUTION = 60 as const
+
+const API_CHART_TREND_KEYS = [
+  'api_requests',
+  'api_request_ms',
+  'api_async_upload',
+  'api_async_upload_ms',
+  'api_sync_upload',
+  'api_sync_upload_ms',
+  'api_bulk_upload',
+  'api_bulk_upload_ms',
+  'api_search',
+  'api_search_ms',
+  'api_error_4xx',
+  'api_error_5xx',
+] as const
+
+const ENCODER_CHART_TREND_KEYS = [
+  'embed_inference_ms',
+  'embed_passages',
+  'embed_inference_origin_ms',
+  'embed_passages_origin',
+] as const
+
+const HOME_CLUSTER_INFO_API_KEYS = [
+  'api_requests',
+  'api_request_ms',
+  'api_error_4xx',
+  'api_error_5xx',
+] as const
+
+const HOME_ENCODER_TABLE_EXTRA_KEYS = [
+  'embed_batches_origin',
+  'embed_passages_origin',
+  'embed_inference_origin_errors',
+] as const
+
+function uniqStrings(xs: readonly string[]): string[] {
+  return [...new Set(xs)]
+}
+
+function homeEncoderTableMetricKeys(): string[] {
+  return uniqStrings([...HOME_ENCODER_TABLE_EXTRA_KEYS, ...ENCODER_CHART_TREND_KEYS])
+}
+
+/** Keys for GET /metrics/current: visible tab tables + cluster overview strip. */
+function homeMetricsCurrentKeys(tab: HomeMetricsTabId): string[] {
+  const apiOverview = [...HOME_CLUSTER_INFO_API_KEYS]
+  const encOverview = [...ENCODER_CHART_TREND_KEYS]
+  if (tab === 'api') {
+    return uniqStrings([...API_CHART_TREND_KEYS, ...encOverview])
+  }
+  if (tab === 'encoder') {
+    return uniqStrings([...homeEncoderTableMetricKeys(), ...apiOverview])
+  }
+  return uniqStrings([...apiOverview, ...encOverview])
+}
 
 /** Evenly spaced time ticks from min..max (avoids Chart.js “nice” gaps at the edges). */
 const CLUSTER_CHART_X_TICK_COUNT = 7
@@ -63,10 +129,6 @@ function buildClusterChartEvenXTicks(min: number, max: number, count: number): T
   }
   return ticks
 }
-
-/** Survives full page reload; same origin only. */
-const CLUSTER_CHART_STORAGE_KEY = 'amgix.dashboard.clusterThroughputHistory.v2'
-const CLUSTER_API_CHART_STORAGE_KEY = 'amgix.dashboard.apiMetricsHistory.v2'
 
 function clusterHelpIcon(tip: string): JQuery<HTMLElement> {
   return $('<button>', {
@@ -115,13 +177,11 @@ function clusterErrPerSecColumnHelpText(): string {
 }
 
 function clusterChartHelpText(): string {
-  const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Inference and routed latency per passage over time, ${w}s rolling window.`
+  return `Inference and routed latency per passage. History uses 1-minute buckets from the server; the right edge is a ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s rolling snapshot.`
 }
 
 function clusterApiChartHelpText(): string {
-  const w = CLUSTER_METRICS_WINDOW_SEC
-  return `API request rate and mean latency over time. All traffic, search, and doc uploads (async + sync + bulk), ${w}s rolling window per poll.`
+  return `API request rate and mean latency. History uses 1-minute buckets (cluster-wide); the right edge is a ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s rolling snapshot.`
 }
 
 function clusterApiAllReqColumnHelpText(): string {
@@ -262,6 +322,13 @@ function formatLoadModelsCell(node: NodeView): string {
   return `Yes (${n})`
 }
 
+function formatAtCapacityCell(node: NodeView): string {
+  if (!nodeMetaBool(node, 'load_models')) {
+    return ''
+  }
+  return nodeMetaBool(node, 'at_capacity') ? 'Yes' : 'No'
+}
+
 function formatGpuStatus(node: NodeView): string {
   if (!nodeMetaBool(node, 'gpu_support')) {
     return 'n/a'
@@ -272,20 +339,26 @@ function formatGpuStatus(node: NodeView): string {
   return 'Undetected'
 }
 
-const clusterMetricsWindowKey = String(CLUSTER_METRICS_WINDOW_SEC)
-
-function getNodeMetricWindowSample(s: NodeMetricSeries): WindowSample | undefined {
+function getNodeWindowSample(s: NodeMetricSeries, windowSec: number): WindowSample | undefined {
   const w = s.windows
   if (w == null) {
     return undefined
   }
-  return w[clusterMetricsWindowKey]
+  return w[String(windowSec)]
 }
 
-function getMetricWindowSampleByFirstKey(list: NodeMetricSeries[], name: string): WindowSample | undefined {
+function getNodeMetricWindowSample(s: NodeMetricSeries): WindowSample | undefined {
+  return getNodeWindowSample(s, CLUSTER_METRICS_WINDOW_SEC)
+}
+
+function getMetricWindowSampleByFirstKey(
+  list: NodeMetricSeries[],
+  name: string,
+  windowSec: number = CLUSTER_METRICS_WINDOW_SEC,
+): WindowSample | undefined {
   for (const s of list) {
     if (s.key === name) {
-      return getNodeMetricWindowSample(s)
+      return getNodeWindowSample(s, windowSec)
     }
   }
   return undefined
@@ -396,42 +469,26 @@ function formatClusterAvgMsCell(ms: number): string {
   return new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(ms)
 }
 
-function latestFiniteSeriesY(data: ReadonlyArray<{ y?: number | null }>): number | null {
-  for (let i = data.length - 1; i >= 0; i -= 1) {
-    const y = data[i]?.y
-    if (typeof y === 'number' && Number.isFinite(y)) {
-      return y
-    }
+function clusterChartLegendMsValue(baseLabel: string, y: number | null): {
+  labelStem: string
+  valuePart: string | null
+} {
+  return {
+    labelStem: `${baseLabel}: `,
+    valuePart:
+      typeof y === 'number' && Number.isFinite(y) ? `${formatClusterAvgMsCell(y)} ms` : '- ms',
   }
-  return null
 }
 
-function clusterChartLegendParts(
-  baseLabel: string,
-  data: ReadonlyArray<{ y?: number | null }>,
-): { labelStem: string; valuePart: string | null } {
-  const y = latestFiniteSeriesY(data)
-  if (y == null) {
-    return { labelStem: baseLabel, valuePart: null }
+function clusterChartLegendRpsValue(baseLabel: string, y: number | null): {
+  labelStem: string
+  valuePart: string | null
+} {
+  return {
+    labelStem: `${baseLabel}: `,
+    valuePart:
+      typeof y === 'number' && Number.isFinite(y) ? `${formatClusterRpsCell(y)} /s` : '- /s',
   }
-  if (y === 0) {
-    return { labelStem: `${baseLabel}: `, valuePart: '-' }
-  }
-  return { labelStem: `${baseLabel}: `, valuePart: `${formatClusterAvgMsCell(y)} ms` }
-}
-
-function clusterApiChartLegendPartsRps(
-  baseLabel: string,
-  data: ReadonlyArray<{ y?: number | null }>,
-): { labelStem: string; valuePart: string | null } {
-  const y = latestFiniteSeriesY(data)
-  if (y == null) {
-    return { labelStem: baseLabel, valuePart: null }
-  }
-  if (y === 0) {
-    return { labelStem: `${baseLabel}: `, valuePart: '-' }
-  }
-  return { labelStem: `${baseLabel}: `, valuePart: `${formatClusterRpsCell(y)} /s` }
 }
 
 /**
@@ -542,7 +599,10 @@ type ClusterThroughputAgg = {
   globalE2eMs: number | null
 }
 
-function aggregateClusterThroughput(view: Metrics | null): ClusterThroughputAgg {
+function aggregateClusterThroughput(
+  view: Metrics | null,
+  windowSec: number = CLUSTER_METRICS_WINDOW_SEC,
+): ClusterThroughputAgg {
   const empty: ClusterThroughputAgg = {
     chartRows: [],
     globalAvgMs: null,
@@ -564,7 +624,7 @@ function aggregateClusterThroughput(view: Metrics | null): ClusterThroughputAgg 
     const msByDim = new Map<string, { label: string; ms: number }>()
     const passagesByDim = new Map<string, number>()
     for (const s of node.metrics ?? []) {
-      const wm = getNodeMetricWindowSample(s)
+      const wm = getNodeWindowSample(s, windowSec)
       if (wm == null) {
         continue
       }
@@ -664,13 +724,24 @@ type ApiMetricsHistoryPoint = {
   errRps: number | null
 }
 
+/** byKey: cluster-wide weighted mean inference latency (ms) per vector merge key */
+type ClusterThroughputHistoryPoint = {
+  t: number
+  byKey: Map<string, number>
+  avgMs: number | null
+  e2eMs: number | null
+}
+
 /** Cluster-wide API aggregates; err4xx/err5xx are for Cluster Overview, errRps is their sum (chart). */
 type AggregateApiChartMetrics = Omit<ApiMetricsHistoryPoint, 't'> & {
   err4xxRps: number | null
   err5xxRps: number | null
 }
 
-function aggregateApiChartMetrics(view: Metrics | null): AggregateApiChartMetrics {
+function aggregateApiChartMetrics(
+  view: Metrics | null,
+  windowSec: number = CLUSTER_METRICS_WINDOW_SEC,
+): AggregateApiChartMetrics {
   const empty: AggregateApiChartMetrics = {
     allRps: null,
     allMs: null,
@@ -708,7 +779,7 @@ function aggregateApiChartMetrics(view: Metrics | null): AggregateApiChartMetric
     }
     const list = node.metrics ?? []
 
-    const wsAllR = getMetricWindowSampleByFirstKey(list, 'api_requests')
+    const wsAllR = getMetricWindowSampleByFirstKey(list, 'api_requests', windowSec)
     if (wsAllR != null) {
       const v = Number(wsAllR.value)
       if (Number.isFinite(v)) {
@@ -716,7 +787,7 @@ function aggregateApiChartMetrics(view: Metrics | null): AggregateApiChartMetric
         sawAllRps = true
       }
     }
-    const wsAllM = getMetricWindowSampleByFirstKey(list, 'api_request_ms')
+    const wsAllM = getMetricWindowSampleByFirstKey(list, 'api_request_ms', windowSec)
     if (wsAllM != null) {
       const v = Number(wsAllM.value)
       const n = Number(wsAllM.n)
@@ -726,7 +797,7 @@ function aggregateApiChartMetrics(view: Metrics | null): AggregateApiChartMetric
       }
     }
 
-    const wsSr = getMetricWindowSampleByFirstKey(list, 'api_search')
+    const wsSr = getMetricWindowSampleByFirstKey(list, 'api_search', windowSec)
     if (wsSr != null) {
       const v = Number(wsSr.value)
       if (Number.isFinite(v)) {
@@ -734,7 +805,7 @@ function aggregateApiChartMetrics(view: Metrics | null): AggregateApiChartMetric
         sawSearchRps = true
       }
     }
-    const wsSm = getMetricWindowSampleByFirstKey(list, 'api_search_ms')
+    const wsSm = getMetricWindowSampleByFirstKey(list, 'api_search_ms', windowSec)
     if (wsSm != null) {
       const v = Number(wsSm.value)
       const n = Number(wsSm.n)
@@ -745,7 +816,7 @@ function aggregateApiChartMetrics(view: Metrics | null): AggregateApiChartMetric
     }
 
     for (const rk of ['api_async_upload', 'api_sync_upload', 'api_bulk_upload'] as const) {
-      const ws = getMetricWindowSampleByFirstKey(list, rk)
+      const ws = getMetricWindowSampleByFirstKey(list, rk, windowSec)
       if (ws != null) {
         const v = Number(ws.value)
         if (Number.isFinite(v)) {
@@ -755,7 +826,7 @@ function aggregateApiChartMetrics(view: Metrics | null): AggregateApiChartMetric
       }
     }
     for (const mk of ['api_async_upload_ms', 'api_sync_upload_ms', 'api_bulk_upload_ms'] as const) {
-      const ws = getMetricWindowSampleByFirstKey(list, mk)
+      const ws = getMetricWindowSampleByFirstKey(list, mk, windowSec)
       if (ws != null) {
         const v = Number(ws.value)
         const n = Number(ws.n)
@@ -766,7 +837,7 @@ function aggregateApiChartMetrics(view: Metrics | null): AggregateApiChartMetric
       }
     }
 
-    const ws4 = getMetricWindowSampleByFirstKey(list, 'api_error_4xx')
+    const ws4 = getMetricWindowSampleByFirstKey(list, 'api_error_4xx', windowSec)
     if (ws4 != null) {
       const v = Number(ws4.value)
       if (Number.isFinite(v)) {
@@ -774,7 +845,7 @@ function aggregateApiChartMetrics(view: Metrics | null): AggregateApiChartMetric
         sawErr4xx = true
       }
     }
-    const ws5 = getMetricWindowSampleByFirstKey(list, 'api_error_5xx')
+    const ws5 = getMetricWindowSampleByFirstKey(list, 'api_error_5xx', windowSec)
     if (ws5 != null) {
       const v = Number(ws5.value)
       if (Number.isFinite(v)) {
@@ -785,7 +856,7 @@ function aggregateApiChartMetrics(view: Metrics | null): AggregateApiChartMetric
   }
 
   const sawAnyErr = sawErr4xx || sawErr5xx
-  const w = CLUSTER_METRICS_WINDOW_SEC
+  const w = windowSec
   return {
     allRps: sawAllRps ? sumAllRps / w : null,
     allMs: allMsSumN > 0 ? allMsSumVN / allMsSumN : null,
@@ -799,61 +870,297 @@ function aggregateApiChartMetrics(view: Metrics | null): AggregateApiChartMetric
   }
 }
 
-type ApiChartStoredPayload = {
-  v: 1
-  points: ApiMetricsHistoryPoint[]
+type ApiAggScratch = {
+  allV: number
+  sawAll: boolean
+  allMsV: number
+  allMsN: number
+  searchV: number
+  sawSearch: boolean
+  searchMsV: number
+  searchMsN: number
+  ingestV: number
+  sawIngest: boolean
+  ingestMsV: number
+  ingestMsN: number
+  err4V: number
+  saw4: boolean
+  err5V: number
+  saw5: boolean
 }
 
-function loadApiMetricsHistoryFromStorage(cutoff: number): ApiMetricsHistoryPoint[] | null {
-  try {
-    const s = localStorage.getItem(CLUSTER_API_CHART_STORAGE_KEY)
-    if (s == null || s === '') {
-      return null
-    }
-    const parsed = JSON.parse(s) as unknown
-    if (!parsed || typeof parsed !== 'object') {
-      return null
-    }
-    const p = parsed as Partial<ApiChartStoredPayload>
-    if (p.v !== 1 || !Array.isArray(p.points)) {
-      return null
-    }
-    const points: ApiMetricsHistoryPoint[] = []
-    for (const item of p.points) {
-      if (
-        item != null &&
-        typeof item === 'object' &&
-        typeof (item as ApiMetricsHistoryPoint).t === 'number' &&
-        Number.isFinite((item as ApiMetricsHistoryPoint).t)
-      ) {
-        const raw = item as ApiMetricsHistoryPoint
-        points.push({
-          t: raw.t,
-          allRps: raw.allRps,
-          allMs: raw.allMs,
-          searchRps: raw.searchRps,
-          searchMs: raw.searchMs,
-          ingestRps: raw.ingestRps,
-          ingestMs: raw.ingestMs,
-          errRps: raw.errRps ?? null,
-        })
+function emptyApiScratch(): ApiAggScratch {
+  return {
+    allV: 0,
+    sawAll: false,
+    allMsV: 0,
+    allMsN: 0,
+    searchV: 0,
+    sawSearch: false,
+    searchMsV: 0,
+    searchMsN: 0,
+    ingestV: 0,
+    sawIngest: false,
+    ingestMsV: 0,
+    ingestMsN: 0,
+    err4V: 0,
+    saw4: false,
+    err5V: 0,
+    saw5: false,
+  }
+}
+
+function foldMetricsBucketIntoApiScratch(a: ApiAggScratch, b: MetricsBucket): void {
+  const v = b.value
+  const n = b.n != null ? Math.trunc(b.n) : 0
+  if (!Number.isFinite(v)) {
+    return
+  }
+  switch (b.key) {
+    case 'api_requests':
+      a.sawAll = true
+      a.allV += v
+      break
+    case 'api_request_ms':
+      if (n > 0) {
+        a.allMsV += v
+        a.allMsN += n
       }
+      break
+    case 'api_search':
+      a.sawSearch = true
+      a.searchV += v
+      break
+    case 'api_search_ms':
+      if (n > 0) {
+        a.searchMsV += v
+        a.searchMsN += n
+      }
+      break
+    case 'api_async_upload':
+    case 'api_sync_upload':
+    case 'api_bulk_upload':
+      a.sawIngest = true
+      a.ingestV += v
+      break
+    case 'api_async_upload_ms':
+    case 'api_sync_upload_ms':
+    case 'api_bulk_upload_ms':
+      if (n > 0) {
+        a.ingestMsV += v
+        a.ingestMsN += n
+      }
+      break
+    case 'api_error_4xx':
+      a.saw4 = true
+      a.err4V += v
+      break
+    case 'api_error_5xx':
+      a.saw5 = true
+      a.err5V += v
+      break
+    default:
+      break
+  }
+}
+
+function apiScratchToHistoryPoint(
+  bucketStartSec: number,
+  a: ApiAggScratch,
+  bucketSec: number,
+): ApiMetricsHistoryPoint {
+  const w = bucketSec
+  const sawAnyErr = a.saw4 || a.saw5
+  return {
+    t: bucketStartSec * 1000,
+    allRps: a.sawAll ? a.allV / w : null,
+    allMs: a.allMsN > 0 ? a.allMsV / a.allMsN : null,
+    searchRps: a.sawSearch ? a.searchV / w : null,
+    searchMs: a.searchMsN > 0 ? a.searchMsV / a.searchMsN : null,
+    ingestRps: a.sawIngest ? a.ingestV / w : null,
+    ingestMs: a.ingestMsN > 0 ? a.ingestMsV / a.ingestMsN : null,
+    errRps: sawAnyErr ? (a.err4V + a.err5V) / w : null,
+  }
+}
+
+function apiMetricTrendsToPointsByBucketStart(
+  trends: MetricTrend[],
+  expectedBucketSec: number,
+): Map<number, ApiMetricsHistoryPoint> {
+  const byStart = new Map<number, ApiAggScratch>()
+  for (const tr of trends) {
+    for (const b of tr.buckets ?? []) {
+      if (b.bucket_seconds !== expectedBucketSec) {
+        continue
+      }
+      const slot = b.bucket_start
+      let acc = byStart.get(slot)
+      if (!acc) {
+        acc = emptyApiScratch()
+        byStart.set(slot, acc)
+      }
+      foldMetricsBucketIntoApiScratch(acc, b)
     }
-    const filtered = points.filter((pt) => pt.t >= cutoff)
-    filtered.sort((a, b) => a.t - b.t)
-    return filtered
-  } catch {
+  }
+  const out = new Map<number, ApiMetricsHistoryPoint>()
+  for (const [slot, acc] of byStart) {
+    out.set(slot, apiScratchToHistoryPoint(slot, acc, expectedBucketSec))
+  }
+  return out
+}
+
+function trimChartBucketMap(store: Map<number, unknown>, cutoffBucketStartSec: number): void {
+  for (const k of [...store.keys()]) {
+    if (k < cutoffBucketStartSec) {
+      store.delete(k)
+    }
+  }
+}
+
+function bucketStartCutoffSec(historyMs: number, nowMs: number): number {
+  return Math.floor((nowMs - historyMs) / 1000)
+}
+
+function sortedApiChartPoints(
+  store: Map<number, ApiMetricsHistoryPoint>,
+  live: ApiMetricsHistoryPoint | null,
+  cutoffMs: number,
+  nowMs: number,
+): ApiMetricsHistoryPoint[] {
+  const rows: ApiMetricsHistoryPoint[] = []
+  const sortedKeys = Array.from(store.keys())
+    .filter((k) => k * 1000 >= cutoffMs)
+    .sort((a, b) => a - b)
+  for (const k of sortedKeys) {
+    const row = store.get(k)
+    if (row != null) {
+      rows.push({ ...row, t: k * 1000 })
+    }
+  }
+  if (live != null) {
+    rows.push({ ...live, t: nowMs })
+  }
+  return rows
+}
+
+function dimsKeyFromBucketDims(d: string[] | undefined): string {
+  const arr = d ?? []
+  return `${arr[0] ?? ''}\0${arr[1] ?? ''}\0${arr[2] ?? ''}`
+}
+
+function clusterThroughputPointFromEncoderBuckets(
+  buckets: MetricsBucket[],
+  bucketStartSec: number,
+): ClusterThroughputHistoryPoint | null {
+  const msByDim = new Map<string, number>()
+  const passagesByDim = new Map<string, number>()
+  let globalInferenceMs = 0
+  let globalPassages = 0
+  let globalOriginMs = 0
+  let globalOriginPassages = 0
+
+  for (const b of buckets) {
+    const dimKey = dimsKeyFromBucketDims(b.dims)
+    const v = b.value
+    if (!Number.isFinite(v)) {
+      continue
+    }
+    switch (b.key) {
+      case 'embed_inference_ms':
+        globalInferenceMs += v
+        msByDim.set(dimKey, (msByDim.get(dimKey) ?? 0) + v)
+        break
+      case 'embed_passages':
+        globalPassages += v
+        passagesByDim.set(dimKey, (passagesByDim.get(dimKey) ?? 0) + v)
+        break
+      case 'embed_inference_origin_ms':
+        globalOriginMs += v
+        break
+      case 'embed_passages_origin':
+        globalOriginPassages += v
+        break
+      default:
+        break
+    }
+  }
+
+  const byKey = new Map<string, number>()
+  for (const [dimKey, ms] of msByDim.entries()) {
+    const passages = passagesByDim.get(dimKey) ?? 0
+    if (passages > 0) {
+      byKey.set(dimKey, ms / passages)
+    }
+  }
+
+  const globalAvgMs = globalPassages > 0 ? globalInferenceMs / globalPassages : null
+  const globalE2eMs = globalOriginPassages > 0 ? globalOriginMs / globalOriginPassages : null
+  if (byKey.size === 0 && globalAvgMs == null && globalE2eMs == null) {
     return null
   }
+  return {
+    t: bucketStartSec * 1000,
+    byKey,
+    avgMs: globalAvgMs,
+    e2eMs: globalE2eMs,
+  }
 }
 
-function saveApiMetricsHistoryToStorage(points: ApiMetricsHistoryPoint[]): void {
-  try {
-    const payload: ApiChartStoredPayload = { v: 1, points }
-    localStorage.setItem(CLUSTER_API_CHART_STORAGE_KEY, JSON.stringify(payload))
-  } catch {
-    // ignore
+function encoderMetricTrendsToPointsByBucketStart(
+  trends: MetricTrend[],
+  expectedBucketSec: number,
+): Map<number, ClusterThroughputHistoryPoint> {
+  const byStart = new Map<number, MetricsBucket[]>()
+  for (const tr of trends) {
+    for (const b of tr.buckets ?? []) {
+      if (b.bucket_seconds !== expectedBucketSec) {
+        continue
+      }
+      const arr = byStart.get(b.bucket_start) ?? []
+      arr.push(b)
+      byStart.set(b.bucket_start, arr)
+    }
   }
+  const out = new Map<number, ClusterThroughputHistoryPoint>()
+  for (const [start, blist] of byStart) {
+    const pt = clusterThroughputPointFromEncoderBuckets(blist, start)
+    if (pt != null) {
+      out.set(start, pt)
+    }
+  }
+  return out
+}
+
+function sortedClusterThroughputPoints(
+  store: Map<number, ClusterThroughputHistoryPoint>,
+  live: ClusterThroughputHistoryPoint | null,
+  cutoffMs: number,
+  nowMs: number,
+): ClusterThroughputHistoryPoint[] {
+  const rows: ClusterThroughputHistoryPoint[] = []
+  const sortedKeys = Array.from(store.keys())
+    .filter((k) => k * 1000 >= cutoffMs)
+    .sort((a, b) => a - b)
+  for (const k of sortedKeys) {
+    const row = store.get(k)
+    if (row != null) {
+      rows.push({ ...row, t: k * 1000 })
+    }
+  }
+  if (live != null) {
+    rows.push({ ...live, t: nowMs })
+  }
+  return rows
+}
+
+function readHomeMetricsTabFromDom($root: JQuery<HTMLElement>): HomeMetricsTabId {
+  if ($root.find('[data-home-metrics-tab="api"]').attr('aria-selected') === 'true') {
+    return 'api'
+  }
+  if ($root.find('[data-home-metrics-tab="indexing"]').attr('aria-selected') === 'true') {
+    return 'indexing'
+  }
+  return 'encoder'
 }
 
 function readClusterChartThemeColors(): { grid: string; tick: string } {
@@ -1031,123 +1338,20 @@ function $readinessStatus(ok: boolean, readinessKey: HomeReadinessKey): JQuery<H
   })
 }
 
-/** byKey: cluster-wide weighted mean inference latency (ms) per vector merge key */
-type ClusterThroughputHistoryPoint = {
-  t: number
-  byKey: Map<string, number>
-  avgMs: number | null
-  e2eMs: number | null
-}
-
-type ClusterChartStoredPoint = {
-  t: number
-  avgMs: number | null
-  e2eMs: number | null
-  byKey: [string, number][]
-}
-
-type ClusterChartStoredPayload = {
-  v: 1
-  points: ClusterChartStoredPoint[]
-  labels?: [string, string][]
-}
-
-function clusterPointToStored(pt: ClusterThroughputHistoryPoint): ClusterChartStoredPoint {
-  return {
-    t: pt.t,
-    avgMs: pt.avgMs,
-    e2eMs: pt.e2eMs,
-    byKey: Array.from(pt.byKey.entries()),
-  }
-}
-
-function storedToClusterPoint(raw: ClusterChartStoredPoint): ClusterThroughputHistoryPoint | null {
-  if (typeof raw.t !== 'number' || !Number.isFinite(raw.t)) {
-    return null
-  }
-  if (!Array.isArray(raw.byKey)) {
-    return null
-  }
-  const byKey = new Map<string, number>()
-  for (const pair of raw.byKey) {
-    if (!Array.isArray(pair) || pair.length !== 2) {
-      continue
-    }
-    const [k, v] = pair
-    if (typeof k !== 'string' || typeof v !== 'number' || !Number.isFinite(v)) {
-      continue
-    }
-    byKey.set(k, v)
-  }
-  const avgRaw = raw.avgMs == null ? null : Number(raw.avgMs)
-  const e2eRaw = raw.e2eMs == null ? null : Number(raw.e2eMs)
-  return {
-    t: raw.t,
-    byKey,
-    avgMs: avgRaw != null && Number.isFinite(avgRaw) ? avgRaw : null,
-    e2eMs: e2eRaw != null && Number.isFinite(e2eRaw) ? e2eRaw : null,
-  }
-}
-
-function loadClusterThroughputHistoryFromStorage(
-  cutoff: number,
-): { points: ClusterThroughputHistoryPoint[]; labels: [string, string][] } | null {
-  try {
-    const s = localStorage.getItem(CLUSTER_CHART_STORAGE_KEY)
-    if (s == null || s === '') {
-      return null
-    }
-    const parsed = JSON.parse(s) as unknown
-    if (!parsed || typeof parsed !== 'object') {
-      return null
-    }
-    const p = parsed as Partial<ClusterChartStoredPayload>
-    if (p.v !== 1 || !Array.isArray(p.points)) {
-      return null
-    }
-    const points: ClusterThroughputHistoryPoint[] = []
-    for (const item of p.points) {
-      const pt = storedToClusterPoint(item as ClusterChartStoredPoint)
-      if (pt != null && pt.t >= cutoff) {
-        points.push(pt)
-      }
-    }
-    points.sort((a, b) => a.t - b.t)
-    const labels = Array.isArray(p.labels) ? (p.labels as [string, string][]) : []
-    return { points, labels }
-  } catch {
-    return null
-  }
-}
-
-function saveClusterThroughputHistoryToStorage(
-  points: ClusterThroughputHistoryPoint[],
-  labels: Map<string, string>,
-): void {
-  try {
-    const normalizedLabels: [string, string][] = []
-    for (const [k, v] of labels) {
-      normalizedLabels.push([k, normalizeVectorSeriesLabelForKey(k, v)])
-    }
-    const payload: ClusterChartStoredPayload = {
-      v: 1,
-      points: points.map(clusterPointToStored),
-      labels: normalizedLabels,
-    }
-    localStorage.setItem(CLUSTER_CHART_STORAGE_KEY, JSON.stringify(payload))
-  } catch {
-    // QuotaExceededError, private mode, disabled storage, etc.
-  }
-}
-
 export class HomePanel extends DashboardPanel {
   private readyPollTimer: number | null = null
   private readyPollGeneration = 0
+  private homeApi: AmgixApi | null = null
   private clusterThroughputChart: Chart<'line'> | null = null
-  private clusterThroughputHistory: ClusterThroughputHistoryPoint[] = []
+  /** bucket_start (unix seconds) → cluster-wide chart point for that minute */
+  private encoderChartBuckets = new Map<number, ClusterThroughputHistoryPoint>()
   private clusterSeriesLabels = new Map<string, string>()
   private apiMetricsRequestsChart: Chart<'line'> | null = null
   private apiMetricsLatenciesChart: Chart<'line'> | null = null
+  /** bucket_start (unix seconds) → API chart point for that minute */
+  private apiChartBuckets = new Map<number, ApiMetricsHistoryPoint>()
+  /** Latest snapshot for chart live tail and tables (same 60s current payload). */
+  private metricsChartLiveView: Metrics | null = null
 
   override deactivate(): void {
     this.clearReadyPoll()
@@ -1163,10 +1367,42 @@ export class HomePanel extends DashboardPanel {
       return
     }
     this.activateHomeMetricsTab($root, tab)
+    const api = this.homeApi
+    if (api != null) {
+      void this.ensureChartTrendsForActiveTab(api, $root)
+      void this.refreshHomeMetricsAfterTabChange(api, $root, tab)
+    }
   }
-  private apiMetricsHistory: ApiMetricsHistoryPoint[] = []
+
+  private async refreshHomeMetricsAfterTabChange(
+    api: AmgixApi,
+    $root: JQuery<HTMLElement>,
+    tab: HomeMetricsTabId,
+  ): Promise<void> {
+    const gen = this.readyPollGeneration
+    let metrics: Metrics | null = null
+    try {
+      metrics = await api.metricsCurrent({
+        window: HOME_CHART_METRICS_LIVE_WINDOW_SEC,
+        keys: homeMetricsCurrentKeys(tab),
+      })
+    } catch {
+      metrics = null
+    }
+    if (gen !== this.readyPollGeneration) {
+      return
+    }
+    const $still = $('#panel-home [data-home-root]')
+    if (!$still.length || $still.get(0) !== $root.get(0)) {
+      return
+    }
+    this.metricsChartLiveView = metrics
+    this.applyClusterViewToDom($root, metrics)
+    this.refreshVisibleHomeCharts($root)
+  }
 
   init(api: AmgixApi): void {
+    this.homeApi = api
     const $root = $('#panel-home [data-home-root]')
     if (!$root.length) {
       return
@@ -1181,9 +1417,10 @@ export class HomePanel extends DashboardPanel {
     }
     this.destroyApiMetricsChart()
     this.destroyClusterThroughputChart()
-    this.clusterThroughputHistory = []
+    this.encoderChartBuckets.clear()
     this.clusterSeriesLabels.clear()
-    this.apiMetricsHistory = []
+    this.apiChartBuckets.clear()
+    this.metricsChartLiveView = null
   }
 
   private destroyApiMetricsChart(): void {
@@ -1286,7 +1523,7 @@ export class HomePanel extends DashboardPanel {
     this.clusterThroughputChart = null
   }
 
-  private refreshClusterThroughputChart($root: JQuery<HTMLElement>, view: Metrics | null): void {
+  private refreshClusterThroughputChart($root: JQuery<HTMLElement>): void {
     const $canvas = $root.find('[data-home-cluster-throughput-chart]')
     const canvas = $canvas.get(0) as HTMLCanvasElement | undefined
     const $wrap = $root.find('[data-home-cluster-chart-wrap]')
@@ -1296,44 +1533,44 @@ export class HomePanel extends DashboardPanel {
       return
     }
 
-    const agg = aggregateClusterThroughput(view)
     const now = Date.now()
     const cutoff = now - CLUSTER_CHART_HISTORY_MS
-
-    if (this.clusterThroughputHistory.length === 0) {
-      const restored = loadClusterThroughputHistoryFromStorage(cutoff)
-      if (restored != null) {
-        this.clusterThroughputHistory = restored.points
-        for (const [k, lab] of restored.labels) {
-          if (typeof k === 'string' && typeof lab === 'string' && k !== '') {
-            this.clusterSeriesLabels.set(k, normalizeVectorSeriesLabelForKey(k, lab))
+    const liveView = this.metricsChartLiveView
+    const aggLive = aggregateClusterThroughput(liveView, HOME_CHART_METRICS_LIVE_WINDOW_SEC)
+    for (const row of aggLive.chartRows) {
+      this.clusterSeriesLabels.set(row.key, row.label)
+    }
+    const liveByKey = new Map<string, number>()
+    for (const row of aggLive.chartRows) {
+      liveByKey.set(row.key, row.inferenceMeanMs)
+    }
+    const livePoint: ClusterThroughputHistoryPoint | null =
+      liveView != null
+        ? {
+            t: now,
+            byKey: liveByKey,
+            avgMs: aggLive.globalAvgMs,
+            e2eMs: aggLive.globalE2eMs,
           }
+        : null
+
+    const clusterThroughputHistory = sortedClusterThroughputPoints(
+      this.encoderChartBuckets,
+      livePoint,
+      cutoff,
+      now,
+    )
+
+    for (const pt of clusterThroughputHistory) {
+      for (const k of pt.byKey.keys()) {
+        if (!this.clusterSeriesLabels.has(k)) {
+          this.clusterSeriesLabels.set(k, labelFromVectorMetricsMergeKey(k))
         }
       }
     }
 
-    for (const row of agg.chartRows) {
-      this.clusterSeriesLabels.set(row.key, row.label)
-    }
-
-    const pointMap = new Map<string, number>()
-    for (const row of agg.chartRows) {
-      pointMap.set(row.key, row.inferenceMeanMs)
-    }
-    this.clusterThroughputHistory.push({
-      t: now,
-      byKey: pointMap,
-      avgMs: agg.globalAvgMs,
-      e2eMs: agg.globalE2eMs,
-    })
-    while (this.clusterThroughputHistory.length > 0 && this.clusterThroughputHistory[0]!.t < cutoff) {
-      this.clusterThroughputHistory.shift()
-    }
-
-    saveClusterThroughputHistoryToStorage(this.clusterThroughputHistory, this.clusterSeriesLabels)
-
     const keySet = new Set<string>()
-    for (const pt of this.clusterThroughputHistory) {
+    for (const pt of clusterThroughputHistory) {
       for (const k of pt.byKey.keys()) {
         keySet.add(k)
       }
@@ -1348,7 +1585,7 @@ export class HomePanel extends DashboardPanel {
 
     const avgMsDataset = {
       label: 'Inference Latency',
-      data: this.clusterThroughputHistory.map((pt) => ({
+      data: clusterThroughputHistory.map((pt) => ({
         x: pt.t,
         y: typeof pt.avgMs === 'number' && Number.isFinite(pt.avgMs) ? pt.avgMs : null,
       })),
@@ -1364,7 +1601,7 @@ export class HomePanel extends DashboardPanel {
     }
     const e2eMsDataset = {
       label: 'Routed Latency',
-      data: this.clusterThroughputHistory.map((pt) => ({
+      data: clusterThroughputHistory.map((pt) => ({
         x: pt.t,
         y: typeof pt.e2eMs === 'number' && Number.isFinite(pt.e2eMs) ? pt.e2eMs : null,
       })),
@@ -1383,7 +1620,7 @@ export class HomePanel extends DashboardPanel {
       const typeModel = normalizeVectorSeriesLabelForKey(key, this.clusterSeriesLabels.get(key))
       return {
         label: `Inference Latency (${typeModel})`,
-        data: this.clusterThroughputHistory.map((pt) => {
+        data: clusterThroughputHistory.map((pt) => {
           const y = pt.byKey.get(key)
           return {
             x: pt.t,
@@ -1409,10 +1646,23 @@ export class HomePanel extends DashboardPanel {
     const { grid: gridColor, tick: tickColor } = readClusterChartThemeColors()
     const chartFont = readClusterChartFont()
 
-    const legendItems = datasets.map((ds) => ({
-      color: String(ds.borderColor ?? ds.backgroundColor ?? '#888'),
-      ...clusterChartLegendParts(String(ds.label ?? ''), ds.data as Array<{ y?: number | null }>),
-    }))
+    const legendItems = [
+      {
+        color: avgLineColor,
+        ...clusterChartLegendMsValue('Inference Latency', aggLive.globalAvgMs),
+      },
+      {
+        color: e2eLineColor,
+        ...clusterChartLegendMsValue('Routed Latency', aggLive.globalE2eMs),
+      },
+      ...seriesKeys.map((key, i) => {
+        const typeModel = normalizeVectorSeriesLabelForKey(key, this.clusterSeriesLabels.get(key))
+        return {
+          color: batchColors[i]!,
+          ...clusterChartLegendMsValue(`Inference Latency (${typeModel})`, liveByKey.get(key) ?? null),
+        }
+      }),
+    ]
     renderClusterChartHtmlLegend($legendUl, legendItems, tickColor)
 
     if (this.clusterThroughputChart == null) {
@@ -1561,7 +1811,7 @@ export class HomePanel extends DashboardPanel {
     }
   }
 
-  private refreshApiMetricsChart($root: JQuery<HTMLElement>, view: Metrics | null): void {
+  private refreshApiMetricsChart($root: JQuery<HTMLElement>): void {
     const $reqCanvas = $root.find('[data-home-api-requests-metrics-chart]')
     const reqCanvas = $reqCanvas.get(0) as HTMLCanvasElement | undefined
     const $reqWrap = $root.find('[data-home-api-requests-chart-wrap]')
@@ -1587,31 +1837,25 @@ export class HomePanel extends DashboardPanel {
       return
     }
 
-    const agg = aggregateApiChartMetrics(view)
     const now = Date.now()
     const cutoff = now - CLUSTER_CHART_HISTORY_MS
+    const liveView = this.metricsChartLiveView
+    const aggLive = aggregateApiChartMetrics(liveView, HOME_CHART_METRICS_LIVE_WINDOW_SEC)
+    const livePoint: ApiMetricsHistoryPoint | null =
+      liveView != null
+        ? {
+            t: now,
+            allRps: aggLive.allRps,
+            allMs: aggLive.allMs,
+            searchRps: aggLive.searchRps,
+            searchMs: aggLive.searchMs,
+            ingestRps: aggLive.ingestRps,
+            ingestMs: aggLive.ingestMs,
+            errRps: aggLive.errRps,
+          }
+        : null
 
-    if (this.apiMetricsHistory.length === 0) {
-      const restored = loadApiMetricsHistoryFromStorage(cutoff)
-      if (restored != null && restored.length > 0) {
-        this.apiMetricsHistory = restored
-      }
-    }
-
-    this.apiMetricsHistory.push({
-      t: now,
-      allRps: agg.allRps,
-      allMs: agg.allMs,
-      searchRps: agg.searchRps,
-      searchMs: agg.searchMs,
-      ingestRps: agg.ingestRps,
-      ingestMs: agg.ingestMs,
-      errRps: agg.errRps,
-    })
-    while (this.apiMetricsHistory.length > 0 && this.apiMetricsHistory[0]!.t < cutoff) {
-      this.apiMetricsHistory.shift()
-    }
-    saveApiMetricsHistoryToStorage(this.apiMetricsHistory)
+    const apiMetricsHistory = sortedApiChartPoints(this.apiChartBuckets, livePoint, cutoff, now)
 
     const yNum = (v: number | null) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
@@ -1621,7 +1865,7 @@ export class HomePanel extends DashboardPanel {
 
     const line = (label: string, color: string, pick: (pt: ApiMetricsHistoryPoint) => number | null) => ({
       label,
-      data: this.apiMetricsHistory.map((pt) => ({ x: pt.t, y: pick(pt) })),
+      data: apiMetricsHistory.map((pt) => ({ x: pt.t, y: pick(pt) })),
       borderColor: color,
       backgroundColor: color,
       borderWidth: 2,
@@ -1652,14 +1896,17 @@ export class HomePanel extends DashboardPanel {
     const { grid: gridColor, tick: tickColor } = readClusterChartThemeColors()
     const chartFont = readClusterChartFont()
 
-    const legendItemsRps = datasetsRps.map((ds) => ({
-      color: String(ds.borderColor ?? '#888'),
-      ...clusterApiChartLegendPartsRps(String(ds.label ?? ''), ds.data as Array<{ y?: number | null }>),
-    }))
-    const legendItemsMs = datasetsMs.map((ds) => ({
-      color: String(ds.borderColor ?? '#888'),
-      ...clusterChartLegendParts(String(ds.label ?? ''), ds.data as Array<{ y?: number | null }>),
-    }))
+    const legendItemsRps = [
+      { color: apiGroupColors[0]!, ...clusterChartLegendRpsValue('Reqs', aggLive.allRps) },
+      { color: apiGroupColors[1]!, ...clusterChartLegendRpsValue('Search', aggLive.searchRps) },
+      { color: apiGroupColors[2]!, ...clusterChartLegendRpsValue('Doc Uploads', aggLive.ingestRps) },
+      { color: apiErrorsReqColor, ...clusterChartLegendRpsValue('Err/s', aggLive.errRps) },
+    ]
+    const legendItemsMs = [
+      { color: apiGroupColors[0]!, ...clusterChartLegendMsValue('Reqs', aggLive.allMs) },
+      { color: apiGroupColors[1]!, ...clusterChartLegendMsValue('Search', aggLive.searchMs) },
+      { color: apiGroupColors[2]!, ...clusterChartLegendMsValue('Doc Uploads', aggLive.ingestMs) },
+    ]
     renderClusterChartHtmlLegend($reqLegendUl, legendItemsRps, tickColor)
     renderClusterChartHtmlLegend($latLegendUl, legendItemsMs, tickColor)
 
@@ -1734,6 +1981,7 @@ export class HomePanel extends DashboardPanel {
     $indexingPanel.prop('hidden', !showIndexing)
     $encPanel.prop('hidden', !showEncoder)
     window.requestAnimationFrame(() => {
+      this.refreshVisibleHomeCharts($root)
       if (showApi) {
         this.apiMetricsRequestsChart?.resize()
         this.apiMetricsLatenciesChart?.resize()
@@ -1804,21 +2052,94 @@ export class HomePanel extends DashboardPanel {
     }
   }
 
+  private refreshVisibleHomeCharts($root: JQuery<HTMLElement>): void {
+    const $apiPanel = $root.find('[data-home-metrics-tab-panel="api"]')
+    const $encPanel = $root.find('[data-home-metrics-tab-panel="encoder"]')
+    if ($apiPanel.length && !$apiPanel.prop('hidden')) {
+      this.refreshApiMetricsChart($root)
+    }
+    if ($encPanel.length && !$encPanel.prop('hidden')) {
+      this.refreshClusterThroughputChart($root)
+    }
+  }
+
+  private async bootstrapHomeChartTrends(
+    api: AmgixApi,
+    $root: JQuery<HTMLElement>,
+    tab: HomeMetricsTabId,
+    generation: number,
+  ): Promise<void> {
+    if (tab === 'indexing') {
+      return
+    }
+    const until = new Date()
+    const since = new Date(until.getTime() - CLUSTER_CHART_HISTORY_MS)
+    const keys = tab === 'api' ? [...API_CHART_TREND_KEYS] : [...ENCODER_CHART_TREND_KEYS]
+    try {
+      const trends = await api.metricsTrends({
+        since,
+        until,
+        resolution: HOME_CHART_TREND_RESOLUTION,
+        keys,
+      })
+      if (generation !== this.readyPollGeneration) {
+        return
+      }
+      const cutoffSec = bucketStartCutoffSec(CLUSTER_CHART_HISTORY_MS, Date.now())
+      if (tab === 'api') {
+        const m = apiMetricTrendsToPointsByBucketStart(trends, HOME_CHART_METRICS_LIVE_WINDOW_SEC)
+        for (const [k, v] of m) {
+          this.apiChartBuckets.set(k, v)
+        }
+        trimChartBucketMap(this.apiChartBuckets, cutoffSec)
+      } else {
+        const m = encoderMetricTrendsToPointsByBucketStart(trends, HOME_CHART_METRICS_LIVE_WINDOW_SEC)
+        for (const [k, v] of m) {
+          this.encoderChartBuckets.set(k, v)
+        }
+        trimChartBucketMap(this.encoderChartBuckets, cutoffSec)
+      }
+      this.refreshVisibleHomeCharts($root)
+    } catch {
+      // Charts stay empty or stale until the next poll or tab revisit.
+    }
+  }
+
+  private async ensureChartTrendsForActiveTab(api: AmgixApi, $root: JQuery<HTMLElement>): Promise<void> {
+    const generation = this.readyPollGeneration
+    const tab = readHomeMetricsTabFromDom($root)
+    if (tab === 'indexing') {
+      return
+    }
+    if (tab === 'api' && this.apiChartBuckets.size === 0) {
+      await this.bootstrapHomeChartTrends(api, $root, 'api', generation)
+    } else if (tab === 'encoder' && this.encoderChartBuckets.size === 0) {
+      await this.bootstrapHomeChartTrends(api, $root, 'encoder', generation)
+    }
+  }
+
   private applyClusterTablesAndChartsToDom($root: JQuery<HTMLElement>, view: Metrics | null): void {
     const CLUSTER_API_COLSPAN = 13
     const CLUSTER_ENCODER_COLSPAN = 10
     const $apiTbody = $root.find('[data-home-api-cluster-tbody]')
     const $encTbody = $root.find('[data-home-cluster-tbody]')
-    if (!$apiTbody.length && !$encTbody.length) {
-      this.refreshApiMetricsChart($root, view)
-      this.refreshClusterThroughputChart($root, view)
+    const $apiPanel = $root.find('[data-home-metrics-tab-panel="api"]')
+    const $encPanel = $root.find('[data-home-metrics-tab-panel="encoder"]')
+    const showApiTable = $apiTbody.length > 0 && $apiPanel.length > 0 && !$apiPanel.prop('hidden')
+    const showEncTable = $encTbody.length > 0 && $encPanel.length > 0 && !$encPanel.prop('hidden')
+    if (!showApiTable && !showEncTable) {
+      this.refreshVisibleHomeCharts($root)
       return
     }
-    $apiTbody.empty()
-    $encTbody.empty()
+    if (showApiTable) {
+      $apiTbody.empty()
+    }
+    if (showEncTable) {
+      $encTbody.empty()
+    }
     const nodes = view?.nodes
     if (view == null || nodes === undefined) {
-      if ($apiTbody.length) {
+      if (showApiTable) {
         $apiTbody.append(
           $('<tr>').append(
             $('<td>', {
@@ -1829,7 +2150,7 @@ export class HomePanel extends DashboardPanel {
           ),
         )
       }
-      if ($encTbody.length) {
+      if (showEncTable) {
         $encTbody.append(
           $('<tr>').append(
             $('<td>', {
@@ -1840,12 +2161,11 @@ export class HomePanel extends DashboardPanel {
           ),
         )
       }
-      this.refreshApiMetricsChart($root, view)
-      this.refreshClusterThroughputChart($root, view)
+      this.refreshVisibleHomeCharts($root)
       return
     }
     if (Object.keys(nodes).length === 0) {
-      if ($apiTbody.length) {
+      if (showApiTable) {
         $apiTbody.append(
           $('<tr>').append(
             $('<td>', {
@@ -1856,7 +2176,7 @@ export class HomePanel extends DashboardPanel {
           ),
         )
       }
-      if ($encTbody.length) {
+      if (showEncTable) {
         $encTbody.append(
           $('<tr>').append(
             $('<td>', {
@@ -1867,12 +2187,11 @@ export class HomePanel extends DashboardPanel {
           ),
         )
       }
-      this.refreshApiMetricsChart($root, view)
-      this.refreshClusterThroughputChart($root, view)
+      this.refreshVisibleHomeCharts($root)
       return
     }
     const { api: apiEntries, encoders: encoderEntries } = partitionApiAndEncoderNodes(nodes)
-    if ($apiTbody.length) {
+    if (showApiTable) {
       if (apiEntries.length === 0) {
         $apiTbody.append(
           $('<tr>').append(
@@ -1912,7 +2231,7 @@ export class HomePanel extends DashboardPanel {
         }
       }
     }
-    if ($encTbody.length) {
+    if (showEncTable) {
       if (encoderEntries.length === 0) {
         $encTbody.append(
           $('<tr>').append(
@@ -1937,7 +2256,7 @@ export class HomePanel extends DashboardPanel {
               $('<td>', { class: 'dashboard-home-v', text: formatEncoderRoleCell(node.role) }),
               $nodeTd,
               $('<td>', { class: 'dashboard-home-v', text: formatLoadModelsCell(node) }),
-              $('<td>', { class: 'dashboard-home-v', text: nodeMetaBool(node, 'at_capacity') ? 'Yes' : 'No' }),
+              $('<td>', { class: 'dashboard-home-v', text: formatAtCapacityCell(node) }),
               $('<td>', { class: 'dashboard-home-v', text: formatGpuStatus(node) }),
               $('<td>', { class: 'dashboard-home-v', text: m.requests }),
               $('<td>', { class: 'dashboard-home-v', text: m.rps }),
@@ -1949,8 +2268,7 @@ export class HomePanel extends DashboardPanel {
         }
       }
     }
-    this.refreshApiMetricsChart($root, view)
-    this.refreshClusterThroughputChart($root, view)
+    this.refreshVisibleHomeCharts($root)
   }
 
   private applyReadinessToDom($root: JQuery<HTMLElement>, ready: ReadyResponse): void {
@@ -1974,15 +2292,56 @@ export class HomePanel extends DashboardPanel {
     if ($('#panel-home').prop('hidden')) {
       return
     }
+    const tab = readHomeMetricsTabFromDom($root)
     let metrics: Metrics | null = null
     try {
-      metrics = await api.metricsCurrent()
+      metrics = await api.metricsCurrent({
+        window: HOME_CHART_METRICS_LIVE_WINDOW_SEC,
+        keys: homeMetricsCurrentKeys(tab),
+      })
     } catch {
       metrics = null
     }
     if (generation !== this.readyPollGeneration) {
       return
     }
+    this.metricsChartLiveView = metrics
+
+    if (tab === 'api' || tab === 'encoder') {
+      const until = new Date()
+      const since = new Date(until.getTime() - CLUSTER_CHART_PATCH_MS)
+      const keys = tab === 'api' ? [...API_CHART_TREND_KEYS] : [...ENCODER_CHART_TREND_KEYS]
+      try {
+        const trends = await api.metricsTrends({
+          since,
+          until,
+          resolution: HOME_CHART_TREND_RESOLUTION,
+          keys,
+        })
+        if (generation !== this.readyPollGeneration) {
+          return
+        }
+        const cutoffSec = bucketStartCutoffSec(CLUSTER_CHART_HISTORY_MS, Date.now())
+        if (tab === 'api') {
+          const patch = apiMetricTrendsToPointsByBucketStart(trends, HOME_CHART_METRICS_LIVE_WINDOW_SEC)
+          for (const [k, v] of patch) {
+            this.apiChartBuckets.set(k, v)
+          }
+          trimChartBucketMap(this.apiChartBuckets, cutoffSec)
+        } else {
+          const patch = encoderMetricTrendsToPointsByBucketStart(trends, HOME_CHART_METRICS_LIVE_WINDOW_SEC)
+          for (const [k, v] of patch) {
+            this.encoderChartBuckets.set(k, v)
+          }
+          trimChartBucketMap(this.encoderChartBuckets, cutoffSec)
+        }
+      } catch {
+        if (generation !== this.readyPollGeneration) {
+          return
+        }
+      }
+    }
+
     this.applyClusterViewToDom($root, metrics)
     try {
       const ready = await fetchReadiness()
@@ -2003,14 +2362,21 @@ export class HomePanel extends DashboardPanel {
     $root.empty().append($('<p>', { class: 'dashboard-home-loading', text: 'Loading…' }))
 
     try {
+      const route = parseDashboardRouteHash(window.location.hash.replace(/^#/, '').trim().toLowerCase())
       const [info, ready, metrics] = await Promise.all([
         api.systemInfo(),
         fetchReadiness(),
-        api.metricsCurrent().catch((): null => null),
+        api
+          .metricsCurrent({
+            window: HOME_CHART_METRICS_LIVE_WINDOW_SEC,
+            keys: homeMetricsCurrentKeys(route.homeMetricsTab),
+          })
+          .catch((): null => null),
       ])
       if (generation !== this.readyPollGeneration) {
         return
       }
+      this.metricsChartLiveView = metrics
       hideDashboardError()
 
       const dbSummary = formatDatabaseSummary(info)
@@ -2114,7 +2480,7 @@ export class HomePanel extends DashboardPanel {
           }).append(
             $('<canvas>', {
               attr: { 'data-home-cluster-throughput-chart': '' },
-              'aria-label': `Cluster inference and routed latency over time, per document, ${CLUSTER_METRICS_WINDOW_SEC}s rolling window`,
+              'aria-label': `Cluster inference and routed latency over time, per document; 1-minute history and ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s live snapshot`,
             }),
           ),
           $('<ul>', {
@@ -2183,7 +2549,7 @@ export class HomePanel extends DashboardPanel {
             }).append(
               $('<canvas>', {
                 attr: { 'data-home-api-requests-metrics-chart': '' },
-                'aria-label': `Cluster API request rate, ${CLUSTER_METRICS_WINDOW_SEC}s rolling window`,
+                'aria-label': `Cluster API request rate; 1-minute history and ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s live snapshot`,
               }),
             ),
             $('<ul>', {
@@ -2218,7 +2584,7 @@ export class HomePanel extends DashboardPanel {
             }).append(
               $('<canvas>', {
                 attr: { 'data-home-api-latencies-metrics-chart': '' },
-                'aria-label': `Cluster API mean latency, ${CLUSTER_METRICS_WINDOW_SEC}s rolling window`,
+                'aria-label': `Cluster API mean latency; 1-minute history and ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s live snapshot`,
               }),
             ),
             $('<ul>', {
@@ -2384,9 +2750,9 @@ export class HomePanel extends DashboardPanel {
       })
 
       $root.empty().append($topBand, $metricsShell)
-      const route = parseDashboardRouteHash(window.location.hash.replace(/^#/, '').trim().toLowerCase())
       this.activateHomeMetricsTab($root, route.homeMetricsTab)
       this.applyClusterViewToDom($root, metrics)
+      void this.bootstrapHomeChartTrends(api, $root, route.homeMetricsTab, generation)
 
       this.readyPollTimer = window.setInterval(() => {
         void this.pollHomeRefresh(api, $root, generation)

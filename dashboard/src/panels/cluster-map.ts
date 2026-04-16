@@ -8,11 +8,21 @@ import { DashboardPanel } from './panel-base'
 nodeHtmlLabel(cytoscape)
 
 const CLUSTER_MAP_POLL_MS = 10_000
+
+/** Must match the `window` passed to GET /metrics/current for this panel. */
+const CLUSTER_MAP_METRICS_CURRENT_KEYS = [
+  'api_requests',
+  'api_request_ms',
+  'api_error_4xx',
+  'api_error_5xx',
+  'embed_passages',
+  'embed_inference_ms',
+] as const
 const CLUSTER_MAP_ZOOM_STEP = 1.15
 const CLUSTER_MAP_MIN_SCALE = 0.5
 const CLUSTER_MAP_MAX_SCALE = 4
 const CLUSTER_MAP_FIT_PADDING = 40
-const CLUSTER_MAP_METRIC_WINDOW_SEC = 30
+const CLUSTER_MAP_METRIC_WINDOW_SEC = 60
 
 const CLUSTER_MAP_BROKER_NODE_ID = 'broker_rmq'
 const CLUSTER_MAP_DB_NODE_ID = 'cluster_db'
@@ -1252,7 +1262,12 @@ export class ClusterMapPanel extends DashboardPanel {
       return
     }
 
-    const metrics = await api.metricsCurrent().catch((): null => null)
+    const metrics = await api
+      .metricsCurrent({
+        window: CLUSTER_MAP_METRIC_WINDOW_SEC,
+        keys: [...CLUSTER_MAP_METRICS_CURRENT_KEYS],
+      })
+      .catch((): null => null)
     if (generation !== this.pollGeneration || $('#panel-cluster-map').prop('hidden')) {
       return
     }

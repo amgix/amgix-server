@@ -9,6 +9,8 @@ class MetricsPayload(BaseModel):
     probe: bool
     query_view: bool = False
     query_window: Optional[int] = None
+    """If set (with query_view), only series whose key is in this list are included in the response."""
+    query_keys: Optional[List[str]] = None
     hostname: str
     source: Optional[str] = None
     role: Optional[str] = None

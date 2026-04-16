@@ -5,7 +5,7 @@ import logging
 import asyncio
 import pathlib
 from datetime import datetime
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Optional
 from contextlib import asynccontextmanager
 import uuid
 
@@ -23,6 +23,8 @@ from src.core.common.lock_manager import LockService, LockClient
 from src.core.common.logging_config import configure_logging
 from src.core.models.cluster import Metrics, MetricTrend, MetricsBucket, MetricsPayload
 from src.core.common.metrics_definitions import METRIC_DEFINITIONS, MetricKey
+
+_VALID_METRIC_KEY_STR = {k.value for k in MetricKey}
 from src.core.models.document import (
     CollectionStatsResponse,
     Document,
@@ -340,11 +342,32 @@ async def readiness_check() -> ReadyResponse:
 
 
 @shared_router.get("/metrics/current", operation_id="metrics_current")
-async def metrics_current(window: Literal[30, 60] = 30) -> Metrics:
+async def metrics_current(
+    window: int = Query(
+        default=30,
+        description="Aggregation window in seconds — 30 or 60.",
+    ),
+    keys: Optional[List[str]] = Query(
+        default=None,
+        description="Restrict returned metric series to these keys. Omit for all keys.",
+    ),
+) -> Metrics:
     """Return the current metrics state for all nodes over the given window (seconds)."""
+    if window not in (30, 60):
+        raise HTTPException(status_code=422, detail="window must be 30 or 60")
+    if keys:
+        unknown = [k for k in keys if k not in _VALID_METRIC_KEY_STR]
+        if unknown:
+            raise HTTPException(status_code=422, detail=f"Unknown metric keys: {unknown}")
     return await _bunny_talk.rpc(
         api_metrics_module.api_metrics.leader_queue,
-        payload=MetricsPayload(probe=False, query_view=True, query_window=window, hostname=HOSTNAME),
+        payload=MetricsPayload(
+            probe=False,
+            query_view=True,
+            query_window=window,
+            query_keys=keys,
+            hostname=HOSTNAME,
+        ),
         return_type=Metrics,
         timeout=2.0,
     )
@@ -354,7 +377,10 @@ async def metrics_current(window: Literal[30, 60] = 30) -> Metrics:
 async def metrics_trends(
     since: datetime,
     until: datetime,
-    resolution: Literal[60, 300] = 60,
+    resolution: int = Query(
+        default=60,
+        description="Bucket size in seconds — 60 for 1-minute, 300 for 5-minute.",
+    ),
     keys: Optional[List[str]] = Query(default=None),
 ) -> List[MetricTrend]:
     """Return historical metric buckets for the given time range and resolution.
@@ -365,6 +391,8 @@ async def metrics_trends(
         resolution: Bucket size in seconds — 60 for 1-minute, 300 for 5-minute.
         keys: One or more metric keys to return. Omit to return all keys.
     """
+    if resolution not in (60, 300):
+        raise HTTPException(status_code=422, detail="resolution must be 60 or 300")
     if since.tzinfo is None or until.tzinfo is None:
         raise HTTPException(status_code=422, detail="'since' and 'until' must include a timezone (e.g. 2024-01-01T00:00:00Z)")
 
