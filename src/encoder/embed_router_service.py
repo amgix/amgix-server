@@ -57,6 +57,8 @@ METRIC_WINDOWS = [10, 30, 60]
 CLUSTER_VIEW_WINDOWS = {30, 60}
 # How long a loaded model with zero traffic is kept before being unloaded
 MODEL_IDLE_GRACE_SECONDS = 300
+NODE_META_MODEL_LAST_USED = "model_last_used"
+NODE_META_LAST_USED_AT = "last_used_at"
 METRICS_LOOP_INTERVAL_SECONDS = 5
 METRICS_NODE_EXPIRY_SECONDS = 30
 TARGET_AVAILABLITY_PCT = 5 # percentage of total capacity
@@ -143,6 +145,19 @@ def _serialize_loaded_models_meta(loaded_models: List[Tuple[List[str], float]]) 
     out.sort(key=lambda entry: str(entry.get("label", "")))
     return out
 
+
+def _serialize_model_last_used_meta(last_used: List[Tuple[Tuple[str, ...], float]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for model_key, last_used_at in last_used:
+        out.append(
+            {
+                "model_key": list(model_key),
+                NODE_META_LAST_USED_AT: float(last_used_at),
+            }
+        )
+    out.sort(key=lambda entry: tuple(entry["model_key"]))
+    return out
+
 class EmbedRouterService(EncoderBase):
     """Router for embedding documents."""
 
@@ -180,9 +195,11 @@ class EmbedRouterService(EncoderBase):
             role=AMGIX_ENCODER_ROLE,
             windows=METRIC_WINDOWS,
             database=database,
+            report_interval_s=METRICS_LOOP_INTERVAL_SECONDS,
             leader_loop_interval_s=METRICS_LOOP_INTERVAL_SECONDS,
             cluster_view_windows=CLUSTER_VIEW_WINDOWS,
             metrics_node_expiry_seconds=METRICS_NODE_EXPIRY_SECONDS,
+            last_used_ttl_seconds=MODEL_IDLE_GRACE_SECONDS,
         )
         self.model_rebalancer = ModelRebalancer(
             bunny_talk=self.bunny_talk,
@@ -229,6 +246,7 @@ class EmbedRouterService(EncoderBase):
         await self._listen_on_open_queues(start_listening=True)
 
         self.metrics.publish_meta(await self._metrics_meta())
+        self.metrics.start_reporting()
         self.metrics.start_leader_loop()
         self._rebalance_task = asyncio.create_task(self._rebalance_loop())
         self._metrics_meta_task = asyncio.create_task(self._metrics_meta_loop())
@@ -376,6 +394,7 @@ class EmbedRouterService(EncoderBase):
 
         n_docs = len(docs)
         inference_ms = (time.monotonic_ns() - start_ns) / 1_000_000.0
+        self.metrics.mark_last_used(model_key)
         self.metrics.record(MetricKey.EMBED_BATCHES, dims=model_key)
         self.metrics.record(MetricKey.EMBED_PASSAGES, n_docs, dims=model_key)
         self.metrics.record(MetricKey.EMBED_INFERENCE_MS, inference_ms, dims=model_key, n=1)
@@ -652,6 +671,7 @@ class EmbedRouterService(EncoderBase):
                 (list(model_key), load_timestamp)
                 for model_key, (queue, consumer_tag, load_timestamp) in self.local_models.items()
             ]
+        model_last_used = _serialize_model_last_used_meta(self.metrics.last_used_snapshot())
 
         return {
             "load_models": self.load_models,
@@ -663,4 +683,5 @@ class EmbedRouterService(EncoderBase):
             "gpu_support": PYNVML_AVAILABLE,
             "gpu_available": GPU_HANDLE is not None,
             "loaded_models": _serialize_loaded_models_meta(loaded_models),
+            NODE_META_MODEL_LAST_USED: model_last_used,
         }

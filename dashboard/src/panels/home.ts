@@ -176,6 +176,31 @@ function clusterErrPerSecColumnHelpText(): string {
   return `Failed embed requests per second, originating on this node, over the last ${w}s.`
 }
 
+function clusterByModelBatchesHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Embed batches that originated on any encoder node in the last ${w}s, summed by vector type and model.`
+}
+
+function clusterByModelRateHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Passages per second from originating embed traffic in the last ${w}s, summed by type and model across encoder nodes.`
+}
+
+function clusterByModelInferMsHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Mean local inference ms per passage in the last ${w}s, weighted across encoder nodes for each type and model.`
+}
+
+function clusterByModelRoutedMsHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Mean routed (origin) ms per passage in the last ${w}s, weighted across encoder nodes for each type and model.`
+}
+
+function clusterByModelErrHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Failed embed requests per second in the last ${w}s, summed by type and model across encoder nodes.`
+}
+
 function clusterChartHelpText(): string {
   return `Inference and routed latency per passage. History uses 1-minute buckets from the server; the right edge is a ${HOME_CHART_METRICS_LIVE_WINDOW_SEC}s rolling snapshot.`
 }
@@ -327,6 +352,222 @@ function formatAtCapacityCell(node: NodeView): string {
     return ''
   }
   return nodeMetaBool(node, 'at_capacity') ? 'Yes' : 'No'
+}
+
+const LEGACY_CHART_TYPE_MODEL_PREFIX = /^(dense_model|sparse_model):\s*(.+)$/i
+
+const EMBED_KEYS_FOR_BY_MODEL_TABLE = new Set<string>([
+  'embed_batches_origin',
+  'embed_passages_origin',
+  'embed_inference_ms',
+  'embed_passages',
+  'embed_inference_origin_ms',
+  'embed_inference_origin_errors',
+])
+
+function displayEmbeddingModelForTable(raw: string): string {
+  let t = raw.trim()
+  const legacy = LEGACY_CHART_TYPE_MODEL_PREFIX.exec(t)
+  if (legacy) {
+    t = legacy[2]!.trim()
+  }
+  if (t === '') {
+    return ''
+  }
+  const slash = t.lastIndexOf('/')
+  return slash >= 0 ? t.slice(slash + 1).trim() : t
+}
+
+function groupingKeyForEmbeddingByModelSeries(s: NodeMetricSeries): string | null {
+  if (!EMBED_KEYS_FOR_BY_MODEL_TABLE.has(s.key)) {
+    return null
+  }
+  const d = s.dims ?? []
+  const rawType = (d[0] ?? '').trim()
+  if (rawType === '') {
+    return null
+  }
+  const modelDisp = displayEmbeddingModelForTable(d[1] ?? '')
+  return `${rawType}\0${modelDisp}`
+}
+
+function rowTypeModelFromEmbeddingGroupKey(key: string): { type: string; model: string } {
+  const i = key.indexOf('\0')
+  if (i < 0) {
+    return { type: key, model: '' }
+  }
+  return { type: key.slice(0, i), model: key.slice(i + 1) }
+}
+
+function formatVectorMetricsTypeDisplay(rawType: string): string {
+  if (rawType === 'dense_model') {
+    return 'dense'
+  }
+  if (rawType === 'sparse_model') {
+    return 'sparse'
+  }
+  if (rawType === 'dense_custom') {
+    return 'dense (custom)'
+  }
+  if (rawType === 'sparse_custom') {
+    return 'sparse (custom)'
+  }
+  return rawType
+}
+
+type EmbeddingByModelAgg = {
+  totalBatches: number
+  sumPassagesOrigin: number
+  totalInferenceMs: number
+  totalPassages: number
+  totalOriginMs: number
+  totalOriginPassages: number
+  sumErrors: number
+  sawAny: boolean
+}
+
+function aggregateEmbeddingMetricsByTypeModel(view: Metrics | null): Map<string, EmbeddingByModelAgg> {
+  const out = new Map<string, EmbeddingByModelAgg>()
+  if (view?.nodes == null) {
+    return out
+  }
+  const bump = (gk: string): EmbeddingByModelAgg => {
+    let a = out.get(gk)
+    if (a == null) {
+      a = {
+        totalBatches: 0,
+        sumPassagesOrigin: 0,
+        totalInferenceMs: 0,
+        totalPassages: 0,
+        totalOriginMs: 0,
+        totalOriginPassages: 0,
+        sumErrors: 0,
+        sawAny: false,
+      }
+      out.set(gk, a)
+    }
+    return a
+  }
+  for (const node of Object.values(view.nodes)) {
+    if (node.role === 'api') {
+      continue
+    }
+    for (const s of node.metrics ?? []) {
+      const gk = groupingKeyForEmbeddingByModelSeries(s)
+      if (gk == null) {
+        continue
+      }
+      const ws = getNodeWindowSample(s, CLUSTER_METRICS_WINDOW_SEC)
+      if (ws == null) {
+        continue
+      }
+      const v = Number(ws.value)
+      const name = s.key
+      const a = bump(gk)
+      if (name === 'embed_batches_origin') {
+        a.sawAny = true
+        if (Number.isFinite(v)) {
+          a.totalBatches += Math.trunc(v)
+        }
+      } else if (name === 'embed_passages_origin') {
+        a.sawAny = true
+        if (Number.isFinite(v)) {
+          a.sumPassagesOrigin += v
+          a.totalOriginPassages += v
+        }
+      } else if (name === 'embed_inference_ms') {
+        if (Number.isFinite(v)) {
+          a.sawAny = true
+          a.totalInferenceMs += v
+        }
+      } else if (name === 'embed_passages') {
+        if (Number.isFinite(v)) {
+          a.totalPassages += v
+        }
+      } else if (name === 'embed_inference_origin_ms') {
+        if (Number.isFinite(v)) {
+          a.sawAny = true
+          a.totalOriginMs += v
+        }
+      } else if (name === 'embed_inference_origin_errors') {
+        a.sawAny = true
+        if (Number.isFinite(v)) {
+          a.sumErrors += v
+        }
+      }
+    }
+  }
+  return out
+}
+
+function isDenseOrSparseVectorType(t: string): boolean {
+  const s = t.toLowerCase()
+  return s.includes('dense') || s.includes('sparse')
+}
+
+function compareVectorMetricsRows(
+  a: { typeRaw: string; model: string },
+  b: { typeRaw: string; model: string },
+): number {
+  const aNo = a.model.trim() === ''
+  const bNo = b.model.trim() === ''
+  if (aNo !== bNo) {
+    return aNo ? -1 : 1
+  }
+  if (aNo) {
+    return a.typeRaw.localeCompare(b.typeRaw, undefined, { sensitivity: 'base' })
+  }
+  const aDs = isDenseOrSparseVectorType(a.typeRaw)
+  const bDs = isDenseOrSparseVectorType(b.typeRaw)
+  if (aDs && bDs) {
+    const byModel = a.model.localeCompare(b.model, undefined, { sensitivity: 'base' })
+    if (byModel !== 0) {
+      return byModel
+    }
+    return a.typeRaw.localeCompare(b.typeRaw, undefined, { sensitivity: 'base' })
+  }
+  if (aDs !== bDs) {
+    return aDs ? -1 : 1
+  }
+  const byType = a.typeRaw.localeCompare(b.typeRaw, undefined, { sensitivity: 'base' })
+  if (byType !== 0) {
+    return byType
+  }
+  return a.model.localeCompare(b.model, undefined, { sensitivity: 'base' })
+}
+
+function formatEmbeddingByModelTableRows(
+  view: Metrics | null,
+): Array<{
+  type: string
+  typeRaw: string
+  model: string
+  requests: string
+  rps: string
+  avgMs: string
+  e2eAvgMs: string
+  errPerSec: string
+}> {
+  const m = aggregateEmbeddingMetricsByTypeModel(view)
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  const rows = [...m.entries()]
+    .filter(([, a]) => a.sawAny)
+    .map(([gk, a]) => {
+      const { type: typeRaw, model } = rowTypeModelFromEmbeddingGroupKey(gk)
+      const errPerSec = a.sumErrors / w
+      return {
+        type: formatVectorMetricsTypeDisplay(typeRaw),
+        typeRaw,
+        model,
+        requests: String(a.totalBatches),
+        rps: formatClusterRpsCell(a.sumPassagesOrigin / w),
+        avgMs: a.totalPassages > 0 ? formatClusterAvgMsCell(a.totalInferenceMs / a.totalPassages) : '',
+        e2eAvgMs: a.totalOriginPassages > 0 ? formatClusterAvgMsCell(a.totalOriginMs / a.totalOriginPassages) : '',
+        errPerSec: formatClusterRpsCell(errPerSec),
+      }
+    })
+  rows.sort(compareVectorMetricsRows)
+  return rows
 }
 
 function formatGpuStatus(node: NodeView): string {
@@ -563,8 +804,6 @@ function formatEmbeddingMetricsCells(node: NodeView): {
     errPerSec: formatClusterRpsCell(errPerSec),
   }
 }
-
-const LEGACY_CHART_TYPE_MODEL_PREFIX = /^(dense_model|sparse_model):\s*(.+)$/i
 
 /** Human-readable series name from merge key `type\\0model\\0revision`. */
 function labelFromVectorMetricsMergeKey(key: string): string {
@@ -2121,8 +2360,10 @@ export class HomePanel extends DashboardPanel {
   private applyClusterTablesAndChartsToDom($root: JQuery<HTMLElement>, view: Metrics | null): void {
     const CLUSTER_API_COLSPAN = 13
     const CLUSTER_ENCODER_COLSPAN = 10
+    const CLUSTER_ENCODER_BY_MODEL_COLSPAN = 7
     const $apiTbody = $root.find('[data-home-api-cluster-tbody]')
     const $encTbody = $root.find('[data-home-cluster-tbody]')
+    const $byModelTbody = $root.find('[data-home-encoder-by-model-tbody]')
     const $apiPanel = $root.find('[data-home-metrics-tab-panel="api"]')
     const $encPanel = $root.find('[data-home-metrics-tab-panel="encoder"]')
     const showApiTable = $apiTbody.length > 0 && $apiPanel.length > 0 && !$apiPanel.prop('hidden')
@@ -2136,6 +2377,9 @@ export class HomePanel extends DashboardPanel {
     }
     if (showEncTable) {
       $encTbody.empty()
+      if ($byModelTbody.length) {
+        $byModelTbody.empty()
+      }
     }
     const nodes = view?.nodes
     if (view == null || nodes === undefined) {
@@ -2160,6 +2404,17 @@ export class HomePanel extends DashboardPanel {
             }),
           ),
         )
+        if ($byModelTbody.length) {
+          $byModelTbody.append(
+            $('<tr>').append(
+              $('<td>', {
+                class: 'dashboard-home-cluster-placeholder',
+                colspan: CLUSTER_ENCODER_BY_MODEL_COLSPAN,
+                text: 'Metrics unavailable.',
+              }),
+            ),
+          )
+        }
       }
       this.refreshVisibleHomeCharts($root)
       return
@@ -2186,6 +2441,17 @@ export class HomePanel extends DashboardPanel {
             }),
           ),
         )
+        if ($byModelTbody.length) {
+          $byModelTbody.append(
+            $('<tr>').append(
+              $('<td>', {
+                class: 'dashboard-home-cluster-placeholder',
+                colspan: CLUSTER_ENCODER_BY_MODEL_COLSPAN,
+                text: 'No encoder nodes reported.',
+              }),
+            ),
+          )
+        }
       }
       this.refreshVisibleHomeCharts($root)
       return
@@ -2265,6 +2531,46 @@ export class HomePanel extends DashboardPanel {
               $('<td>', { class: 'dashboard-home-v', text: m.errPerSec }),
             ),
           )
+        }
+      }
+    }
+    if (showEncTable && $byModelTbody.length) {
+      if (encoderEntries.length === 0) {
+        $byModelTbody.append(
+          $('<tr>').append(
+            $('<td>', {
+              class: 'dashboard-home-cluster-placeholder',
+              colspan: CLUSTER_ENCODER_BY_MODEL_COLSPAN,
+              text: 'No encoder nodes reported.',
+            }),
+          ),
+        )
+      } else {
+        const byModelRows = formatEmbeddingByModelTableRows(view)
+        if (byModelRows.length === 0) {
+          $byModelTbody.append(
+            $('<tr>').append(
+              $('<td>', {
+                class: 'dashboard-home-cluster-placeholder',
+                colspan: CLUSTER_ENCODER_BY_MODEL_COLSPAN,
+                text: 'No data.',
+              }),
+            ),
+          )
+        } else {
+          for (const r of byModelRows) {
+            $byModelTbody.append(
+              $('<tr>').append(
+                $('<td>', { class: 'dashboard-home-v', text: r.type }),
+                $('<td>', { class: 'dashboard-home-v', text: r.model }),
+                $('<td>', { class: 'dashboard-home-v', text: r.requests }),
+                $('<td>', { class: 'dashboard-home-v', text: r.rps }),
+                $('<td>', { class: 'dashboard-home-v', text: r.avgMs }),
+                $('<td>', { class: 'dashboard-home-v', text: r.e2eAvgMs }),
+                $('<td>', { class: 'dashboard-home-v', text: r.errPerSec }),
+              ),
+            )
+          }
         }
       }
     }
@@ -2625,6 +2931,33 @@ export class HomePanel extends DashboardPanel {
         class: 'dashboard-home-table dashboard-home-cluster-table dashboard-home-cluster-table--encoders',
       }).append($encoderClusterThead, $('<tbody>', { attr: { 'data-home-cluster-tbody': '' } }))
 
+      const CLUSTER_ENCODER_BY_MODEL_COLSPAN = 7
+      const $encoderByModelThead = $('<thead>')
+        .append(
+          $('<tr>').append(
+            $('<th>', {
+              class: 'dashboard-home-table-heading',
+              colspan: CLUSTER_ENCODER_BY_MODEL_COLSPAN,
+              text: 'Vector Metrics',
+            }),
+          ),
+        )
+        .append(
+          $('<tr>', { class: 'dashboard-home-cluster-colhead' }).append(
+            $('<th>', { text: 'Type' }),
+            $('<th>', { text: 'Model' }),
+            clusterThWithHelp('Batches', clusterByModelBatchesHelpText()),
+            clusterThWithHelp('Passages/s', clusterByModelRateHelpText()),
+            clusterThWithHelp('Infer ms/Passage', clusterByModelInferMsHelpText()),
+            clusterThWithHelp('Routed ms/Passage', clusterByModelRoutedMsHelpText()),
+            clusterThWithHelp('Err/s', clusterByModelErrHelpText()),
+          ),
+        )
+      const $encoderByModelTable = $('<table>', {
+        class:
+          'dashboard-home-table dashboard-home-cluster-table dashboard-home-cluster-table--encoder-by-model',
+      }).append($encoderByModelThead, $('<tbody>', { attr: { 'data-home-encoder-by-model-tbody': '' } }))
+
       const $btnApiMetrics = $('<button>', {
         type: 'button',
         role: 'tab',
@@ -2698,7 +3031,7 @@ export class HomePanel extends DashboardPanel {
           'data-home-metrics-tab-panel': 'encoder',
           'aria-labelledby': HOME_METRICS_TAB_ENCODER_ID,
         },
-      }).append($clusterChartSection, $encoderClusterTable)
+      }).append($clusterChartSection, $encoderClusterTable, $encoderByModelTable)
 
       $indexingMetricsPanel.prop('hidden', true)
       $encoderMetricsPanel.prop('hidden', true)

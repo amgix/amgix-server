@@ -424,8 +424,9 @@ body {
   border-collapse: collapse;
   font-size: 0.875rem;
   line-height: 1.25;
-  width: auto;
+  width: max-content;
   max-width: 100%;
+  box-sizing: border-box;
 }
 
 .dashboard-home-table .dashboard-home-table-heading {
@@ -676,11 +677,29 @@ body {
   margin-top: 1.25rem;
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 1.25rem;
+}
+
+.dashboard-home-cluster-tables > .dashboard-home-api-charts-row {
+  align-self: stretch;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.dashboard-home-cluster-tables > section.dashboard-home-cluster-metrics {
+  align-self: stretch;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .dashboard-home-cluster-tables .dashboard-home-cluster-table {
   margin-top: 0;
+  width: max-content;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .dashboard-home-cluster-table {
@@ -730,6 +749,12 @@ body {
 
 .dashboard-home-cluster-table--api .dashboard-home-cluster-colhead th:nth-child(n + 3),
 .dashboard-home-cluster-table--api tbody td:nth-child(n + 3) {
+  text-align: right;
+  padding: 0.15rem 0.5rem;
+}
+
+.dashboard-home-cluster-table--encoder-by-model .dashboard-home-cluster-colhead th:nth-child(n + 3),
+.dashboard-home-cluster-table--encoder-by-model tbody td:nth-child(n + 3) {
   text-align: right;
   padding: 0.15rem 0.5rem;
 }

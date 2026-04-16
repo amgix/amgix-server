@@ -68,6 +68,7 @@ class MetricsService:
         leader_loop_interval_s: float = _DEFAULT_LEADER_LOOP_INTERVAL_S,
         cluster_view_windows: Optional[set[int]] = None,
         metrics_node_expiry_seconds: int = _DEFAULT_METRICS_NODE_EXPIRY_SECONDS,
+        last_used_ttl_seconds: Optional[int] = None,
     ) -> None:
         if not amqp_url:
             raise ValueError("amqp_url must not be empty")
@@ -93,6 +94,7 @@ class MetricsService:
         self._report_interval_s = report_interval_s
         self._leader_loop_interval_s = leader_loop_interval_s
         self._metrics_node_expiry_seconds = metrics_node_expiry_seconds
+        self._last_used_ttl_seconds = last_used_ttl_seconds
 
         self._events: deque[_MetricEvent] = deque(maxlen=_DEFAULT_EVENT_BUFFER_MAXLEN)
 
@@ -100,9 +102,11 @@ class MetricsService:
         self._data: dict[_NormalizedKey, deque[MetricsBucket]] = {}
         self._agg: dict[_NormalizedKey, _Agg] = {}
         self._last_seen: dict[_NormalizedKey, float] = {}
+        self._last_used: dict[_NormalizedKey, float] = {}
         self._cluster_payloads: Dict[str, MetricsPayload] = {}
         self._cluster_view: Dict[str, NodeView] = {}
         self._cluster_meta: Dict[str, Dict[str, Dict[str, Any]]] = {}  # hostname -> source -> meta
+        self._cluster_series: Dict[str, Dict[str, List[NodeMetricSeries]]] = {}  # hostname -> source -> series
         self._published_meta: Dict[str, Any] = {}
         self._is_leader = False
 
@@ -137,6 +141,18 @@ class MetricsService:
     def publish_meta(self, meta: Dict[str, Any]) -> None:
         with self._state_lock:
             self._published_meta = dict(meta)
+
+    def mark_last_used(self, dims: MetricDims) -> None:
+        now = time.time()
+        nk = _normalize_metric("last_used", dims)
+        with self._state_lock:
+            self._last_used[nk[1:]] = now
+
+    def last_used_snapshot(self) -> list[tuple[tuple[str, ...], float]]:
+        now = time.time()
+        with self._state_lock:
+            self._trim_last_used_locked(now)
+            return sorted(self._last_used.items())
 
     def start_reporting(self) -> None:
         if self._report_thread is not None and self._report_thread.is_alive():
@@ -297,7 +313,6 @@ class MetricsService:
 
     def _schedule_flush(self) -> "concurrent.futures.Future[None]":
         """Schedule _flush_pending_1m on the main event loop and return its Future."""
-        assert self._main_loop is not None, "start_reporting() must be called before the report thread"
         return asyncio.run_coroutine_threadsafe(self._flush_pending_1m(), self._main_loop)
 
     async def _flush_pending_1m(self) -> None:
@@ -362,23 +377,9 @@ class MetricsService:
                         self._is_leader = False
                     self._logger.debug(f"MetricsService: Not the leader: {e}")
 
-                try:
-                    payload = self._build_payload(self.snapshot_as_node_series())
-                    if self.is_leader():
-                        await self._metrics_signal(payload)
-                    else:
-                        await bunny_talk.talk(
-                            routing_key=_METRICS_LEADER_QUEUE,
-                            payload=payload,
-                            start_trace=True,
-                        )
-                except Exception as e:
-                    self._logger.warning(f"MetricsService: Error sending metrics to leader: {e}")
-
                 now = time.time()
                 if self.is_leader() and now - self._last_trimmed_at >= _TRIM_INTERVAL_S:
                     self._last_trimmed_at = now
-                    assert self._main_loop is not None
                     asyncio.run_coroutine_threadsafe(self._trim_metric_buckets(), self._main_loop)
 
                 if await _wait_for_stop(self._leader_stop, self._leader_loop_interval_s):
@@ -458,11 +459,9 @@ class MetricsService:
             for s in incoming_metrics
         ]
         with self._state_lock:
-            existing_view = self._cluster_view.get(hostname)
-            merged_metrics = self._merge_cluster_view_metrics(
-                existing_view.metrics if existing_view is not None else [],
-                wire_metrics,
-            )
+            host_series = self._cluster_series.setdefault(hostname, {})
+            host_series[source] = wire_metrics
+            merged_metrics = self._merge_cluster_view_metrics(host_series)
             host_meta = self._cluster_meta.setdefault(hostname, {})
             host_meta[source] = incoming_meta
             merged_meta = {}
@@ -487,14 +486,12 @@ class MetricsService:
 
     @staticmethod
     def _merge_cluster_view_metrics(
-        existing_metrics: List[NodeMetricSeries],
-        incoming_metrics: List[NodeMetricSeries],
+        host_series: Dict[str, List[NodeMetricSeries]],
     ) -> List[NodeMetricSeries]:
-        merged: Dict[Tuple[str, ...], NodeMetricSeries] = {
-            _series_identity(series): series for series in existing_metrics
-        }
-        for series in incoming_metrics:
-            merged[_series_identity(series)] = series
+        merged: Dict[Tuple[str, ...], NodeMetricSeries] = {}
+        for series_list in host_series.values():
+            for series in series_list:
+                merged[_series_identity(series)] = series
         return list(merged.values())
 
     def _collect_completed_1m_buckets_locked(self, now: float) -> list[MetricsBucket]:
@@ -649,9 +646,25 @@ class MetricsService:
         window_cutoff = current_bucket_start - self._max_window + _LIVE_BUCKET_SECONDS
         # Never trim buckets that belong to a 1m slot not yet flushed to DB.
         trim_cutoff = min(window_cutoff, self._last_flushed_1m_start)
-        for buckets in self._data.values():
+        empty_keys = []
+        for k, buckets in self._data.items():
             while buckets and buckets[0].bucket_start < trim_cutoff:
                 buckets.popleft()
+            if not buckets:
+                empty_keys.append(k)
+        for k in empty_keys:
+            del self._data[k]
+            del self._agg[k]
+            self._last_seen.pop(k, None)
+        self._trim_last_used_locked(now)
+
+    def _trim_last_used_locked(self, now: float) -> None:
+        if self._last_used_ttl_seconds is None:
+            return
+        cutoff = now - self._last_used_ttl_seconds
+        stale_keys = [k for k, ts in self._last_used.items() if ts < cutoff]
+        for k in stale_keys:
+            del self._last_used[k]
 
     def _cleanup_stale_metrics_locked(self, now: float) -> None:
         stale_view = [
@@ -662,6 +675,7 @@ class MetricsService:
             del self._cluster_view[hostname]
             self._cluster_payloads.pop(hostname, None)
             self._cluster_meta.pop(hostname, None)
+            self._cluster_series.pop(hostname, None)
             self._logger.info(f"MetricsService: Expired cluster view for {hostname} (stale)")
 
 

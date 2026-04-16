@@ -1,5 +1,6 @@
 import math
 import time
+from dataclasses import dataclass
 from logging import Logger
 from typing import Any, Dict, List, Tuple
 
@@ -10,8 +11,16 @@ from src.core.models.cluster import MetricsPayload
 NODE_META_LOAD_MODELS = "load_models"
 NODE_META_AT_CAPACITY = "at_capacity"
 NODE_META_LOADED_MODELS = "loaded_models"
+NODE_META_MODEL_LAST_USED = "model_last_used"
 NODE_META_MODEL_KEY = "model_key"
 NODE_META_LOADED_AT = "loaded_at"
+NODE_META_LAST_USED_AT = "last_used_at"
+
+
+@dataclass(frozen=True)
+class _PendingSignal:
+    load: bool
+    sent_at: float
 
 
 class ModelRebalancer:
@@ -36,9 +45,11 @@ class ModelRebalancer:
         self._target_availability_pct = target_availability_pct
         self._node_queue_prefix = node_queue_prefix
         self._cluster_metrics: Dict[str, Dict[Tuple[str, str, str], Dict[str, Any]]] = {}
+        self._pending_signals: Dict[Tuple[str, Tuple[str, str, str]], _PendingSignal] = {}
 
     async def rebalance(self, snapshot: Dict[str, MetricsPayload]) -> None:
         self._cluster_metrics = self._build_cluster_metrics(snapshot)
+        self._reconcile_pending_signals()
         await self._rebalance_models()
 
     def _build_cluster_metrics(
@@ -52,9 +63,9 @@ class ModelRebalancer:
                 continue
             incoming_meta = payload.meta if isinstance(payload.meta, dict) else {}
             loaded_models_meta = _meta_loaded_models(incoming_meta)
+            model_last_used_meta = _meta_model_last_used(incoming_meta)
             incoming_metrics = payload.metrics or []
             rebalance_metrics: Dict[tuple, Dict[str, Dict[str, float]]] = {}
-            model_last_seen: Dict[tuple, float] = {}
             for series in incoming_metrics:
                 if series.key == MetricKey.EMBED_BATCHES_ORIGIN and len(series.dims) == 3:
                     mk = tuple(series.dims)
@@ -62,11 +73,12 @@ class ModelRebalancer:
                         str(win): {"value": sample.value, "n": sample.n}
                         for win, sample in series.windows.items()
                     }
-                    if series.last_seen is not None:
-                        model_last_seen[mk] = series.last_seen
             cluster_metrics[hostname] = {
                 "metrics": rebalance_metrics,
-                "model_last_seen": model_last_seen,
+                "model_last_used": {
+                    tuple(entry[NODE_META_MODEL_KEY]): float(entry[NODE_META_LAST_USED_AT])
+                    for entry in model_last_used_meta
+                },
                 "loaded_models": [
                     (tuple(entry[NODE_META_MODEL_KEY]), float(entry[NODE_META_LOADED_AT]))
                     for entry in loaded_models_meta
@@ -82,10 +94,13 @@ class ModelRebalancer:
         self._logger.debug("ModelRebalancer: Rebalancing models --------------------------------")
 
         async def _send_signal(hostname: str, model_key: tuple[str, str, str], load: bool) -> None:
+            if self._should_skip_pending_signal(hostname, model_key, load):
+                return
             node_queue_name = f"{self._node_queue_prefix}-{hostname}"
             try:
                 self._logger.debug(f"ModelRebalancer: Sending signal to {hostname} for {model_key}: load={load}")
                 await self._bunny_talk.talk(node_queue_name, load=load, model_key=list(model_key), start_trace=True)
+                self._pending_signals[(hostname, model_key)] = _PendingSignal(load=load, sent_at=time.time())
             except Exception as e:
                 self._logger.warning(f"ModelRebalancer: Failed to send signal to {hostname} for {model_key} (load={load}): {e}")
 
@@ -112,7 +127,7 @@ class ModelRebalancer:
 
         max_window = max(self._windows)
         cluster_rps: dict[tuple, dict[str, float]] = {}
-        cluster_last_seen: dict[tuple, float] = {}
+        cluster_last_used: dict[tuple, float] = {}
         for host_data in self._cluster_metrics.values():
             for mk, windows in host_data["metrics"].items():
                 if mk not in cluster_rps:
@@ -123,9 +138,9 @@ class ModelRebalancer:
                     cluster_rps[mk][win_str] = cluster_rps[mk].get(win_str, 0.0) + (
                         total / window if window > 0 else 0.0
                     )
-            for mk, ts in host_data.get("model_last_seen", {}).items():
-                if ts > cluster_last_seen.get(mk, 0.0):
-                    cluster_last_seen[mk] = ts
+            for mk, ts in host_data.get("model_last_used", {}).items():
+                if ts > cluster_last_used.get(mk, 0.0):
+                    cluster_last_used[mk] = ts
 
         total_rps = 0.0
         models: Dict[tuple, Dict[str, Any]] = {}
@@ -188,7 +203,7 @@ class ModelRebalancer:
 
         current_time = time.time()
         for model_key, data in [(k, v) for k, v in models.items() if v["weighted_rps"] == 0]:
-            last_active = cluster_last_seen.get(model_key, 0.0)
+            last_active = cluster_last_used.get(model_key, 0.0)
             idle_seconds = current_time - last_active
             if idle_seconds <= self._model_idle_grace_seconds:
                 continue
@@ -277,10 +292,56 @@ class ModelRebalancer:
         elapsed_ms = (time.monotonic_ns() - start_ns) / 1_000_000.0
         self._logger.debug(f"ModelRebalancer: Done rebalancing models in {elapsed_ms:.3f}ms ---------- ")
 
+    def _pending_signal_timeout_seconds(self) -> float:
+        return max(self._leader_loop_interval_s * 3.0, 15.0)
+
+    def _reconcile_pending_signals(self) -> None:
+        now = time.time()
+        timeout_s = self._pending_signal_timeout_seconds()
+        cleared: List[Tuple[str, Tuple[str, str, str]]] = []
+        expired: List[Tuple[str, Tuple[str, str, str], _PendingSignal]] = []
+        for key, pending in self._pending_signals.items():
+            hostname, model_key = key
+            host_data = self._cluster_metrics.get(hostname)
+            if host_data is None:
+                cleared.append(key)
+                continue
+            is_loaded = _host_has_loaded_model(host_data, model_key)
+            if is_loaded == pending.load:
+                cleared.append(key)
+                continue
+            if now - pending.sent_at > timeout_s:
+                expired.append((hostname, model_key, pending))
+                cleared.append(key)
+        for key in cleared:
+            self._pending_signals.pop(key, None)
+        for hostname, model_key, pending in expired:
+            self._logger.warning(
+                "ModelRebalancer: Timed out waiting for %s confirmation from %s for %s; allowing retry.",
+                "load" if pending.load else "unload",
+                hostname,
+                model_key,
+            )
+
+    def _should_skip_pending_signal(self, hostname: str, model_key: tuple[str, str, str], load: bool) -> bool:
+        pending = self._pending_signals.get((hostname, model_key))
+        if pending is None or pending.load != load:
+            return False
+        if time.time() - pending.sent_at > self._pending_signal_timeout_seconds():
+            return False
+        self._logger.debug(
+            f"ModelRebalancer: Suppressing duplicate signal to {hostname} for {model_key}: load={load}"
+        )
+        return True
+
 
 def _meta_bool(meta: Dict[str, Any], key: str, default: bool = False) -> bool:
     value = meta.get(key)
     return bool(value) if value is not None else default
+
+
+def _host_has_loaded_model(host_data: Dict[str, Any], model_key: Tuple[str, str, str]) -> bool:
+    return any(loaded_key == model_key for loaded_key, _ in host_data.get("loaded_models", []))
 
 
 def _meta_loaded_models(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -301,6 +362,29 @@ def _meta_loaded_models(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
             {
                 NODE_META_MODEL_KEY: list(raw_key),
                 NODE_META_LOADED_AT: float(raw_loaded_at),
+            }
+        )
+    return out
+
+
+def _meta_model_last_used(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
+    value = meta.get(NODE_META_MODEL_LAST_USED)
+    if not isinstance(value, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        raw_key = item.get(NODE_META_MODEL_KEY)
+        raw_last_used_at = item.get(NODE_META_LAST_USED_AT)
+        if not isinstance(raw_key, list) or not all(isinstance(part, str) for part in raw_key):
+            continue
+        if not isinstance(raw_last_used_at, (int, float)):
+            continue
+        out.append(
+            {
+                NODE_META_MODEL_KEY: list(raw_key),
+                NODE_META_LAST_USED_AT: float(raw_last_used_at),
             }
         )
     return out
