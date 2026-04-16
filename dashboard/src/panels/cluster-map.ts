@@ -298,7 +298,7 @@ function buildNodeRow(iconName: string, caption: string): string {
 function buildMaterialIconNodeLabel(host: string, node: NodeView, bucket: ClusterMapNodeBucket): string {
   const row = buildNodeRow(roleMaterialLigature(bucket), host)
   const latMs = nodeLocalAvgLatencyMsForMap(node, bucket)
-  let latencyLine = `<span class='dashboard-cluster-map-node-latency dashboard-cluster-map-node-latency--empty'>— ${bucket === 'api' ? 'ms avg' : 'ms/passage'}</span>`
+  let latencyLine = `<span class='dashboard-cluster-map-node-latency dashboard-cluster-map-node-latency--empty'>- ${bucket === 'api' ? 'ms avg' : 'ms/passage'}</span>`
   if (latMs != null && Number.isFinite(latMs)) {
     const latText = formatClusterMapAvgMs(latMs)
     if (latText !== '') {
@@ -312,11 +312,11 @@ function buildMaterialIconNodeLabel(host: string, node: NodeView, bucket: Cluste
     const reqLine =
       reqText !== ''
         ? `<span class='dashboard-cluster-map-node-latency'>${escapeHtmlText(reqText)} reqs/s</span>`
-        : `<span class='dashboard-cluster-map-node-latency dashboard-cluster-map-node-latency--empty'>— reqs/s</span>`
+        : `<span class='dashboard-cluster-map-node-latency dashboard-cluster-map-node-latency--empty'>- reqs/s</span>`
     const errLine =
       errText !== ''
         ? `<span class='dashboard-cluster-map-node-latency'>${escapeHtmlText(errText)} err/s</span>`
-        : `<span class='dashboard-cluster-map-node-latency dashboard-cluster-map-node-latency--empty'>— err/s</span>`
+        : `<span class='dashboard-cluster-map-node-latency dashboard-cluster-map-node-latency--empty'>- err/s</span>`
     return `<span class='dashboard-cluster-map-node-label'>${row}${latencyLine}${reqLine}${errLine}</span>`
   }
 
@@ -324,7 +324,7 @@ function buildMaterialIconNodeLabel(host: string, node: NodeView, bucket: Cluste
   const docLine =
     docText !== ''
       ? `<span class='dashboard-cluster-map-node-latency'>${escapeHtmlText(docText)} passage/s</span>`
-      : `<span class='dashboard-cluster-map-node-latency dashboard-cluster-map-node-latency--empty'>— passage/s</span>`
+      : `<span class='dashboard-cluster-map-node-latency dashboard-cluster-map-node-latency--empty'>- passage/s</span>`
   return `<span class='dashboard-cluster-map-node-label'>${row}${latencyLine}${docLine}</span>`
 }
 
