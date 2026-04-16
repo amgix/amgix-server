@@ -168,6 +168,8 @@ class PostgreSQLDatabase(SQLBase):
             
             # Database Probing Templates (with double quotes for PostgreSQL)
             "version_query": "SELECT current_setting('server_version') AS version",
+            "table_exists_query": "SELECT (to_regclass(%s) IS NOT NULL)::int AS relation_exists",
+            "index_exists_query": "SELECT (to_regclass(%s) IS NOT NULL)::int AS relation_exists",
             "vector_test_create": f'CREATE TEMPORARY TABLE "{APP_PREFIX}_test_vector_idx" (v VECTOR(1) NOT NULL)',
             "vector_test_drop": f'DROP TABLE "{APP_PREFIX}_test_vector_idx"',
             

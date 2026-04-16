@@ -151,6 +151,8 @@ class MariaDatabase(SQLBase):
             # Collection Management Templates (with backticks for MariaDB)
             # Database Probing Templates (with backticks for MariaDB)
             "version_query": "SELECT VERSION() AS version",
+            "table_exists_query": "SELECT COUNT(*) AS relation_exists FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = %s",
+            "index_exists_query": "SELECT COUNT(*) AS relation_exists FROM information_schema.statistics WHERE table_schema = DATABASE() AND index_name = %s",
             "vector_test_create": f"CREATE TEMPORARY TABLE `{APP_PREFIX}_test_vector_idx` (v VECTOR(1) NOT NULL)",
             "vector_test_drop": f"DROP TEMPORARY TABLE `{APP_PREFIX}_test_vector_idx`",
             

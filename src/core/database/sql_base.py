@@ -197,6 +197,8 @@ class SQLBase(DatabaseBase):
         
         # Database Probing Templates
         "version_query": "SELECT VERSION() AS version",
+        "table_exists_query": "SELECT COUNT(*) AS relation_exists FROM information_schema.tables WHERE table_name = %s",
+        "index_exists_query": "SELECT COUNT(*) AS relation_exists FROM information_schema.statistics WHERE index_name = %s",
 
         "vector_test_create": f"CREATE TEMPORARY TABLE {APP_PREFIX}_test_vector_idx (v VECTOR(1), VECTOR INDEX(v) USING HNSW WITH (M=8))",
         "vector_test_drop": f"DROP TEMPORARY TABLE {APP_PREFIX}_test_vector_idx",
@@ -303,6 +305,21 @@ class SQLBase(DatabaseBase):
         """
         Configure the database with system objects and ensure proper setup.
         """
+        async def _relation_exists(template_name: str, relation_name: str) -> bool:
+            result = await self.execute_sql(
+                self.format_sql(template_name),
+                (relation_name,),
+            )
+            exists = result[0].get("relation_exists", 0) if result else 0
+            if isinstance(exists, str):
+                return exists.lower() not in ("", "0", "false", "f", "no")
+            return bool(exists)
+
+        async def _table_exists(table_name: str) -> bool:
+            return await _relation_exists("table_exists_query", table_name)
+
+        async def _index_exists(index_name: str) -> bool:
+            return await _relation_exists("index_exists_query", index_name)
 
         # Create the system meta table if it doesn't exist
         try:
@@ -330,17 +347,15 @@ class SQLBase(DatabaseBase):
                 indexes=',\n                '.join([''] + indexes) if indexes else '',
                 table_options=self.SQL_TEMPLATES.get("table_options", "")
             )
-            
-            await self.execute_sql_no_result(meta_sql)
-            self.logger.info(f"Created system meta table")
-            
-        except Exception as e:
-            if "already exists" in str(e).lower():
-                # Another instance beat us to it - that's fine
+
+            if await _table_exists(self.meta_collection):
                 self.logger.info(f"System meta table already exists")
             else:
-                self.logger.error(f"Failed to create system meta table: {e}")
-                raise
+                await self.execute_sql_no_result(meta_sql)
+                self.logger.info(f"Created system meta table")
+        except Exception as e:
+            self.logger.error(f"Failed to create system meta table: {e}")
+            raise
         
 
         # Create the global queue table if it doesn't exist
@@ -378,34 +393,29 @@ class SQLBase(DatabaseBase):
                 indexes=',\n                '.join([''] + query_indexes) if query_indexes else '',
                 table_options=self.SQL_TEMPLATES.get("table_options", "")
             )
-            
-            await self.execute_sql_no_result(query_ddl)
-            # Create simple indexes separately (always use CREATE INDEX)
+
+            if await _table_exists(self.queue_collection):
+                self.logger.info(f"System queue table already exists")
+            else:
+                await self.execute_sql_no_result(query_ddl)
+                self.logger.info(f"Created system queue table")
+
+            # Create simple indexes separately only when missing
             for idx_name, idx_columns in query_simple_indexes:
+                physical_idx_name = f"ix_{self._string_to_uuid(f'{self.queue_collection}_{idx_name}')}"
                 create_idx_sql = self.format_sql(
                     "create_index_simple",
                     table=self.queue_collection,
                     name=self._string_to_uuid(f"{self.queue_collection}_{idx_name}"),
                     columns=idx_columns,
                 )
-                try:
-                    await self.execute_sql_no_result(create_idx_sql)
-                except Exception as e:
-                    if "duplicate key name" in str(e).lower():
-                        self.logger.info(f"Index {idx_name} already exists")
-                    else:
-                        self.logger.error(f"Failed to create index {idx_name}: {e}")
-                        raise
 
-            self.logger.info(f"Created system queue table")
-            
+                if not await _index_exists(physical_idx_name):
+                    await self.execute_sql_no_result(create_idx_sql)
+                    self.logger.info(f"Created index {idx_name}")
         except Exception as e:
-            if "already exists" in str(e).lower():
-                # Another instance beat us to it - that's fine
-                self.logger.info(f"System queue table already exists")
-            else:
-                self.logger.error(f"Failed to create system queue table: {e}")
-                raise
+            self.logger.error(f"Failed to create system queue table: {e}")
+            raise
 
         # Create the system metrics table if it doesn't exist
         try:
@@ -432,34 +442,30 @@ class SQLBase(DatabaseBase):
                 indexes=',\n                ' + metrics_pk,
                 table_options=self.SQL_TEMPLATES.get("table_options", "")
             )
-            await self.execute_sql_no_result(metrics_ddl)
+
+            if await _table_exists(self.metrics_collection):
+                self.logger.info("System metrics table already exists")
+            else:
+                await self.execute_sql_no_result(metrics_ddl)
+                self.logger.info("Created system metrics table")
 
             for idx_name, idx_cols in [
                 ("bucket_lookup", self.quote_column_list(["bucket_seconds", "bucket_start"])),
                 ("key", self.quote_column_list(["key"])),
             ]:
+                physical_idx_name = f"ix_{self._string_to_uuid(f'{self.metrics_collection}_{idx_name}')}"
                 idx_sql = self.format_sql("create_index_simple",
                     table=self.metrics_collection,
                     name=self._string_to_uuid(f"{self.metrics_collection}_{idx_name}"),
                     columns=idx_cols,
                 )
-                try:
+
+                if not await _index_exists(physical_idx_name):
                     await self.execute_sql_no_result(idx_sql)
-                except Exception as e:
-                    if "duplicate key name" in str(e).lower():
-                        self.logger.info(f"Metrics index {idx_name} already exists")
-                    else:
-                        self.logger.error(f"Failed to create metrics index {idx_name}: {e}")
-                        raise
-
-            self.logger.info("Created system metrics table")
-
+                    self.logger.info(f"Created metrics index {idx_name}")
         except Exception as e:
-            if "already exists" in str(e).lower():
-                self.logger.info("System metrics table already exists")
-            else:
-                self.logger.error(f"Failed to create system metrics table: {e}")
-                raise
+            self.logger.error(f"Failed to create system metrics table: {e}")
+            raise
 
     async def probe(self) -> None:
         """
