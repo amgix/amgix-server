@@ -3769,7 +3769,7 @@ export class HomePanel extends DashboardPanel {
             }),
             $('<span>', {
               class: 'dashboard-home-cluster-chart-title',
-              text: 'Indexing job latency',
+              text: 'Indexing Job Latency',
             }),
             $('<div>', { class: 'dashboard-home-cluster-chart-hint-actions' }).append(
               this.buildHomeChartHistorySelect(),
