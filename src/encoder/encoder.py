@@ -34,6 +34,7 @@ AMGIX_VERSION = os.getenv("AMGIX_VERSION", "1.0.0-dev")
 
 HOSTNAME = os.getenv('HOSTNAME', 'unknown')
 AMGIX_AMQP_URL = os.getenv("AMGIX_AMQP_URL", "pyamqp://guest:guest@rabbitmq//")
+AMGIX_ENCODER_ROLE = os.getenv("AMGIX_ENCODER_ROLE", "all")
 
 
 # Cap the backoff sleep to avoid excessively long sleeps
@@ -51,7 +52,7 @@ class EncoderService(EncoderBase):
             logger=self.logger,
             hostname=HOSTNAME,
             source="index",
-            role="index",
+            role=AMGIX_ENCODER_ROLE,
             windows=[30, 60],
             database=database,
         )
