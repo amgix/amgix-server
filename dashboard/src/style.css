@@ -179,7 +179,8 @@ body {
   flex-shrink: 0;
 }
 
-.dashboard-nav button {
+.dashboard-nav button,
+#dashboard-top-bar .dashboard-nav .dashboard-nav-link {
   font-family: var(--sans);
   font-size: 0.875rem;
   font-weight: regular;
@@ -194,7 +195,13 @@ body {
   gap: 4px;
 }
 
+#dashboard-top-bar .dashboard-nav .dashboard-nav-link {
+  text-decoration: none;
+  box-sizing: border-box;
+}
+
 #dashboard-top-bar .dashboard-nav button:hover,
+#dashboard-top-bar .dashboard-nav .dashboard-nav-link:hover,
 #dashboard-top-bar .dashboard-theme-toggle:hover {
   /* background-color: #ffffff44; */
   color: #ddddff;
