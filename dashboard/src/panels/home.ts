@@ -1603,25 +1603,91 @@ function bucketStartCutoffSec(historyMs: number, nowMs: number): number {
   return Math.floor((nowMs - historyMs) / 1000)
 }
 
+function denseBucketStartsSecInclusive(cutoffMs: number, nowMs: number, bucketSec: number): number[] {
+  if (bucketSec <= 0 || !Number.isFinite(cutoffMs) || !Number.isFinite(nowMs)) {
+    return []
+  }
+  const cutoffSec = cutoffMs / 1000
+  const nowSec = nowMs / 1000
+  let s = Math.ceil(cutoffSec / bucketSec) * bucketSec
+  const maxStart = Math.floor(nowSec / bucketSec) * bucketSec
+  const out: number[] = []
+  for (; s <= maxStart; s += bucketSec) {
+    out.push(s)
+  }
+  return out
+}
+
+function mergedBucketStartsSec(
+  cutoffMs: number,
+  nowMs: number,
+  bucketSec: number,
+  storeKeys: Iterable<number>,
+): number[] {
+  const set = new Set(denseBucketStartsSecInclusive(cutoffMs, nowMs, bucketSec))
+  for (const k of storeKeys) {
+    const tMs = k * 1000
+    if (tMs >= cutoffMs && tMs <= nowMs) {
+      set.add(k)
+    }
+  }
+  return Array.from(set).sort((a, b) => a - b)
+}
+
+function emptyApiMetricsHistoryPoint(tMs: number): ApiMetricsHistoryPoint {
+  return {
+    t: tMs,
+    allRps: null,
+    allMs: null,
+    searchRps: null,
+    searchMs: null,
+    ingestRps: null,
+    ingestMs: null,
+    errRps: null,
+  }
+}
+
+function emptyClusterThroughputHistoryPoint(tMs: number): ClusterThroughputHistoryPoint {
+  return {
+    t: tMs,
+    byKey: new Map(),
+    avgMs: null,
+    e2eMs: null,
+  }
+}
+
+function appendLivePointReplacingSameTime<T extends { t: number }>(rows: T[], live: T | null, nowMs: number): void {
+  if (live == null) {
+    return
+  }
+  const withT = { ...live, t: nowMs } as T
+  const last = rows[rows.length - 1]
+  if (last != null && last.t === nowMs) {
+    rows[rows.length - 1] = withT
+  } else {
+    rows.push(withT)
+  }
+}
+
 function sortedApiChartPoints(
   store: Map<number, ApiMetricsHistoryPoint>,
   live: ApiMetricsHistoryPoint | null,
   cutoffMs: number,
   nowMs: number,
+  bucketSec: number,
 ): ApiMetricsHistoryPoint[] {
+  const merged = mergedBucketStartsSec(cutoffMs, nowMs, bucketSec, store.keys())
   const rows: ApiMetricsHistoryPoint[] = []
-  const sortedKeys = Array.from(store.keys())
-    .filter((k) => k * 1000 >= cutoffMs)
-    .sort((a, b) => a - b)
-  for (const k of sortedKeys) {
+  for (const k of merged) {
+    const t = k * 1000
     const row = store.get(k)
     if (row != null) {
-      rows.push({ ...row, t: k * 1000 })
+      rows.push({ ...row, t })
+    } else {
+      rows.push(emptyApiMetricsHistoryPoint(t))
     }
   }
-  if (live != null) {
-    rows.push({ ...live, t: nowMs })
-  }
+  appendLivePointReplacingSameTime(rows, live, nowMs)
   return rows
 }
 
@@ -1794,20 +1860,20 @@ function sortedClusterThroughputPoints(
   live: ClusterThroughputHistoryPoint | null,
   cutoffMs: number,
   nowMs: number,
+  bucketSec: number,
 ): ClusterThroughputHistoryPoint[] {
+  const merged = mergedBucketStartsSec(cutoffMs, nowMs, bucketSec, store.keys())
   const rows: ClusterThroughputHistoryPoint[] = []
-  const sortedKeys = Array.from(store.keys())
-    .filter((k) => k * 1000 >= cutoffMs)
-    .sort((a, b) => a - b)
-  for (const k of sortedKeys) {
+  for (const k of merged) {
+    const t = k * 1000
     const row = store.get(k)
     if (row != null) {
-      rows.push({ ...row, t: k * 1000 })
+      rows.push({ ...row, t })
+    } else {
+      rows.push(emptyClusterThroughputHistoryPoint(t))
     }
   }
-  if (live != null) {
-    rows.push({ ...live, t: nowMs })
-  }
+  appendLivePointReplacingSameTime(rows, live, nowMs)
   return rows
 }
 
@@ -1849,25 +1915,33 @@ function weightedIndexingJobMsFromNodes(view: Metrics | null): {
   }
 }
 
+function emptyIndexingLatencyHistoryPoint(tMs: number): IndexingLatencyHistoryPoint {
+  return {
+    t: tMs,
+    queueJobMs: null,
+    bulkJobMs: null,
+  }
+}
+
 function sortedIndexingLatencyPoints(
   store: Map<number, IndexingLatencyHistoryPoint>,
   live: IndexingLatencyHistoryPoint | null,
   cutoffMs: number,
   nowMs: number,
+  bucketSec: number,
 ): IndexingLatencyHistoryPoint[] {
+  const merged = mergedBucketStartsSec(cutoffMs, nowMs, bucketSec, store.keys())
   const rows: IndexingLatencyHistoryPoint[] = []
-  const sortedKeys = Array.from(store.keys())
-    .filter((k) => k * 1000 >= cutoffMs)
-    .sort((a, b) => a - b)
-  for (const k of sortedKeys) {
+  for (const k of merged) {
+    const t = k * 1000
     const row = store.get(k)
     if (row != null) {
-      rows.push({ ...row, t: k * 1000 })
+      rows.push({ ...row, t })
+    } else {
+      rows.push(emptyIndexingLatencyHistoryPoint(t))
     }
   }
-  if (live != null) {
-    rows.push({ ...live, t: nowMs })
-  }
+  appendLivePointReplacingSameTime(rows, live, nowMs)
   return rows
 }
 
@@ -2375,6 +2449,7 @@ export class HomePanel extends DashboardPanel {
       livePoint,
       cutoff,
       now,
+      this.trendResolutionSec(),
     )
 
     for (const pt of clusterThroughputHistory) {
@@ -2684,7 +2759,13 @@ export class HomePanel extends DashboardPanel {
           }
         : null
 
-    const indexingHistory = sortedIndexingLatencyPoints(this.indexingChartBuckets, livePoint, cutoff, now)
+    const indexingHistory = sortedIndexingLatencyPoints(
+      this.indexingChartBuckets,
+      livePoint,
+      cutoff,
+      now,
+      this.trendResolutionSec(),
+    )
 
     const queueLineColor = '#2563eb'
     const bulkLineColor = '#ea580c'
@@ -2823,7 +2904,13 @@ export class HomePanel extends DashboardPanel {
           }
         : null
 
-    const apiMetricsHistory = sortedApiChartPoints(this.apiChartBuckets, livePoint, cutoff, now)
+    const apiMetricsHistory = sortedApiChartPoints(
+      this.apiChartBuckets,
+      livePoint,
+      cutoff,
+      now,
+      this.trendResolutionSec(),
+    )
 
     const yNum = (v: number | null) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
