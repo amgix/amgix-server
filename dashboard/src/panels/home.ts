@@ -436,17 +436,105 @@ function nodeMetaBool(node: NodeView, key: string, fallback: boolean = false): b
   return typeof value === 'boolean' ? value : fallback
 }
 
-function nodeMetaArrayLength(node: NodeView, key: string): number {
-  const value = nodeMeta(node)[key]
-  return Array.isArray(value) ? value.length : 0
+function nodeMetaLoadedModelDisplayStrings(node: NodeView): string[] {
+  const value = nodeMeta(node)['loaded_models']
+  if (!Array.isArray(value)) {
+    return []
+  }
+  const out: string[] = []
+  for (const raw of value) {
+    if (raw == null || typeof raw !== 'object') {
+      continue
+    }
+    const o = raw as { label?: unknown; model_key?: unknown }
+    if (typeof o.label === 'string') {
+      const t = o.label.trim()
+      if (t !== '') {
+        out.push(t)
+        continue
+      }
+    }
+    if (Array.isArray(o.model_key)) {
+      const parts = o.model_key.map((x) => String(x).trim()).filter((s) => s !== '')
+      const t = parts.join(' · ')
+      if (t !== '') {
+        out.push(t)
+      }
+    }
+  }
+  return out
 }
 
-function formatLoadModelsCell(node: NodeView): string {
-  if (!nodeMetaBool(node, 'load_models')) {
-    return 'No'
+function openHomeLoadedModelsDialog(hostname: string, models: string[]): void {
+  const dialogId = 'home-loaded-models-dialog'
+  $(`#${dialogId}`).remove()
+
+  const titleId = 'home-loaded-models-dialog-title'
+  const $dialog = $('<dialog>', {
+    id: dialogId,
+    class: 'dashboard-collections-config-dialog',
+    'aria-labelledby': titleId,
+  })
+
+  const $close = $('<button>', {
+    type: 'button',
+    class: 'dashboard-collections-config-dialog-close',
+    text: 'Close',
+  })
+  $close.on('click', () => {
+    ;($dialog.get(0) as HTMLDialogElement | undefined)?.close()
+  })
+  $dialog.on('close', () => {
+    $dialog.remove()
+  })
+
+  const $list = $('<ul>', { class: 'dashboard-home-loaded-models-dialog-list' })
+  for (const m of models) {
+    $list.append($('<li>', { text: m }))
   }
-  const n = nodeMetaArrayLength(node, 'loaded_models')
-  return `Yes (${n})`
+
+  $dialog.append(
+    $('<h4>', {
+      id: titleId,
+      class: 'dashboard-collections-config-dialog-title',
+      text: `Loaded models — ${hostname}`,
+    }),
+    $('<div>', { class: 'dashboard-home-loaded-models-dialog-body' }).append($list),
+    $('<div>', { class: 'dashboard-collections-config-dialog-actions' }).append($close),
+  )
+
+  $('body').append($dialog)
+  ;($dialog.get(0) as HTMLDialogElement).showModal()
+}
+
+function buildEncoderModelsCell(hostname: string, node: NodeView): JQuery<HTMLElement> {
+  const $td = $('<td>', { class: 'dashboard-home-v' })
+  if (!nodeMetaBool(node, 'load_models')) {
+    $td.text('No')
+    return $td
+  }
+  const labels = nodeMetaLoadedModelDisplayStrings(node)
+  const n = labels.length
+  if (n === 0) {
+    $td.text('Yes (0)')
+    return $td
+  }
+  const label =
+    n === 1 ? `Show 1 loaded model on ${hostname}` : `Show ${n} loaded models on ${hostname}`
+  $td.append(
+    document.createTextNode('Yes ('),
+    $('<a>', {
+      href: '#',
+      class: 'dashboard-home-loaded-models-count',
+      text: String(n),
+      attr: { 'aria-label': label },
+    }).on('click', (e) => {
+      e.preventDefault()
+      openHomeLoadedModelsDialog(hostname, labels)
+    }),
+    document.createTextNode(')'),
+  )
+  return $td
 }
 
 function formatAtCapacityCell(node: NodeView): string {
@@ -3186,7 +3274,7 @@ export class HomePanel extends DashboardPanel {
             $('<tr>').append(
               $('<td>', { class: 'dashboard-home-v', text: formatEncoderRoleCell(node.role) }),
               $nodeTd,
-              $('<td>', { class: 'dashboard-home-v', text: formatLoadModelsCell(node) }),
+              buildEncoderModelsCell(hostname, node),
               $('<td>', { class: 'dashboard-home-v', text: formatAtCapacityCell(node) }),
               $('<td>', { class: 'dashboard-home-v', text: formatGpuStatus(node) }),
               $('<td>', { class: 'dashboard-home-v', text: m.requests }),

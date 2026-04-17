@@ -1007,6 +1007,40 @@ body {
   background: color-mix(in srgb, var(--text) 8%, var(--bg));
 }
 
+a.dashboard-home-loaded-models-count {
+  color: var(--link);
+  cursor: pointer;
+  text-decoration: underline;
+  font-weight: inherit;
+}
+
+a.dashboard-home-loaded-models-count:hover {
+  color: var(--link-hover);
+}
+
+.dashboard-home-loaded-models-dialog-body {
+  box-sizing: border-box;
+  width: calc(100% - 2rem);
+  max-width: calc(100% - 2rem);
+  margin: 0 auto;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--text) 4%, var(--bg));
+}
+
+.dashboard-home-loaded-models-dialog-list {
+  margin: 0;
+  padding-left: 1.35rem;
+  max-height: min(60vh, 28rem);
+  overflow-y: auto;
+}
+
+.dashboard-home-loaded-models-dialog-list li {
+  margin: 0.35em 0;
+  word-break: break-word;
+}
+
 .dashboard-collections-confirm-dialog {
   box-sizing: border-box;
   width: min(88vw, 26rem);
