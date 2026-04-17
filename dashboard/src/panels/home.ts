@@ -1995,16 +1995,27 @@ function clusterChartDevicePixelRatio(): number {
   return d != null && d > 0 ? d : 1
 }
 
-const HOME_LINE_CHART_ZOOM: ZoomPluginOptions = {
-  pan: {
-    enabled: true,
-    mode: 'x',
-  },
-  zoom: {
-    mode: 'x',
-    wheel: { enabled: true },
-    pinch: { enabled: true },
-  },
+function homeLineChartZoomOptions(cutoffMs: number, nowMs: number): ZoomPluginOptions {
+  const spanMs = Math.max(0, nowMs - cutoffMs)
+  const minRangeMs = homeChartTrendResolutionSec(Math.max(spanMs, 1)) * 1000
+  return {
+    pan: {
+      enabled: true,
+      mode: 'x',
+    },
+    zoom: {
+      mode: 'x',
+      wheel: { enabled: true },
+      pinch: { enabled: true },
+    },
+    limits: {
+      x: {
+        min: cutoffMs,
+        max: nowMs,
+        minRange: minRangeMs,
+      },
+    },
+  }
 }
 
 function buildApiMetricsChartOptions(
@@ -2063,7 +2074,7 @@ function buildApiMetricsChartOptions(
           },
         },
       },
-      zoom: HOME_LINE_CHART_ZOOM,
+      zoom: homeLineChartZoomOptions(cutoff, now),
     },
     scales: {
       x: {
@@ -2303,7 +2314,7 @@ export class HomePanel extends DashboardPanel {
     ch.options.color = tickColor
     const plSync = ch.options.plugins as Record<string, unknown> | undefined
     if (plSync) {
-      plSync.zoom = HOME_LINE_CHART_ZOOM
+      plSync.zoom = homeLineChartZoomOptions(cutoff, now)
     }
     if (ch.options.font && typeof ch.options.font === 'object') {
       const f = ch.options.font as { family?: string; size?: number }
@@ -2605,7 +2616,7 @@ export class HomePanel extends DashboardPanel {
                 },
               },
             },
-            zoom: HOME_LINE_CHART_ZOOM,
+            zoom: homeLineChartZoomOptions(cutoff, now),
           },
           scales: {
             x: {
@@ -2668,7 +2679,7 @@ export class HomePanel extends DashboardPanel {
       ch.options.color = tickColor
       const plEnc = ch.options.plugins as Record<string, unknown> | undefined
       if (plEnc) {
-        plEnc.zoom = HOME_LINE_CHART_ZOOM
+        plEnc.zoom = homeLineChartZoomOptions(cutoff, now)
       }
       const tipEnc = ch.options.plugins?.tooltip
       if (tipEnc && typeof tipEnc === 'object') {
