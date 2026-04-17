@@ -3,6 +3,8 @@ import cytoscape, { type Core, type EdgeSingular, type ElementDefinition } from 
 import nodeHtmlLabel from 'cytoscape-node-html-label'
 import $ from 'jquery'
 
+import { showDashboardError } from '../error-bar'
+import { formatRequestError } from './common'
 import { DashboardPanel } from './panel-base'
 
 nodeHtmlLabel(cytoscape)
@@ -897,6 +899,8 @@ function clusterMapEdgeCpWeight(ele: EdgeSingular): number {
 export class ClusterMapPanel extends DashboardPanel {
   private pollTimer: number | null = null
   private pollGeneration = 0
+  /** Avoid repeating the metrics snackbar on every poll tick while the request keeps failing. */
+  private clusterMapMetricsErrorShown = false
   private cy: Core | null = null
   /** Last applied topology; used to decide fit vs preserve pan/zoom on poll. */
   private clusterMapTopologySignature = ''
@@ -906,6 +910,7 @@ export class ClusterMapPanel extends DashboardPanel {
   override deactivate(): void {
     this.clearPoll()
     this.pollGeneration += 1
+    this.clusterMapMetricsErrorShown = false
     this.clusterMapTopologySignature = ''
     this.destroyGraph()
   }
@@ -917,6 +922,7 @@ export class ClusterMapPanel extends DashboardPanel {
     }
     this.clearPoll()
     this.pollGeneration += 1
+    this.clusterMapMetricsErrorShown = false
     const generation = this.pollGeneration
     this.ensureShell($root)
     this.ensureZoomTools($root)
@@ -959,8 +965,6 @@ export class ClusterMapPanel extends DashboardPanel {
       (parseFloat($el.css('borderTopWidth')) || 0) + (parseFloat($el.css('borderBottomWidth')) || 0)
 
     const topBarH = elHeight($('#dashboard-top-bar'))
-    const $errorBar = $('#dashboard-error-bar')
-    const errorBarH = !$errorBar.prop('hidden') ? elHeight($errorBar) : 0
     const footerH = elHeight($('.dashboard-site-footer'))
     const panelsPadH = padV($('#dashboard-panels'))
     const mapPadH = padV($root)
@@ -971,7 +975,6 @@ export class ClusterMapPanel extends DashboardPanel {
 
     const used =
       topBarH +
-      errorBarH +
       footerH +
       panelsPadH +
       mapPadH +
@@ -1239,7 +1242,10 @@ export class ClusterMapPanel extends DashboardPanel {
     $root: JQuery<HTMLElement>,
     generation: number,
   ): Promise<void> {
-    const systemInfo = await api.systemInfo().catch((): null => null)
+    const systemInfo = await api.systemInfo().catch((err: unknown) => {
+      showDashboardError(formatRequestError('Could not load cluster map.', err))
+      return null
+    })
     if (generation !== this.pollGeneration) {
       return
     }
@@ -1268,9 +1274,18 @@ export class ClusterMapPanel extends DashboardPanel {
         window: CLUSTER_MAP_METRIC_WINDOW_SEC,
         keys: [...CLUSTER_MAP_METRICS_CURRENT_KEYS],
       })
-      .catch((): null => null)
+      .catch((err: unknown) => {
+        if (!this.clusterMapMetricsErrorShown) {
+          this.clusterMapMetricsErrorShown = true
+          showDashboardError(formatRequestError('Could not load cluster metrics.', err))
+        }
+        return null
+      })
     if (generation !== this.pollGeneration || $('#panel-cluster-map').prop('hidden')) {
       return
+    }
+    if (metrics != null) {
+      this.clusterMapMetricsErrorShown = false
     }
 
     this.applyDiagramHeight($root)
@@ -1291,12 +1306,8 @@ export class ClusterMapPanel extends DashboardPanel {
       this.clusterMapTopologySignature = ''
       this.destroyGraph()
       $root.find('[data-cluster-map-zoom-tools]').prop('hidden', true)
-      $canvas.empty().append(
-        $('<p>', {
-          class: 'dashboard-cluster-map-render-error',
-          text: 'Could not render the cluster diagram.',
-        }),
-      )
+      $canvas.empty()
+      showDashboardError('Could not render the cluster diagram.')
     }
   }
 }

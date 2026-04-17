@@ -24,8 +24,9 @@
   --chart-cluster-tick: color-mix(in srgb, var(--text) 62%, var(--bg));
   --chart-cluster-tooltip-bg: color-mix(in srgb, var(--bg) 76%, transparent);
   --chart-cluster-tooltip-border: color-mix(in srgb, var(--text) 22%, transparent);
-  --error-bar-bg: #f5e6e6;
-  --error-bar-text: #991b1b;
+  --snackbar-error-surface: #f5e6e6;
+  --snackbar-error-label: #991b1b;
+  --snackbar-error-dismiss: #7f1d1d;
 
   font: 18px/145% var(--sans);
   letter-spacing: 0.18px;
@@ -61,8 +62,9 @@
   --chart-cluster-tick: color-mix(in srgb, var(--text) 85%, var(--bg));
   --chart-cluster-tooltip-bg: color-mix(in srgb, var(--bg) 72%, transparent);
   --chart-cluster-tooltip-border: color-mix(in srgb, var(--text) 30%, transparent);
-  --error-bar-bg: #2a1a1c;
-  --error-bar-text: #fecaca;
+  --snackbar-error-surface: #2a1a1c;
+  --snackbar-error-label: #fecaca;
+  --snackbar-error-dismiss: #fca5a5;
 }
 
 body {
@@ -225,54 +227,21 @@ body {
   background: var(--bg);
 }
 
-.dashboard-error-bar {
-  display: none;
-  flex-shrink: 0;
-  align-items: flex-start;
-  gap: 12px;
-  box-sizing: border-box;
-  width: 100%;
-  padding: 10px 25px;
-  border-bottom: 1px solid var(--border);
-  background: var(--error-bar-bg);
-  color: var(--error-bar-text);
+.dashboard-error-snackbar.mdc-snackbar {
+  z-index: 20;
 }
 
-.dashboard-error-bar:not([hidden]) {
-  display: flex;
+.dashboard-error-snackbar .mdc-snackbar__surface {
+  background-color: var(--snackbar-error-surface);
 }
 
-.dashboard-error-bar__message {
-  margin: 0;
-  flex: 1;
-  min-width: 0;
+.dashboard-error-snackbar .mdc-snackbar__label {
+  color: var(--snackbar-error-label);
   white-space: pre-wrap;
-  font-size: 0.9375rem;
-  line-height: 1.45;
 }
 
-.dashboard-error-bar__dismiss {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin: -4px -6px -4px 0;
-  padding: 6px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  opacity: 0.9;
-}
-
-.dashboard-error-bar__dismiss:hover {
-  opacity: 1;
-  background: rgba(0, 0, 0, 0.06);
-}
-
-:root[data-theme='dark'] .dashboard-error-bar__dismiss:hover {
-  background: rgba(255, 255, 255, 0.08);
+.dashboard-error-snackbar .mdc-snackbar__dismiss {
+  color: var(--snackbar-error-dismiss);
 }
 
 .dashboard-site-footer {
@@ -1582,12 +1551,6 @@ a.dashboard-home-loaded-models-count:hover {
 .dashboard-cluster-map-canvas .dashboard-cluster-map-node-latency--empty {
   color: color-mix(in srgb, var(--cm-label) 48%, transparent);
   font-weight: 400;
-}
-
-.dashboard-cluster-map-render-error {
-  margin: 0;
-  color: var(--chart-pie-failed);
-  font-size: 0.9rem;
 }
 
 .dashboard-query {

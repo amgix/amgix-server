@@ -6,6 +6,8 @@ import '@fontsource/material-symbols-outlined/400.css'
 // `material-components-web` in package.json pulls all @material/* for dev/CI; only import what we ship.
 import '@material/typography/dist/mdc.typography.min.css'
 import '@material/top-app-bar/dist/mdc.top-app-bar.min.css'
+import '@material/icon-button/dist/mdc.icon-button.min.css'
+import '@material/snackbar/dist/mdc.snackbar.min.css'
 
 import './style.css'
 

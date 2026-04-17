@@ -66,12 +66,6 @@
         </div>
       </header>
       <div class="dashboard-main mdc-top-app-bar--fixed-adjust">
-        <div id="dashboard-error-bar" class="dashboard-error-bar" hidden role="alert">
-          <p class="dashboard-error-bar__message"></p>
-          <button type="button" class="dashboard-error-bar__dismiss" aria-label="Dismiss">
-            <span class="material-symbols-outlined material-symbols--btn" aria-hidden="true">close</span>
-          </button>
-        </div>
         <main id="dashboard-panels">
           <section class="dashboard-panel" data-panel="home" id="panel-home" aria-label="Home">
             <div class="dashboard-home" data-home-root aria-live="polite"></div>
@@ -119,6 +113,21 @@
         <p class="dashboard-site-footer-text">Copyright © 2026 Amgix</p>
       </footer>
     </div>
+    <aside id="dashboard-error-snackbar" class="mdc-snackbar mdc-snackbar--stacked dashboard-error-snackbar">
+      <div class="mdc-snackbar__surface" role="status" aria-relevant="additions">
+        <div class="mdc-snackbar__label" aria-atomic="false"></div>
+        <div class="mdc-snackbar__actions" aria-atomic="true">
+          <button
+            type="button"
+            class="mdc-icon-button mdc-snackbar__dismiss"
+            title="Dismiss"
+            aria-label="Dismiss"
+          >
+            <span class="material-symbols-outlined material-symbols--btn" aria-hidden="true">close</span>
+          </button>
+        </div>
+      </div>
+    </aside>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -1,41 +1,38 @@
-import $ from 'jquery'
+import { MDCSnackbar } from '@material/snackbar/component'
 
-let inited = false
+let snackbar: MDCSnackbar | null = null
 
-function $bar(): JQuery<HTMLElement> {
-  return $('#dashboard-error-bar')
+function getSnackbarEl(): HTMLElement | null {
+  return document.getElementById('dashboard-error-snackbar')
 }
 
 export function initDashboardErrorBar(): void {
-  if (inited) {
+  if (snackbar) {
     return
   }
-  const $el = $bar()
-  if (!$el.length) {
+  const el = getSnackbarEl()
+  if (!el) {
     return
   }
-  inited = true
-  $el.find('.dashboard-error-bar__dismiss').on('click', () => {
-    hideDashboardError()
-  })
+  snackbar = MDCSnackbar.attachTo(el)
+  snackbar.timeoutMs = 5000
 }
 
 export function showDashboardError(message: string): void {
   initDashboardErrorBar()
-  const $el = $bar()
-  if (!$el.length) {
+  if (!snackbar) {
     return
   }
   const text = message.trim() || 'Something went wrong.'
-  $el.find('.dashboard-error-bar__message').text(text)
-  $el.removeAttr('hidden')
+  snackbar.labelText = text
+  if (!snackbar.isOpen) {
+    snackbar.open()
+  }
 }
 
 export function hideDashboardError(): void {
-  const $el = $bar()
-  if (!$el.length) {
+  if (!snackbar?.isOpen) {
     return
   }
-  $el.attr('hidden', '')
-  $el.find('.dashboard-error-bar__message').empty()
+  snackbar.close('dismiss')
 }
