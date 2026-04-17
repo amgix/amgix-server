@@ -18,7 +18,7 @@ x-encoder-image: &encoder-image
 services:
 
   qdrant:
-    image: qdrant/qdrant:v1.17.0
+    image: qdrant/qdrant:v1.17.1
     container_name: amgix-qdrant
     ports:
       - "6333:6333"  # HTTP

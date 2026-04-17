@@ -8,11 +8,11 @@ services:
 
   qdrant:
     container_name: amgix-qdrant
-    image: qdrant/qdrant:v1.17.0
+    image: qdrant/qdrant:v1.17.1
     restart: unless-stopped
 
     # for GPU support in Qdrant use GPU image
-    # image: qdrant/qdrant:v1.17.0-gpu-nvidia
+    # image: qdrant/qdrant:v1.17.1-gpu-nvidia
 
     # uncomment this block to use GPU support
     # requires NVIDIA Container Toolkit

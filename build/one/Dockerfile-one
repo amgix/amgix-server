@@ -86,7 +86,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # Install latest Qdrant binary
-ARG QDRANT_VERSION=v1.17.0
+ARG QDRANT_VERSION=v1.17.1
 RUN ARCH=$(dpkg --print-architecture) && \
     if [ "$ARCH" = "amd64" ]; then QDRANT_ARCH="x86_64"; else QDRANT_ARCH="$ARCH"; fi && \
     curl -fsSL https://github.com/qdrant/qdrant/releases/download/${QDRANT_VERSION}/qdrant-${QDRANT_ARCH}-unknown-linux-musl.tar.gz -o /tmp/qdrant.tar.gz && \
