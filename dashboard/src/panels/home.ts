@@ -3302,7 +3302,13 @@ export class HomePanel extends DashboardPanel {
           const m = formatEmbeddingMetricsCells(node)
           const $nodeTd = $('<td>', { class: 'dashboard-home-v' })
           if (node.is_leader) {
-            $nodeTd.append($('<strong>', { text: `${hostname}*` }))
+            $nodeTd.append(
+              $('<strong>', {
+                class: 'dashboard-home-cluster-node-leader',
+                text: `${hostname}*`,
+                title: 'Current Leader',
+              }),
+            )
           } else {
             $nodeTd.text(hostname)
           }
@@ -3339,7 +3345,13 @@ export class HomePanel extends DashboardPanel {
           const m = formatIndexingMetricsCells(node)
           const $nodeTd = $('<td>', { class: 'dashboard-home-v' })
           if (node.is_leader) {
-            $nodeTd.append($('<strong>', { text: `${hostname}*` }))
+            $nodeTd.append(
+              $('<strong>', {
+                class: 'dashboard-home-cluster-node-leader',
+                text: `${hostname}*`,
+                title: 'Current Leader',
+              }),
+            )
           } else {
             $nodeTd.text(hostname)
           }
@@ -3914,7 +3926,7 @@ export class HomePanel extends DashboardPanel {
             $('<th>', {
               class: 'dashboard-home-table-heading',
               colspan: CLUSTER_INDEXING_COLSPAN,
-              text: 'Index workers (index or idx/qry roles)',
+              text: 'Encoder Nodes',
             }),
           ),
         )

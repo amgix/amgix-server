@@ -463,6 +463,10 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.dashboard-home-table strong.dashboard-home-cluster-node-leader {
+  cursor: default;
+}
+
 .dashboard-home-table .dashboard-home-r {
   padding-left: 0.75rem;
   white-space: nowrap;
