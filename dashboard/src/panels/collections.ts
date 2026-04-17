@@ -16,6 +16,7 @@ import {
 import $ from 'jquery'
 
 import { hideDashboardError, showDashboardError } from '../error-bar'
+import { formatRequestError, openReadonlyJsonDialog } from './common'
 import { DashboardPanel } from './panel-base'
 
 Chart.register(PieController, ArcElement, Tooltip, Legend)
@@ -41,16 +42,6 @@ function pieChartPalette(): { backgrounds: string[]; border: string } {
     ],
     border: v('--chart-pie-border'),
   }
-}
-
-function formatRequestError(context: string, err: unknown): string {
-  if (err instanceof ResponseError) {
-    return `${context} (HTTP ${err.response.status})`
-  }
-  if (err instanceof Error) {
-    return err.message
-  }
-  return context
 }
 
 function normalizeFastApiDetail(detail: unknown): string {
@@ -186,44 +177,12 @@ function openConfirmDialog(options: {
 }
 
 function openFullConfigModal(collectionName: string, json: string): void {
-  $('#collections-full-config-dialog').remove()
-
-  const $dialog = $('<dialog>', {
-    id: 'collections-full-config-dialog',
-    class: 'dashboard-collections-config-dialog',
-    'aria-labelledby': 'collections-full-config-title',
+  openReadonlyJsonDialog({
+    dialogId: 'collections-full-config-dialog',
+    titleId: 'collections-full-config-title',
+    title: `Configuration for ${collectionName}`,
+    json,
   })
-
-  const $close = $('<button>', {
-    type: 'button',
-    class: 'dashboard-collections-config-dialog-close',
-    text: 'Close',
-  })
-
-  $close.on('click', () => {
-    ;($dialog.get(0) as HTMLDialogElement | undefined)?.close()
-  })
-
-  $dialog.on('close', () => {
-    $dialog.remove()
-  })
-
-  $dialog.append(
-    $('<h4>', {
-      id: 'collections-full-config-title',
-      class: 'dashboard-collections-config-dialog-title',
-      text: `Configuration for ${collectionName}`,
-    }),
-    $('<textarea>', {
-      readonly: true,
-      class: 'dashboard-collections-config-dialog-textarea',
-      text: json,
-    }),
-    $('<div>', { class: 'dashboard-collections-config-dialog-actions' }).append($close),
-  )
-
-  $('body').append($dialog)
-  ;($dialog.get(0) as HTMLDialogElement).showModal()
 }
 
 function buildVectorsSection(config: CollectionConfig, collectionName: string): JQuery<HTMLElement> {

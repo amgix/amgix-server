@@ -1,7 +1,6 @@
 import {
   CollectionConfigToJSON,
   DocumentToJSON,
-  ResponseError,
   SearchQueryFusionModeEnum,
   VectorSearchWeightFieldEnum,
   type AmgixApi,
@@ -14,6 +13,7 @@ import {
 import $ from 'jquery'
 
 import { hideDashboardError, showDashboardError } from '../error-bar'
+import { formatRequestError, openReadonlyJsonDialog, stripModelNamespaceForDisplay } from './common'
 import { DashboardPanel } from './panel-base'
 
 const QUERY_SEARCH_LIMIT = 10
@@ -30,16 +30,6 @@ function vectorWeightSliderDisplayLabel(value: string): string {
   }
   const t = Math.round(n / VECTOR_WEIGHT_SLIDER_STEP) * VECTOR_WEIGHT_SLIDER_STEP
   return String(parseFloat(t.toFixed(2)))
-}
-
-function formatSearchError(context: string, err: unknown): string {
-  if (err instanceof ResponseError) {
-    return `${context} (HTTP ${err.response.status})`
-  }
-  if (err instanceof Error && err.message) {
-    return `${context}: ${err.message}`
-  }
-  return context
 }
 
 function formatResultTimestamp(ts: Date): string {
@@ -62,19 +52,6 @@ function indexFieldsForVector(v: VectorConfig): string[] {
     return v.index_fields.map((f) => String(f))
   }
   return ['content']
-}
-
-function stripModelNamespaceForDisplay(rawModel: string): string {
-  const t = rawModel.trim()
-  if (!t) {
-    return ''
-  }
-  const i = t.lastIndexOf('/')
-  if (i < 0 || i >= t.length - 1) {
-    return t
-  }
-  const tail = t.slice(i + 1).trim()
-  return tail || t
 }
 
 function vectorNameWithOptionalModel(v: VectorConfig): string {
@@ -106,88 +83,6 @@ function parseSearchField(raw: string): VectorSearchWeightFieldEnum | null {
     return VectorSearchWeightFieldEnum.Content
   }
   return null
-}
-
-function openQueryPanelFullConfigDialog(collectionName: string, json: string): void {
-  $('#query-full-config-dialog').remove()
-
-  const $dialog = $('<dialog>', {
-    id: 'query-full-config-dialog',
-    class: 'dashboard-collections-config-dialog',
-    'aria-labelledby': 'query-full-config-title',
-  })
-
-  const $close = $('<button>', {
-    type: 'button',
-    class: 'dashboard-collections-config-dialog-close',
-    text: 'Close',
-  })
-
-  $close.on('click', () => {
-    ;($dialog.get(0) as HTMLDialogElement | undefined)?.close()
-  })
-
-  $dialog.on('close', () => {
-    $dialog.remove()
-  })
-
-  $dialog.append(
-    $('<h4>', {
-      id: 'query-full-config-title',
-      class: 'dashboard-collections-config-dialog-title',
-      text: `Configuration for ${collectionName}`,
-    }),
-    $('<textarea>', {
-      readonly: true,
-      class: 'dashboard-collections-config-dialog-textarea',
-      text: json,
-    }),
-    $('<div>', { class: 'dashboard-collections-config-dialog-actions' }).append($close),
-  )
-
-  $('body').append($dialog)
-  ;($dialog.get(0) as HTMLDialogElement).showModal()
-}
-
-function openQueryDocumentModal(collectionName: string, documentId: string, json: string): void {
-  $('#query-document-dialog').remove()
-
-  const $dialog = $('<dialog>', {
-    id: 'query-document-dialog',
-    class: 'dashboard-collections-config-dialog',
-    'aria-labelledby': 'query-document-title',
-  })
-
-  const $close = $('<button>', {
-    type: 'button',
-    class: 'dashboard-collections-config-dialog-close',
-    text: 'Close',
-  })
-
-  $close.on('click', () => {
-    ;($dialog.get(0) as HTMLDialogElement | undefined)?.close()
-  })
-
-  $dialog.on('close', () => {
-    $dialog.remove()
-  })
-
-  $dialog.append(
-    $('<h4>', {
-      id: 'query-document-title',
-      class: 'dashboard-collections-config-dialog-title',
-      text: `Document ${documentId} (${collectionName})`,
-    }),
-    $('<textarea>', {
-      readonly: true,
-      class: 'dashboard-collections-config-dialog-textarea',
-      text: json,
-    }),
-    $('<div>', { class: 'dashboard-collections-config-dialog-actions' }).append($close),
-  )
-
-  $('body').append($dialog)
-  ;($dialog.get(0) as HTMLDialogElement).showModal()
 }
 
 function vectorArmsFromConfig(config: CollectionConfig): QueryVectorArm[] {
@@ -501,7 +396,7 @@ export class QueryPanel extends DashboardPanel {
     } catch (err) {
       $sel.empty()
       $sel.append($('<option>', { value: '', text: 'Select a collection…' }))
-      showDashboardError(formatSearchError('Could not load collections', err))
+      showDashboardError(formatRequestError('Could not load collections', err))
     } finally {
       $sel.prop('disabled', false)
     }
@@ -674,7 +569,7 @@ export class QueryPanel extends DashboardPanel {
       if (gen !== this.vectorListGeneration) {
         return
       }
-      this.setVectorsUi($root, 'error', undefined, formatSearchError('Could not load collection config', err))
+      this.setVectorsUi($root, 'error', undefined, formatRequestError('Could not load collection config', err))
     }
   }
 
@@ -687,9 +582,14 @@ export class QueryPanel extends DashboardPanel {
       const doc = await api.getDocument({ collectionName, documentId })
       hideDashboardError()
       const json = JSON.stringify(DocumentToJSON(doc), null, 2)
-      openQueryDocumentModal(collectionName, documentId, json)
+      openReadonlyJsonDialog({
+        dialogId: 'query-document-dialog',
+        titleId: 'query-document-title',
+        title: `Document ${documentId} (${collectionName})`,
+        json,
+      })
     } catch (err) {
-      showDashboardError(formatSearchError('Could not load document', err))
+      showDashboardError(formatRequestError('Could not load document', err))
     }
   }
 
@@ -718,9 +618,14 @@ export class QueryPanel extends DashboardPanel {
       const config = await api.getCollectionConfig({ collectionName })
       hideDashboardError()
       const json = JSON.stringify(CollectionConfigToJSON(config), null, 2)
-      openQueryPanelFullConfigDialog(collectionName, json)
+      openReadonlyJsonDialog({
+        dialogId: 'query-full-config-dialog',
+        titleId: 'query-full-config-title',
+        title: `Configuration for ${collectionName}`,
+        json,
+      })
     } catch (err) {
-      showDashboardError(formatSearchError('Could not load collection configuration', err))
+      showDashboardError(formatRequestError('Could not load collection configuration', err))
     }
   }
 
@@ -813,7 +718,7 @@ export class QueryPanel extends DashboardPanel {
           }),
         ),
       )
-      showDashboardError(formatSearchError('Search failed', err))
+      showDashboardError(formatRequestError('Search failed', err))
     } finally {
       if (gen === this.searchGeneration) {
         $btn.prop('disabled', false)

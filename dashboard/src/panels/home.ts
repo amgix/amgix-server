@@ -1,5 +1,4 @@
 import {
-  ResponseError,
   type AmgixApi,
   type MetricTrend,
   type Metrics,
@@ -29,6 +28,7 @@ import $ from 'jquery'
 
 import { hideDashboardError, showDashboardError } from '../error-bar'
 import { formatDashboardRouteHash, parseDashboardRouteHash, type HomeMetricsTabId } from '../route-hash'
+import { formatRequestError, stripModelNamespaceForDisplay } from './common'
 import { DashboardPanel } from './panel-base'
 
 Chart.register(LineController, LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend, zoomPlugin)
@@ -379,16 +379,6 @@ function clusterApiErrPerSecColumnHelpText(): string {
 
 type HomeReadinessKey = 'database' | 'rabbitmq' | 'index' | 'query'
 
-function formatRequestError(context: string, err: unknown): string {
-  if (err instanceof ResponseError) {
-    return `${context} (HTTP ${err.response.status})`
-  }
-  if (err instanceof Error) {
-    return err.message
-  }
-  return context
-}
-
 async function fetchReadiness(): Promise<ReadyResponse> {
   const res = await fetch('/v1/health/ready')
   if (!res.ok) {
@@ -483,11 +473,7 @@ function displayEmbeddingModelForTable(raw: string): string {
   if (legacy) {
     t = legacy[2]!.trim()
   }
-  if (t === '') {
-    return ''
-  }
-  const slash = t.lastIndexOf('/')
-  return slash >= 0 ? t.slice(slash + 1).trim() : t
+  return stripModelNamespaceForDisplay(t)
 }
 
 function groupingKeyForEmbeddingByModelSeries(s: NodeMetricSeries): string | null {
