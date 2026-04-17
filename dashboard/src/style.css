@@ -446,6 +446,14 @@ body {
   text-align: right;
 }
 
+.dashboard-home-cluster-info .dashboard-home-cluster-overview-table .dashboard-home-table-heading {
+  text-align: left;
+}
+
+.dashboard-home-cluster-overview-table tbody tr > td:nth-child(3) {
+  padding-left: 1.25rem;
+}
+
 .dashboard-home-table td {
   padding: 0.06rem 0;
   vertical-align: top;

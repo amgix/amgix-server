@@ -307,11 +307,11 @@ function buildMaterialIconNodeLabel(host: string, node: NodeView, bucket: Cluste
     bucket !== 'api' && node.is_leader === true ? { kind: 'leader', host } : { kind: 'plain', text: host }
   const row = buildNodeRow(roleMaterialLigature(bucket), caption)
   const latMs = nodeLocalAvgLatencyMsForMap(node, bucket)
-  let latencyLine = `<span class='dashboard-cluster-map-node-latency dashboard-cluster-map-node-latency--empty'>- ${bucket === 'api' ? 'ms avg' : 'ms/passage'}</span>`
+  let latencyLine = `<span class='dashboard-cluster-map-node-latency dashboard-cluster-map-node-latency--empty'>- ${bucket === 'api' ? 'ms avg' : 'ms/psg'}</span>`
   if (latMs != null && Number.isFinite(latMs)) {
     const latText = formatClusterMapAvgMs(latMs)
     if (latText !== '') {
-      latencyLine = `<span class='dashboard-cluster-map-node-latency'>${escapeHtmlText(latText)} ${bucket === 'api' ? 'ms avg' : 'ms/passage'}</span>`
+      latencyLine = `<span class='dashboard-cluster-map-node-latency'>${escapeHtmlText(latText)} ${bucket === 'api' ? 'ms avg' : 'ms/psg'}</span>`
     }
   }
 

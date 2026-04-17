@@ -114,6 +114,9 @@ const ENCODER_CHART_TREND_KEYS = [
 
 const INDEXING_CHART_TREND_KEYS = ['index_queue_job_ms', 'index_bulk_job_ms'] as const
 
+/** New + updated docs indexed (single-doc and bulk paths both record these). */
+const CLUSTER_INDEXING_DOCS_COUNTER_KEYS = ['index_queue_docs_new', 'index_queue_docs_updated'] as const
+
 const HOME_INDEXING_TABLE_EXTRA_KEYS = [
   'index_queue_docs_skipped_stale',
   'index_queue_docs_new',
@@ -155,15 +158,25 @@ function homeMetricsCurrentKeys(tab: HomeMetricsTabId): string[] {
   const apiOverview = [...HOME_CLUSTER_INFO_API_KEYS]
   const encOverview = [...ENCODER_CHART_TREND_KEYS]
   if (tab === 'api') {
-    return uniqStrings([...API_CHART_TREND_KEYS, ...encOverview, ...INDEXING_CHART_TREND_KEYS])
+    return uniqStrings([
+      ...API_CHART_TREND_KEYS,
+      ...encOverview,
+      ...INDEXING_CHART_TREND_KEYS,
+      ...CLUSTER_INDEXING_DOCS_COUNTER_KEYS,
+    ])
   }
   if (tab === 'encoder') {
-    return uniqStrings([...homeEncoderTableMetricKeys(), ...apiOverview, ...INDEXING_CHART_TREND_KEYS])
+    return uniqStrings([
+      ...homeEncoderTableMetricKeys(),
+      ...apiOverview,
+      ...INDEXING_CHART_TREND_KEYS,
+      ...CLUSTER_INDEXING_DOCS_COUNTER_KEYS,
+    ])
   }
   if (tab === 'indexing') {
     return uniqStrings([...homeIndexingTableMetricKeys(), ...apiOverview, ...encOverview])
   }
-  return uniqStrings([...apiOverview, ...encOverview])
+  return uniqStrings([...apiOverview, ...encOverview, ...CLUSTER_INDEXING_DOCS_COUNTER_KEYS])
 }
 
 const CLUSTER_CHART_X_TICK_COUNT = 7
@@ -1042,7 +1055,7 @@ function formatIndexingMetricsCells(node: NodeView): {
   bulkRequeuePerSec: string
 } {
   const list = node.metrics ?? []
-  const docsPerSec = formatIndexingSumRateCell(list, ['index_queue_docs_new', 'index_queue_docs_updated'])
+  const docsPerSec = formatIndexingSumRateCell(list, CLUSTER_INDEXING_DOCS_COUNTER_KEYS)
   const stalePerSec = formatIndexingSingleSumRateCell(list, 'index_queue_docs_skipped_stale')
   const queueFailPerSec = formatIndexingSingleSumRateCell(list, 'index_queue_failed')
   const queueRequeuePerSec = formatIndexingSingleSumRateCell(list, 'index_queue_requeued')
@@ -1246,6 +1259,37 @@ function partitionIndexRoleNodes(nodes: { [key: string]: NodeView }): Array<[str
     }
   }
   return sortEncoderNodeEntries(rows)
+}
+
+function aggregateClusterIndexingDocsPerSec(
+  view: Metrics | null,
+  windowSec: number = CLUSTER_METRICS_WINDOW_SEC,
+): number | null {
+  if (view?.nodes == null) {
+    return null
+  }
+  let totalDocsInWindow = 0
+  let saw = false
+  for (const node of Object.values(view.nodes)) {
+    if (!isIndexWorkerRole(node.role)) {
+      continue
+    }
+    const list = node.metrics ?? []
+    for (const key of CLUSTER_INDEXING_DOCS_COUNTER_KEYS) {
+      const ws = getMetricWindowSampleByFirstKey(list, key)
+      if (ws != null) {
+        const v = Number(ws.value)
+        if (Number.isFinite(v)) {
+          totalDocsInWindow += v
+          saw = true
+        }
+      }
+    }
+  }
+  if (!saw) {
+    return null
+  }
+  return totalDocsInWindow / windowSec
 }
 
 type ApiMetricsHistoryPoint = {
@@ -2933,6 +2977,7 @@ export class HomePanel extends DashboardPanel {
       $root.find('[data-home-cluster-info="encoder-nodes"]').text(dash)
       $root.find('[data-home-cluster-info="api-rps"]').text(dash)
       $root.find('[data-home-cluster-info="api-ms"]').text(dash)
+      $root.find('[data-home-cluster-info="index-docs-s"]').text(dash)
       $root.find('[data-home-cluster-info="infer-ms"]').text(dash)
       $root.find('[data-home-cluster-info="api-err-4xx"]').text(dash)
       $root.find('[data-home-cluster-info="api-err-5xx"]').text(dash)
@@ -2954,10 +2999,17 @@ export class HomePanel extends DashboardPanel {
     } else {
       $apiMs.text(dash)
     }
+    const indexDocsS = aggregateClusterIndexingDocsPerSec(view)
+    const $indexDocsS = $root.find('[data-home-cluster-info="index-docs-s"]')
+    if (indexDocsS != null && Number.isFinite(indexDocsS)) {
+      $indexDocsS.text(`${formatClusterRpsCell(indexDocsS)} docs/s`)
+    } else {
+      $indexDocsS.text(dash)
+    }
     const thr = aggregateClusterThroughput(view)
     const $inferMs = $root.find('[data-home-cluster-info="infer-ms"]')
     if (thr.globalAvgMs != null && Number.isFinite(thr.globalAvgMs)) {
-      $inferMs.text(`${formatClusterAvgMsCell(thr.globalAvgMs)} ms/passage`)
+      $inferMs.text(`${formatClusterAvgMsCell(thr.globalAvgMs)} ms/psg`)
     } else {
       $inferMs.text(dash)
     }
@@ -3587,7 +3639,6 @@ export class HomePanel extends DashboardPanel {
           value: '',
           readiness: { ok: this.readinessDisplayOk(ready.query, 'query'), dataKey: 'query' },
         },
-        { key: 'Collection count', value: String(info.collection_count), readiness: null },
       ]
 
       const $tbody = $('<tbody>')
@@ -3618,36 +3669,48 @@ export class HomePanel extends DashboardPanel {
       const $systemTable = $('<table>', { class: 'dashboard-home-table' }).append($thead, $tbody)
       const $systemBlock = $('<div>', { class: 'dashboard-home-system-block' }).append($systemTable)
 
-      const clusterInfoRow = (label: string, key: string) =>
-        $('<tr>').append(
-          $('<td>', { class: 'dashboard-home-k', text: `${label}:` }),
-          $('<td>', {
-            class: 'dashboard-home-v',
-            attr: { 'data-home-cluster-info': key },
-          }),
-        )
+      const clusterOverviewPairRow = (
+        leftLabel: string,
+        leftKey: string,
+        right: { label: string; key: string } | null,
+      ): JQuery<HTMLTableRowElement> => {
+        const $leftV = $('<td>', { class: 'dashboard-home-v', attr: { 'data-home-cluster-info': leftKey } })
+        const cells: JQuery<HTMLElement>[] = [
+          $('<td>', { class: 'dashboard-home-k', text: `${leftLabel}:` }),
+          $leftV,
+        ]
+        if (right != null) {
+          cells.push(
+            $('<td>', { class: 'dashboard-home-k', text: `${right.label}:` }),
+            $('<td>', { class: 'dashboard-home-v', attr: { 'data-home-cluster-info': right.key } }),
+          )
+        } else {
+          cells.push($('<td>', { class: 'dashboard-home-k' }), $('<td>', { class: 'dashboard-home-v' }))
+        }
+        return $('<tr>').append(...cells) as JQuery<HTMLTableRowElement>
+      }
       const $clusterInfoThead = $('<thead>').append(
         $('<tr>').append(
           $('<th>', {
             class: 'dashboard-home-table-heading',
-            colspan: 2,
+            colspan: 4,
             text: 'Cluster Overview',
           }),
         ),
       )
       const $clusterInfoTbody = $('<tbody>').append(
-        clusterInfoRow('API Nodes', 'api-nodes'),
-        clusterInfoRow('Encoder Nodes', 'encoder-nodes'),
-        clusterInfoRow('Global RPS', 'api-rps'),
-        clusterInfoRow('Avg Latency', 'api-ms'),
-        clusterInfoRow('Avg Inference Latency', 'infer-ms'),
-        clusterInfoRow('4xx Errors', 'api-err-4xx'),
-        clusterInfoRow('5xx Errors', 'api-err-5xx'),
+        clusterOverviewPairRow('API Nodes', 'api-nodes', { label: 'Request Latency (avg)', key: 'api-ms' }),
+        clusterOverviewPairRow('Encoder Nodes', 'encoder-nodes', {
+          label: 'Indexing Throughput (avg)',
+          key: 'index-docs-s',
+        }),
+        clusterOverviewPairRow('Global RPS', 'api-rps', { label: 'Inference Latency (avg)', key: 'infer-ms' }),
+        clusterOverviewPairRow('4xx Errors', 'api-err-4xx', null),
+        clusterOverviewPairRow('5xx Errors', 'api-err-5xx', null),
       )
-      const $clusterInfoTable = $('<table>', { class: 'dashboard-home-table' }).append(
-        $clusterInfoThead,
-        $clusterInfoTbody,
-      )
+      const $clusterInfoTable = $('<table>', {
+        class: 'dashboard-home-table dashboard-home-cluster-overview-table',
+      }).append($clusterInfoThead, $clusterInfoTbody)
       const $clusterInfoBlock = $('<div>', { class: 'dashboard-home-cluster-info' }).append($clusterInfoTable)
 
       const $topBand = $('<div>', { class: 'dashboard-home-top-band' }).append($systemBlock, $clusterInfoBlock)
