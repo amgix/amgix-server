@@ -16,7 +16,7 @@ import {
 import $ from 'jquery'
 
 import { hideDashboardError, showDashboardError } from '../error-bar'
-import { formatRequestError, openReadonlyJsonDialog } from './common'
+import { DASHBOARD_LOAD_RETRY_MS, formatRequestError, openReadonlyJsonDialog } from './common'
 import { DashboardPanel } from './panel-base'
 
 Chart.register(PieController, ArcElement, Tooltip, Legend)
@@ -344,10 +344,34 @@ export class CollectionsPanel extends DashboardPanel {
   private statsPollTimer: number | null = null
   private statsPollGeneration = 0
   private queueTotalSample: { t: number; total: number } | null = null
+  private collectionsNavRetryTimer: number | null = null
 
   override deactivate(): void {
     this.clearStatsPoll()
+    this.clearCollectionsNavRetry()
     this.statsPollGeneration += 1
+  }
+
+  private clearCollectionsNavRetry(): void {
+    if (this.collectionsNavRetryTimer != null) {
+      window.clearTimeout(this.collectionsNavRetryTimer)
+      this.collectionsNavRetryTimer = null
+    }
+  }
+
+  private scheduleCollectionsNavRetry(
+    api: AmgixApi,
+    $nav: JQuery<HTMLElement>,
+    $detail: JQuery<HTMLElement>,
+    preferName: string | null,
+  ): void {
+    if (this.collectionsNavRetryTimer != null) {
+      return
+    }
+    this.collectionsNavRetryTimer = window.setTimeout(() => {
+      this.collectionsNavRetryTimer = null
+      void this.loadCollectionsNav(api, $nav, $detail, preferName)
+    }, DASHBOARD_LOAD_RETRY_MS)
   }
 
   init(api: AmgixApi): void {
@@ -382,6 +406,7 @@ export class CollectionsPanel extends DashboardPanel {
   ): Promise<void> {
     this.clearStatsPoll()
     this.destroyQueuePieChart()
+    this.clearCollectionsNavRetry()
     this.queueTotalSample = null
 
     $nav.empty()
@@ -420,6 +445,7 @@ export class CollectionsPanel extends DashboardPanel {
       $nav.empty()
       $detail.empty()
       showDashboardError(formatRequestError('Could not load collections.', err))
+      this.scheduleCollectionsNavRetry(api, $nav, $detail, preferName)
     }
   }
 

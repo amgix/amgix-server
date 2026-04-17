@@ -13,7 +13,12 @@ import {
 import $ from 'jquery'
 
 import { hideDashboardError, showDashboardError } from '../error-bar'
-import { formatRequestError, openReadonlyJsonDialog, stripModelNamespaceForDisplay } from './common'
+import {
+  DASHBOARD_LOAD_RETRY_MS,
+  formatRequestError,
+  openReadonlyJsonDialog,
+  stripModelNamespaceForDisplay,
+} from './common'
 import { DashboardPanel } from './panel-base'
 
 const QUERY_SEARCH_LIMIT = 10
@@ -113,11 +118,30 @@ export class QueryPanel extends DashboardPanel {
   private searchGeneration = 0
   private vectorListGeneration = 0
   private domBuilt = false
+  private queryCollectionsRetryTimer: number | null = null
 
   deactivate(): void {
+    this.clearQueryCollectionsRetry()
     this.searchGeneration += 1
     this.vectorListGeneration += 1
     this.queryApi = null
+  }
+
+  private clearQueryCollectionsRetry(): void {
+    if (this.queryCollectionsRetryTimer != null) {
+      window.clearTimeout(this.queryCollectionsRetryTimer)
+      this.queryCollectionsRetryTimer = null
+    }
+  }
+
+  private scheduleQueryCollectionsRetry(api: AmgixApi, $root: JQuery<HTMLElement>): void {
+    if (this.queryCollectionsRetryTimer != null) {
+      return
+    }
+    this.queryCollectionsRetryTimer = window.setTimeout(() => {
+      this.queryCollectionsRetryTimer = null
+      void this.loadCollections(api, $root)
+    }, DASHBOARD_LOAD_RETRY_MS)
   }
 
   init(api: AmgixApi): void {
@@ -380,6 +404,7 @@ export class QueryPanel extends DashboardPanel {
     if (!$sel.length) {
       return
     }
+    this.clearQueryCollectionsRetry()
     const prev = String($sel.val() ?? '')
     $sel.prop('disabled', true)
     try {
@@ -397,6 +422,7 @@ export class QueryPanel extends DashboardPanel {
       $sel.empty()
       $sel.append($('<option>', { value: '', text: 'Select a collection…' }))
       showDashboardError(formatRequestError('Could not load collections', err))
+      this.scheduleQueryCollectionsRetry(api, $root)
     } finally {
       $sel.prop('disabled', false)
     }

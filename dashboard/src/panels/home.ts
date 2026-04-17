@@ -2082,6 +2082,7 @@ const HOME_READINESS_KEYS: HomeReadinessKey[] = ['database', 'rabbitmq', 'index'
 export class HomePanel extends DashboardPanel {
   private readyPollTimer: number | null = null
   private readyPollGeneration = 0
+  private homeLoadRetryTimer: number | null = null
   /** Consecutive failed /ready samples per key; UI shows Not ready only after 2 failures in a row. */
   private readyFailureStreaks: Record<HomeReadinessKey, number> = {
     database: 0,
@@ -2103,6 +2104,7 @@ export class HomePanel extends DashboardPanel {
   private homeChartRangeListenerAttached = false
 
   override deactivate(): void {
+    this.clearHomeLoadRetry()
     this.clearReadyPoll()
     this.readyPollGeneration += 1
   }
@@ -2157,6 +2159,23 @@ export class HomePanel extends DashboardPanel {
       return
     }
     void this.loadHome(api, $root)
+  }
+
+  private clearHomeLoadRetry(): void {
+    if (this.homeLoadRetryTimer != null) {
+      window.clearTimeout(this.homeLoadRetryTimer)
+      this.homeLoadRetryTimer = null
+    }
+  }
+
+  private scheduleHomeLoadRetry(api: AmgixApi, $root: JQuery<HTMLElement>): void {
+    if (this.homeLoadRetryTimer != null) {
+      return
+    }
+    this.homeLoadRetryTimer = window.setTimeout(() => {
+      this.homeLoadRetryTimer = null
+      void this.loadHome(api, $root)
+    }, HOME_READY_POLL_MS)
   }
 
   private clearReadyPoll(): void {
@@ -3585,6 +3604,7 @@ export class HomePanel extends DashboardPanel {
   }
 
   private async loadHome(api: AmgixApi, $root: JQuery<HTMLElement>): Promise<void> {
+    this.clearHomeLoadRetry()
     this.clearReadyPoll()
     this.readyPollGeneration += 1
     const generation = this.readyPollGeneration
@@ -3606,6 +3626,7 @@ export class HomePanel extends DashboardPanel {
       if (generation !== this.readyPollGeneration) {
         return
       }
+      this.clearHomeLoadRetry()
       this.metricsChartLiveView = metrics
       hideDashboardError()
 
@@ -4151,6 +4172,7 @@ export class HomePanel extends DashboardPanel {
       }
       $root.empty()
       showDashboardError(formatRequestError('Could not load home.', err))
+      this.scheduleHomeLoadRetry(api, $root)
     }
   }
 }

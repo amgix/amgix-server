@@ -901,6 +901,8 @@ export class ClusterMapPanel extends DashboardPanel {
   private pollGeneration = 0
   /** Avoid repeating the metrics snackbar on every poll tick while the request keeps failing. */
   private clusterMapMetricsErrorShown = false
+  /** Same for system info when refetched each poll tick. */
+  private clusterMapSystemInfoErrorShown = false
   private cy: Core | null = null
   /** Last applied topology; used to decide fit vs preserve pan/zoom on poll. */
   private clusterMapTopologySignature = ''
@@ -911,6 +913,7 @@ export class ClusterMapPanel extends DashboardPanel {
     this.clearPoll()
     this.pollGeneration += 1
     this.clusterMapMetricsErrorShown = false
+    this.clusterMapSystemInfoErrorShown = false
     this.clusterMapTopologySignature = ''
     this.destroyGraph()
   }
@@ -923,6 +926,7 @@ export class ClusterMapPanel extends DashboardPanel {
     this.clearPoll()
     this.pollGeneration += 1
     this.clusterMapMetricsErrorShown = false
+    this.clusterMapSystemInfoErrorShown = false
     const generation = this.pollGeneration
     this.ensureShell($root)
     this.ensureZoomTools($root)
@@ -1242,16 +1246,12 @@ export class ClusterMapPanel extends DashboardPanel {
     $root: JQuery<HTMLElement>,
     generation: number,
   ): Promise<void> {
-    const systemInfo = await api.systemInfo().catch((err: unknown) => {
-      showDashboardError(formatRequestError('Could not load cluster map.', err))
-      return null
-    })
+    await this.fetchAndRender(api, $root, generation)
     if (generation !== this.pollGeneration) {
       return
     }
-    await this.fetchAndRender(api, $root, generation, systemInfo)
     this.pollTimer = window.setInterval(() => {
-      void this.fetchAndRender(api, $root, generation, systemInfo)
+      void this.fetchAndRender(api, $root, generation)
     }, CLUSTER_MAP_POLL_MS)
   }
 
@@ -1259,7 +1259,6 @@ export class ClusterMapPanel extends DashboardPanel {
     api: AmgixApi,
     $root: JQuery<HTMLElement>,
     generation: number,
-    systemInfo: SystemInfoResponse | null,
   ): Promise<void> {
     if (generation !== this.pollGeneration || $('#panel-cluster-map').prop('hidden')) {
       return
@@ -1267,6 +1266,20 @@ export class ClusterMapPanel extends DashboardPanel {
     const $canvas = $root.find('[data-cluster-map-canvas]')
     if (!$canvas.length) {
       return
+    }
+
+    const systemInfo = await api.systemInfo().catch((err: unknown) => {
+      if (!this.clusterMapSystemInfoErrorShown) {
+        this.clusterMapSystemInfoErrorShown = true
+        showDashboardError(formatRequestError('Could not load cluster map.', err))
+      }
+      return null
+    })
+    if (generation !== this.pollGeneration || $('#panel-cluster-map').prop('hidden')) {
+      return
+    }
+    if (systemInfo != null) {
+      this.clusterMapSystemInfoErrorShown = false
     }
 
     const metrics = await api

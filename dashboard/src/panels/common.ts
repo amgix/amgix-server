@@ -1,6 +1,9 @@
 import { ResponseError } from '@amgix/amgix-client'
 import $ from 'jquery'
 
+/** Delay before retrying a panel's initial data load after a fetch failure. */
+export const DASHBOARD_LOAD_RETRY_MS = 10_000
+
 export function formatRequestError(context: string, err: unknown): string {
   if (err instanceof ResponseError) {
     return `${context} (HTTP ${err.response.status})`
