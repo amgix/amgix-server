@@ -4,6 +4,28 @@ import $ from 'jquery'
 /** Delay before retrying a panel's initial data load after a fetch failure. */
 export const DASHBOARD_LOAD_RETRY_MS = 10_000
 
+/** Shown after repeated failed periodic refresh attempts (see `createPollFailureStreakNotifier`). */
+export const DASHBOARD_POLL_REFRESH_FAILED_MESSAGE =
+  'Could not refresh dashboard data. Retrying automatically.'
+
+const DEFAULT_POLL_FAILURE_STREAK = 2
+
+export function createPollFailureStreakNotifier(threshold = DEFAULT_POLL_FAILURE_STREAK) {
+  let streak = 0
+  return {
+    reset(): void {
+      streak = 0
+    },
+    markSuccess(): void {
+      streak = 0
+    },
+    markFailure(): boolean {
+      streak += 1
+      return streak >= threshold
+    },
+  }
+}
+
 export function formatRequestError(context: string, err: unknown): string {
   if (err instanceof ResponseError) {
     return `${context} (HTTP ${err.response.status})`

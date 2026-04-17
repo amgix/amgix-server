@@ -28,7 +28,12 @@ import $ from 'jquery'
 
 import { hideDashboardError, showDashboardError } from '../error-bar'
 import { formatDashboardRouteHash, parseDashboardRouteHash, type HomeMetricsTabId } from '../route-hash'
-import { formatRequestError, stripModelNamespaceForDisplay } from './common'
+import {
+  createPollFailureStreakNotifier,
+  DASHBOARD_POLL_REFRESH_FAILED_MESSAGE,
+  formatRequestError,
+  stripModelNamespaceForDisplay,
+} from './common'
 import { DashboardPanel } from './panel-base'
 
 Chart.register(LineController, LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend, zoomPlugin)
@@ -2083,6 +2088,7 @@ export class HomePanel extends DashboardPanel {
   private readyPollTimer: number | null = null
   private readyPollGeneration = 0
   private homeLoadRetryTimer: number | null = null
+  private readonly homePollRefreshFailures = createPollFailureStreakNotifier()
   /** Consecutive failed /ready samples per key; UI shows Not ready only after 2 failures in a row. */
   private readyFailureStreaks: Record<HomeReadinessKey, number> = {
     database: 0,
@@ -2194,6 +2200,7 @@ export class HomePanel extends DashboardPanel {
     this.clusterSeriesLabels.clear()
     this.apiChartBuckets.clear()
     this.metricsChartLiveView = null
+    this.homePollRefreshFailures.reset()
   }
 
   private destroyApiMetricsChart(): void {
@@ -3544,7 +3551,9 @@ export class HomePanel extends DashboardPanel {
     }
     this.metricsChartLiveView = metrics
 
+    let trendsOk = true
     if (tab === 'api' || tab === 'encoder' || tab === 'indexing') {
+      trendsOk = false
       const until = new Date()
       const patchMs = this.chartTrendPatchMs()
       const since = new Date(until.getTime() - patchMs)
@@ -3585,6 +3594,7 @@ export class HomePanel extends DashboardPanel {
           }
           trimChartBucketMap(this.indexingChartBuckets, cutoffSec)
         }
+        trendsOk = true
       } catch {
         if (generation !== this.readyPollGeneration) {
           return
@@ -3593,13 +3603,28 @@ export class HomePanel extends DashboardPanel {
     }
 
     this.applyClusterViewToDom($root, metrics)
+
+    let readyOk = false
     try {
       const ready = await fetchReadiness()
       if (generation !== this.readyPollGeneration) {
         return
       }
       this.applyReadinessToDom($root, ready)
+      readyOk = true
     } catch {
+      // leave readyOk false
+    }
+
+    if (generation !== this.readyPollGeneration) {
+      return
+    }
+    const metricsOk = metrics !== null
+    const tickOk = metricsOk && trendsOk && readyOk
+    if (tickOk) {
+      this.homePollRefreshFailures.markSuccess()
+    } else if (this.homePollRefreshFailures.markFailure()) {
+      showDashboardError(DASHBOARD_POLL_REFRESH_FAILED_MESSAGE)
     }
   }
 

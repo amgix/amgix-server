@@ -16,7 +16,13 @@ import {
 import $ from 'jquery'
 
 import { hideDashboardError, showDashboardError } from '../error-bar'
-import { DASHBOARD_LOAD_RETRY_MS, formatRequestError, openReadonlyJsonDialog } from './common'
+import {
+  createPollFailureStreakNotifier,
+  DASHBOARD_LOAD_RETRY_MS,
+  DASHBOARD_POLL_REFRESH_FAILED_MESSAGE,
+  formatRequestError,
+  openReadonlyJsonDialog,
+} from './common'
 import { DashboardPanel } from './panel-base'
 
 Chart.register(PieController, ArcElement, Tooltip, Legend)
@@ -345,6 +351,7 @@ export class CollectionsPanel extends DashboardPanel {
   private statsPollGeneration = 0
   private queueTotalSample: { t: number; total: number } | null = null
   private collectionsNavRetryTimer: number | null = null
+  private readonly collectionStatsPollFailures = createPollFailureStreakNotifier()
 
   override deactivate(): void {
     this.clearStatsPoll()
@@ -454,6 +461,7 @@ export class CollectionsPanel extends DashboardPanel {
       clearInterval(this.statsPollTimer)
       this.statsPollTimer = null
     }
+    this.collectionStatsPollFailures.reset()
   }
 
   private destroyQueuePieChart(): void {
@@ -584,15 +592,19 @@ export class CollectionsPanel extends DashboardPanel {
         ]
         this.queuePieChart.update('none')
       }
+      this.collectionStatsPollFailures.markSuccess()
     } catch (err) {
       if (err instanceof ResponseError && err.response.status === 404) {
         if (generation !== this.statsPollGeneration) {
           return
         }
+        this.collectionStatsPollFailures.reset()
         void this.loadCollectionsNav(api, $nav, $detail, null)
         return
       }
-      // Ignore transient poll failures; next tick retries.
+      if (this.collectionStatsPollFailures.markFailure()) {
+        showDashboardError(DASHBOARD_POLL_REFRESH_FAILED_MESSAGE)
+      }
     }
   }
 
