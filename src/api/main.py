@@ -69,17 +69,20 @@ class OkResponse(BaseModel):
 # 218 = partial readiness (some index/query probes not ready); 200 = fully ready
 HTTP_STATUS_PARTIAL_READY = 218
 
-READINESS_PING_TIMEOUT_SEC = 2.0
+READINESS_PING_ATTEMPT_TIMEOUT_SEC = 1.0
+READINESS_PING_MAX_ATTEMPTS = 2
 
 
 async def _readiness_ping(routing_key: str) -> bool:
     if _bunny_talk is None:
         return False
-    try:
-        await _bunny_talk.rpc(routing_key, timeout=READINESS_PING_TIMEOUT_SEC)
-        return True
-    except Exception:
-        return False
+    for _ in range(READINESS_PING_MAX_ATTEMPTS):
+        try:
+            await _bunny_talk.rpc(routing_key, timeout=READINESS_PING_ATTEMPT_TIMEOUT_SEC)
+            return True
+        except Exception:
+            continue
+    return False
 
 
 class ReadyResponse(BaseModel):
