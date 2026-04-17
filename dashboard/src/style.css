@@ -1321,8 +1321,10 @@ a.dashboard-home-loaded-models-count:hover {
 }
 
 .dashboard-collections-empty {
-  margin: 0.75rem 0 0;
+  margin: 0;
+  padding: 0.65rem 0.85rem 0.75rem;
   max-width: 40rem;
+  line-height: 1.45;
 }
 
 @media (max-width: 720px) {
