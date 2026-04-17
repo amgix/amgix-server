@@ -229,7 +229,7 @@ export class QueryPanel extends DashboardPanel {
         autocomplete: 'off',
         'aria-required': 'true',
       },
-      title: 'Enter runs search. Shift+Enter inserts a new line.',
+      title: 'Enter runs the search. Shift+Enter inserts a new line.',
     })
 
     const $fullConfigLink = $('<a>', {

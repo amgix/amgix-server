@@ -209,7 +209,7 @@ function homeChartZoomResetButton(target: HomeChartZoomResetTarget): JQuery<HTML
     type: 'button',
     class: 'dashboard-home-cluster-chart-zoom-reset',
     attr: { 'data-home-chart-zoom-reset': target },
-    title: 'Reset zoom on this chart',
+    title: 'Reset chart zoom',
     'aria-label': 'Reset chart zoom',
   }).append(
     $('<span>', {
@@ -231,27 +231,27 @@ function clusterThWithHelp(label: string, tip: string): JQuery<HTMLElement> {
 
 function clusterBatchesColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Number of embed requests that originated on this node in the last ${w}s.`
+  return `Number of embed requests that originated in the last ${w}s.`
 }
 
 function clusterRateColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Passages embedded per second, originating on this node, over the last ${w}s.`
+  return `Passages embedded per second from originating requests over the last ${w}s.`
 }
 
 function clusterInferMsColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Local model inference time per passage, in ms, over the last ${w}s.`
+  return `Mean local model inference time per passage, in ms, over the last ${w}s.`
 }
 
 function clusterPipeMsColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Routed inference time per passage, in ms, as seen by the originating encoder (includes RPC if the request was forwarded to another node), over the last ${w}s.`
+  return `Mean routed inference time per passage, in ms, as seen by the originating encoder (includes RPC if the request was forwarded to another node), over the last ${w}s.`
 }
 
 function clusterErrPerSecColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Failed embed requests per second, originating on this node, over the last ${w}s.`
+  return `Failed embed requests per second from originating requests over the last ${w}s.`
 }
 
 function clusterByModelBatchesHelpText(): string {
@@ -284,32 +284,32 @@ function clusterChartHelpText(): string {
 }
 
 function indexingClusterChartHelpText(): string {
-  return 'Single-doc queue job is wall time to finish one single-document queue item. Bulk batch job is wall time to finish one bulk indexing batch. Values are cluster-wide means (milliseconds).'
+  return 'Single-doc: mean time per completed indexing item. Bulk: mean time per completed bulk batch. Values are cluster-wide means (milliseconds).'
 }
 
 function clusterIndexingDocsPerSecHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `New plus updated documents per second from single-document index queue jobs, over the last ${w}s.`
+  return `New and updated documents indexed per second (single-doc path and bulk batches), over the last ${w}s.`
 }
 
 function clusterIndexingStalePerSecHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Documents skipped as stale from the single-document queue, per second, over the last ${w}s.`
+  return `Documents per second skipped because they were older than what is already indexed, over the last ${w}s.`
 }
 
 function clusterIndexingQueueFailHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Single-document queue jobs marked failed, per second, over the last ${w}s.`
+  return `Failures per second for single-document indexing, over the last ${w}s.`
 }
 
 function clusterIndexingQueueRequeueHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Single-document queue jobs requeued for retry, per second, over the last ${w}s.`
+  return `Requeues per second for single-document indexing, over the last ${w}s.`
 }
 
 function clusterIndexingQueueJobMsHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Mean wall time in ms per completed single-document queue job on this node, over the last ${w}s.`
+  return `Mean time in ms per completed single-document indexing item, over the last ${w}s.`
 }
 
 function clusterIndexingBulkBatchesHelpText(): string {
@@ -319,12 +319,12 @@ function clusterIndexingBulkBatchesHelpText(): string {
 
 function clusterIndexingBulkBatchSizeHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Mean documents per completed bulk batch on this node, over the last ${w}s.`
+  return `Mean documents per completed bulk batch, over the last ${w}s.`
 }
 
 function clusterIndexingBulkJobMsHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Mean wall time in ms per completed bulk indexing batch on this node, over the last ${w}s.`
+  return `Mean time in ms per completed bulk indexing batch, over the last ${w}s.`
 }
 
 function clusterIndexingBulkFailHelpText(): string {
@@ -347,12 +347,12 @@ function clusterApiLatenciesChartHelpText(): string {
 
 function clusterApiAllReqColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `All HTTP requests per second handled by this API process, over the last ${w}s.`
+  return `All HTTP requests per second, over the last ${w}s.`
 }
 
 function clusterApiAllMsColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Mean latency in ms for all HTTP requests on this API process, over the last ${w}s.`
+  return `Mean latency in ms for all HTTP requests, over the last ${w}s.`
 }
 
 function clusterApiAsyncReqColumnHelpText(): string {
@@ -397,7 +397,7 @@ function clusterApiSearchMsColumnHelpText(): string {
 
 function clusterApiErrPerSecColumnHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
-  return `HTTP 4xx and 5xx responses per second from this API process, combined, over the last ${w}s.`
+  return `HTTP 4xx and 5xx responses per second, combined, over the last ${w}s.`
 }
 
 type HomeReadinessKey = 'database' | 'rabbitmq' | 'index' | 'query'
@@ -2608,7 +2608,7 @@ export class HomePanel extends DashboardPanel {
     const bulkLineColor = '#ea580c'
 
     const queueMsDataset = {
-      label: 'Single-doc queue job',
+      label: 'Single-doc',
       data: indexingHistory.map((pt) => ({
         x: pt.t,
         y: pt.queueJobMs != null && Number.isFinite(pt.queueJobMs) ? pt.queueJobMs : null,
@@ -2624,7 +2624,7 @@ export class HomePanel extends DashboardPanel {
       spanGaps: false,
     }
     const bulkMsDataset = {
-      label: 'Bulk batch job',
+      label: 'Bulk batch',
       data: indexingHistory.map((pt) => ({
         x: pt.t,
         y: pt.bulkJobMs != null && Number.isFinite(pt.bulkJobMs) ? pt.bulkJobMs : null,
@@ -2650,11 +2650,11 @@ export class HomePanel extends DashboardPanel {
     const legendItems = [
       {
         color: queueLineColor,
-        ...clusterChartLegendMsValue('Single-doc queue job', liveMs.queueJobMs),
+        ...clusterChartLegendMsValue('Single-doc', liveMs.queueJobMs),
       },
       {
         color: bulkLineColor,
-        ...clusterChartLegendMsValue('Bulk batch job', liveMs.bulkJobMs),
+        ...clusterChartLegendMsValue('Bulk batch', liveMs.bulkJobMs),
       },
     ]
     renderClusterChartHtmlLegend($legendUl, legendItems, tickColor)
@@ -3236,7 +3236,7 @@ export class HomePanel extends DashboardPanel {
             $('<td>', {
               class: 'dashboard-home-cluster-placeholder',
               colspan: CLUSTER_INDEXING_COLSPAN,
-              text: 'No index workers reported.',
+              text: 'No index encoders reported.',
             }),
           ),
         )
@@ -3336,7 +3336,7 @@ export class HomePanel extends DashboardPanel {
             $('<td>', {
               class: 'dashboard-home-cluster-placeholder',
               colspan: CLUSTER_INDEXING_COLSPAN,
-              text: 'No index or combined (idx/qry) nodes reported.',
+              text: 'No index encoders reported.',
             }),
           ),
         )
@@ -3894,7 +3894,7 @@ export class HomePanel extends DashboardPanel {
             }),
             $('<span>', {
               class: 'dashboard-home-cluster-chart-title',
-              text: 'Indexing Job Latency',
+              text: 'Indexing Latency',
             }),
             $('<div>', { class: 'dashboard-home-cluster-chart-hint-actions' }).append(
               this.buildHomeChartHistorySelect(),
@@ -3909,7 +3909,7 @@ export class HomePanel extends DashboardPanel {
             $('<canvas>', {
               attr: { 'data-home-indexing-latency-chart': '' },
               'aria-label':
-                'Mean single-document queue job time vs mean bulk indexing batch time over the selected time range.',
+                'Mean time per single-document indexing item vs per bulk indexing batch over the selected time range.',
             }),
           ),
           $('<ul>', {
@@ -3936,14 +3936,14 @@ export class HomePanel extends DashboardPanel {
             $('<th>', { text: 'Node' }),
             clusterThWithHelp('Docs/s', clusterIndexingDocsPerSecHelpText()),
             clusterThWithHelp('Stale/s', clusterIndexingStalePerSecHelpText()),
-            clusterThWithHelp('Q fail/s', clusterIndexingQueueFailHelpText()),
-            clusterThWithHelp('Q rq/s', clusterIndexingQueueRequeueHelpText()),
-            clusterThWithHelp('Q job ms', clusterIndexingQueueJobMsHelpText()),
+            clusterThWithHelp('Doc fail/s', clusterIndexingQueueFailHelpText()),
+            clusterThWithHelp('Doc rq/s', clusterIndexingQueueRequeueHelpText()),
+            clusterThWithHelp('Doc ms', clusterIndexingQueueJobMsHelpText()),
             clusterThWithHelp('Bulk/s', clusterIndexingBulkBatchesHelpText()),
-            clusterThWithHelp('Blk sz', clusterIndexingBulkBatchSizeHelpText()),
-            clusterThWithHelp('Blk ms', clusterIndexingBulkJobMsHelpText()),
-            clusterThWithHelp('Bl fail/s', clusterIndexingBulkFailHelpText()),
-            clusterThWithHelp('Bl rq/s', clusterIndexingBulkRequeueHelpText()),
+            clusterThWithHelp('Bulk sz', clusterIndexingBulkBatchSizeHelpText()),
+            clusterThWithHelp('Bulk ms', clusterIndexingBulkJobMsHelpText()),
+            clusterThWithHelp('Bulk fail/s', clusterIndexingBulkFailHelpText()),
+            clusterThWithHelp('Bulk rq/s', clusterIndexingBulkRequeueHelpText()),
           ),
         )
 
