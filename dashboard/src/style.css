@@ -1519,7 +1519,7 @@ body {
 .dashboard-query-form {
   box-sizing: border-box;
   max-width: 52rem;
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.0rem;
 }
 
 .dashboard-query-form-grid {
@@ -1809,6 +1809,11 @@ body {
   line-height: 1.35;
   font-weight: 500;
   color: color-mix(in srgb, var(--text) 62%, var(--bg));
+  min-height: calc(0.75rem * 1.35);
+}
+
+.dashboard-query-search-timing--empty {
+  visibility: hidden;
 }
 
 .dashboard-query-results-wrap {
@@ -1881,6 +1886,27 @@ body {
 .dashboard-query-cell-mono {
   font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, monospace;
   font-size: 0.8125rem;
+}
+
+.dashboard-query-doc-id-btn {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  text-align: left;
+  max-width: 100%;
+  word-break: break-all;
+}
+
+.dashboard-query-doc-id-btn:hover {
+  color: var(--link-hover);
 }
 
 .dashboard-query-cell-desc {

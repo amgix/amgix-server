@@ -1,5 +1,6 @@
 import {
   CollectionConfigToJSON,
+  DocumentToJSON,
   ResponseError,
   SearchQueryFusionModeEnum,
   VectorSearchWeightFieldEnum,
@@ -135,6 +136,47 @@ function openQueryPanelFullConfigDialog(collectionName: string, json: string): v
       id: 'query-full-config-title',
       class: 'dashboard-collections-config-dialog-title',
       text: `Configuration for ${collectionName}`,
+    }),
+    $('<textarea>', {
+      readonly: true,
+      class: 'dashboard-collections-config-dialog-textarea',
+      text: json,
+    }),
+    $('<div>', { class: 'dashboard-collections-config-dialog-actions' }).append($close),
+  )
+
+  $('body').append($dialog)
+  ;($dialog.get(0) as HTMLDialogElement).showModal()
+}
+
+function openQueryDocumentModal(collectionName: string, documentId: string, json: string): void {
+  $('#query-document-dialog').remove()
+
+  const $dialog = $('<dialog>', {
+    id: 'query-document-dialog',
+    class: 'dashboard-collections-config-dialog',
+    'aria-labelledby': 'query-document-title',
+  })
+
+  const $close = $('<button>', {
+    type: 'button',
+    class: 'dashboard-collections-config-dialog-close',
+    text: 'Close',
+  })
+
+  $close.on('click', () => {
+    ;($dialog.get(0) as HTMLDialogElement | undefined)?.close()
+  })
+
+  $dialog.on('close', () => {
+    $dialog.remove()
+  })
+
+  $dialog.append(
+    $('<h4>', {
+      id: 'query-document-title',
+      class: 'dashboard-collections-config-dialog-title',
+      text: `Document ${documentId} (${collectionName})`,
     }),
     $('<textarea>', {
       readonly: true,
@@ -343,9 +385,8 @@ export class QueryPanel extends DashboardPanel {
       attr: { 'data-query-results-wrap': '' },
     })
     const $searchTiming = $('<p>', {
-      class: 'dashboard-query-search-timing',
-      attr: { 'data-query-search-timing': '' },
-      hidden: true,
+      class: 'dashboard-query-search-timing dashboard-query-search-timing--empty',
+      attr: { 'data-query-search-timing': '', 'aria-hidden': 'true' },
       text: '',
     })
     const $table = $('<table>', {
@@ -387,6 +428,8 @@ export class QueryPanel extends DashboardPanel {
     })
 
     $form.find('[data-query-collection]').on('change', () => {
+      this.searchGeneration += 1
+      this.resetQueryResultsToPlaceholder($root)
       const apiRef = this.queryApi
       if (apiRef != null) {
         void this.refreshVectorsForSelection(apiRef, $root)
@@ -420,6 +463,20 @@ export class QueryPanel extends DashboardPanel {
         .closest('.dashboard-query-vectors-extras-control--limit')
         .find('.dashboard-query-limit-value')
         .text(this.value)
+    })
+
+    $root.on('click', '[data-query-doc-id]', (ev) => {
+      ev.preventDefault()
+      const $t = $(ev.currentTarget)
+      const documentId = String($t.attr('data-query-doc-id') ?? '').trim()
+      const collectionName = String($t.attr('data-query-doc-collection') ?? '').trim()
+      if (!documentId || !collectionName) {
+        return
+      }
+      const apiRef = this.queryApi
+      if (apiRef != null) {
+        void this.openDocumentFromQueryTable(apiRef, collectionName, documentId)
+      }
     })
   }
 
@@ -621,6 +678,36 @@ export class QueryPanel extends DashboardPanel {
     }
   }
 
+  private async openDocumentFromQueryTable(
+    api: AmgixApi,
+    collectionName: string,
+    documentId: string,
+  ): Promise<void> {
+    try {
+      const doc = await api.getDocument({ collectionName, documentId })
+      hideDashboardError()
+      const json = JSON.stringify(DocumentToJSON(doc), null, 2)
+      openQueryDocumentModal(collectionName, documentId, json)
+    } catch (err) {
+      showDashboardError(formatSearchError('Could not load document', err))
+    }
+  }
+
+  private resetQueryResultsToPlaceholder($root: JQuery<HTMLElement>): void {
+    const $tbody = $root.find('[data-query-results-body]')
+    const $timing = $root.find('[data-query-search-timing]')
+    $tbody.empty().append(
+      $('<tr>').append(
+        $('<td>', {
+          class: 'dashboard-query-results-placeholder',
+          colspan: 5,
+          text: 'Run a search to see matching documents.',
+        }),
+      ),
+    )
+    $timing.text('').addClass('dashboard-query-search-timing--empty').attr('aria-hidden', 'true')
+  }
+
   private async showQueryFullConfiguration(api: AmgixApi, $root: JQuery<HTMLElement>): Promise<void> {
     const collectionName = String($root.find('[data-query-collection]').val() ?? '').trim()
     if (!collectionName) {
@@ -664,7 +751,7 @@ export class QueryPanel extends DashboardPanel {
     }
 
     hideDashboardError()
-    $timing.prop('hidden', true).text('')
+    $timing.text('').addClass('dashboard-query-search-timing--empty').attr('aria-hidden', 'true')
     $btn.prop('disabled', true)
     $tbody.empty().append(
       $('<tr>').append(
@@ -710,13 +797,13 @@ export class QueryPanel extends DashboardPanel {
       }
       const timingText =
         results.length > 0 ? `Found in ${elapsedMs} ms` : `No results in ${elapsedMs} ms`
-      $timing.text(timingText).prop('hidden', false)
-      this.renderResults($tbody, results)
+      $timing.removeClass('dashboard-query-search-timing--empty').removeAttr('aria-hidden').text(timingText)
+      this.renderResults($tbody, results, collectionName)
     } catch (err) {
       if (gen !== this.searchGeneration) {
         return
       }
-      $timing.prop('hidden', true).text('')
+      $timing.text('').addClass('dashboard-query-search-timing--empty').attr('aria-hidden', 'true')
       $tbody.empty().append(
         $('<tr>').append(
           $('<td>', {
@@ -749,7 +836,11 @@ export class QueryPanel extends DashboardPanel {
       .join('; ')
   }
 
-  private renderResults($tbody: JQuery<HTMLElement>, results: SearchResult[]): void {
+  private renderResults(
+    $tbody: JQuery<HTMLElement>,
+    results: SearchResult[],
+    searchCollectionName: string,
+  ): void {
     $tbody.empty()
     if (results.length === 0) {
       $tbody.append(
@@ -770,10 +861,21 @@ export class QueryPanel extends DashboardPanel {
       const score = Number.isFinite(r.score) ? r.score.toFixed(4) : String(r.score)
       const updated = formatResultTimestamp(r.timestamp)
 
+      const $idBtn = $('<button>', {
+        type: 'button',
+        class: 'dashboard-query-doc-id-btn',
+        text: r.id,
+        attr: {
+          'data-query-doc-id': r.id,
+          'data-query-doc-collection': searchCollectionName,
+          'aria-label': `Open full document ${r.id}`,
+        },
+      })
+
       $tbody.append(
         $('<tr>', { class: 'dashboard-query-result-main-row' }).append(
           $('<td>', { class: 'dashboard-query-cell-num', text: score }),
-          $('<td>', { class: 'dashboard-query-cell-mono', text: r.id }),
+          $('<td>', { class: 'dashboard-query-cell-mono' }).append($idBtn),
           $('<td>', { text: truncateCell(name, 200) }),
           $('<td>', { class: 'dashboard-query-cell-desc', text: truncateCell(desc, 400) }),
           $('<td>', { class: 'dashboard-query-cell-nowrap', text: updated }),
