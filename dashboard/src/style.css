@@ -1382,11 +1382,6 @@ a.dashboard-home-loaded-models-count:hover {
   max-width: 100%;
 }
 
-.dashboard-cluster-map-heading {
-  margin: 0 0 0.75rem;
-  color: color-mix(in srgb, var(--text) 95%, var(--bg));
-}
-
 .dashboard-cluster-map-stage {
   position: relative;
   overflow: hidden;
@@ -1540,6 +1535,11 @@ a.dashboard-home-loaded-models-count:hover {
   align-items: center;
   margin: 0;
   padding: 0;
+}
+
+.dashboard-cluster-map-canvas .dashboard-cluster-map-node-leader {
+  cursor: default;
+  font-weight: 700;
 }
 
 .dashboard-cluster-map-canvas .dashboard-cluster-map-node-label {

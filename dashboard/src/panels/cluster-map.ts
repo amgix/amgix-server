@@ -289,14 +289,23 @@ function encoderClusterMapDocsRateText(node: NodeView): string {
   return formatClusterMapRps(sum / CLUSTER_MAP_METRIC_WINDOW_SEC)
 }
 
-function buildNodeRow(iconName: string, caption: string): string {
+type ClusterMapNodeRowCaption =
+  | { kind: 'plain'; text: string }
+  | { kind: 'leader'; host: string }
+
+function buildNodeRow(iconName: string, caption: ClusterMapNodeRowCaption): string {
   const icon = `<span class='material-symbols-outlined dashboard-cluster-map-node-icon' aria-hidden='true'>${iconName}</span>`
-  const text = `<span class='dashboard-cluster-map-node-caption'>${escapeHtmlText(caption)}</span>`
+  const text =
+    caption.kind === 'leader'
+      ? `<span class='dashboard-cluster-map-node-caption'><strong class='dashboard-cluster-map-node-leader' title='Current Leader'>${escapeHtmlText(caption.host)}*</strong></span>`
+      : `<span class='dashboard-cluster-map-node-caption'>${escapeHtmlText(caption.text)}</span>`
   return `<span class='dashboard-cluster-map-node-row'>${icon}${text}</span>`
 }
 
 function buildMaterialIconNodeLabel(host: string, node: NodeView, bucket: ClusterMapNodeBucket): string {
-  const row = buildNodeRow(roleMaterialLigature(bucket), host)
+  const caption: ClusterMapNodeRowCaption =
+    bucket !== 'api' && node.is_leader === true ? { kind: 'leader', host } : { kind: 'plain', text: host }
+  const row = buildNodeRow(roleMaterialLigature(bucket), caption)
   const latMs = nodeLocalAvgLatencyMsForMap(node, bucket)
   let latencyLine = `<span class='dashboard-cluster-map-node-latency dashboard-cluster-map-node-latency--empty'>- ${bucket === 'api' ? 'ms avg' : 'ms/passage'}</span>`
   if (latMs != null && Number.isFinite(latMs)) {
@@ -329,7 +338,7 @@ function buildMaterialIconNodeLabel(host: string, node: NodeView, bucket: Cluste
 }
 
 function buildCompactNodeLabel(iconName: string, caption: string): string {
-  return `<span class='dashboard-cluster-map-node-label dashboard-cluster-map-node-label--compact'>${buildNodeRow(iconName, caption)}</span>`
+  return `<span class='dashboard-cluster-map-node-label dashboard-cluster-map-node-label--compact'>${buildNodeRow(iconName, { kind: 'plain', text: caption })}</span>`
 }
 
 function encoderKindFromRole(role: string): EncoderKind {
@@ -956,13 +965,6 @@ export class ClusterMapPanel extends DashboardPanel {
     const panelsPadH = padV($('#dashboard-panels'))
     const mapPadH = padV($root)
 
-    const $heading = $root.find('.dashboard-cluster-map-heading')
-    const headingH =
-      $heading.length > 0
-        ? ($heading.get(0)?.getBoundingClientRect().height ?? 0) +
-          (parseFloat($heading.css('marginBottom')) || 0)
-        : 0
-
     const $stage = $root.find('.dashboard-cluster-map-stage')
     const stagePadH = padV($stage)
     const stageBorderH = borderV($stage)
@@ -973,7 +975,6 @@ export class ClusterMapPanel extends DashboardPanel {
       footerH +
       panelsPadH +
       mapPadH +
-      headingH +
       stagePadH +
       stageBorderH
 
@@ -986,6 +987,7 @@ export class ClusterMapPanel extends DashboardPanel {
   }
 
   private ensureShell($root: JQuery<HTMLElement>): void {
+    $root.find('.dashboard-cluster-map-heading').remove()
     if ($root.children().length > 0 && !$root.find('[data-cluster-map-canvas]').length) {
       $root.empty()
     }
@@ -994,10 +996,6 @@ export class ClusterMapPanel extends DashboardPanel {
     }
     $root.append(
       $('<div>', { class: 'dashboard-cluster-map-inner' }).append(
-        $('<h2>', {
-          class: 'mdc-typography--headline6 dashboard-cluster-map-heading',
-          text: 'Cluster Map',
-        }),
         $('<div>', { class: 'dashboard-cluster-map-stage' }).append(
           this.buildZoomToolsElement(),
           $('<div>', {
