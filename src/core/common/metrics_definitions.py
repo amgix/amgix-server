@@ -47,126 +47,126 @@ class MetricDefinition:
 METRIC_DEFINITIONS: dict[MetricKey, MetricDefinition] = {
     MetricKey.API_REQUESTS: MetricDefinition(
         unit="req",
-        description="Total HTTP requests handled by the API process.",
+        description="HTTP requests handled by the API process.",
     ),
     MetricKey.API_REQUEST_MS: MetricDefinition(
         unit="ms",
-        description="Total request latency accumulated across all API requests.",
+        description="Sum of HTTP request durations in milliseconds on the API process.",
     ),
     MetricKey.API_ASYNC_UPLOAD: MetricDefinition(
         unit="req",
-        description="Total async single-document upload requests handled by the API process.",
+        description="Async single-document upload requests handled by the API process.",
     ),
     MetricKey.API_ASYNC_UPLOAD_MS: MetricDefinition(
         unit="ms",
-        description="Total latency accumulated across async single-document upload requests.",
+        description="Sum of request durations in milliseconds for async single-document uploads on the API process.",
     ),
     MetricKey.API_SYNC_UPLOAD: MetricDefinition(
         unit="req",
-        description="Total sync single-document upload requests handled by the API process.",
+        description="Sync single-document upload requests handled by the API process.",
     ),
     MetricKey.API_SYNC_UPLOAD_MS: MetricDefinition(
         unit="ms",
-        description="Total latency accumulated across sync single-document upload requests.",
+        description="Sum of request durations in milliseconds for sync single-document uploads on the API process.",
     ),
     MetricKey.API_BULK_UPLOAD: MetricDefinition(
         unit="req",
-        description="Total bulk upload requests handled by the API process.",
+        description="Bulk upload requests handled by the API process.",
     ),
     MetricKey.API_BULK_UPLOAD_MS: MetricDefinition(
         unit="ms",
-        description="Total latency accumulated across bulk upload requests.",
+        description="Sum of request durations in milliseconds for bulk uploads on the API process.",
     ),
     MetricKey.API_SEARCH: MetricDefinition(
         unit="req",
-        description="Total search requests handled by the API process.",
+        description="Search requests handled by the API process.",
     ),
     MetricKey.API_SEARCH_MS: MetricDefinition(
         unit="ms",
-        description="Total latency accumulated across search requests.",
+        description="Sum of request durations in milliseconds for search on the API process.",
     ),
     MetricKey.API_ERROR_4XX: MetricDefinition(
         unit="err",
-        description="Total API responses with 4xx status codes.",
+        description="API responses with a 4xx status code on the API process.",
     ),
     MetricKey.API_ERROR_5XX: MetricDefinition(
         unit="err",
-        description="Total API responses with 5xx status codes.",
+        description="API responses with a 5xx status code on the API process.",
     ),
     MetricKey.EMBED_BATCHES_ORIGIN: MetricDefinition(
         unit="batch",
-        description="Total embedding request batches originating on this encoder node.",
+        description="Embedding batches for requests that entered the pipeline on this encoder node.",
     ),
     MetricKey.EMBED_PASSAGES_ORIGIN: MetricDefinition(
         unit="passage",
-        description="Total passages from embedding requests originating on this encoder node.",
+        description="Passages in embedding batches for requests that entered the pipeline on this encoder node.",
     ),
     MetricKey.EMBED_INFERENCE_ORIGIN_MS: MetricDefinition(
         unit="ms",
-        description="Total end-to-end embedding latency accumulated on the originating encoder node.",
+        description="Sum of end-to-end embedding durations in milliseconds for requests that entered the pipeline on this encoder node.",
     ),
     MetricKey.EMBED_INFERENCE_ORIGIN_ERRORS: MetricDefinition(
         unit="err",
-        description="Total failed embedding requests originating on this encoder node.",
+        description="Embedding requests that failed after entering the pipeline on this encoder node.",
     ),
     MetricKey.EMBED_BATCHES: MetricDefinition(
         unit="batch",
-        description="Total embedding request batches executed on this node.",
+        description="Embedding batches executed on this encoder node.",
     ),
     MetricKey.EMBED_PASSAGES: MetricDefinition(
         unit="passage",
-        description="Total passages embedded on this node.",
+        description="Passages embedded on this encoder node.",
     ),
     MetricKey.EMBED_INFERENCE_MS: MetricDefinition(
         unit="ms",
-        description="Total model inference latency accumulated on this node.",
+        description="Sum of model inference durations in milliseconds on this encoder node.",
     ),
     MetricKey.EMBED_HOPS: MetricDefinition(
         unit="hop",
-        description="Total routing hops accumulated for embedding requests handled on this node.",
+        description="Sum of routing hop counts for embedding work handled on this encoder node.",
     ),
     MetricKey.INDEX_QUEUE_DOCS_SKIPPED_STALE: MetricDefinition(
         unit="doc",
-        description="Total queued documents skipped because their queue entries were stale.",
+        description="Single-document queue documents skipped because the queue entry was stale.",
     ),
     MetricKey.INDEX_QUEUE_DOCS_NEW: MetricDefinition(
         unit="doc",
-        description="Total new documents indexed from single-document queue jobs.",
+        description="New documents indexed from the single-document queue.",
     ),
     MetricKey.INDEX_QUEUE_DOCS_UPDATED: MetricDefinition(
         unit="doc",
-        description="Total existing documents updated from single-document queue jobs.",
+        description="Existing documents updated from the single-document queue.",
     ),
     MetricKey.INDEX_QUEUE_FAILED: MetricDefinition(
         unit="job",
-        description="Total single-document queue jobs marked as failed.",
+        description="Single-document queue jobs marked failed.",
     ),
     MetricKey.INDEX_QUEUE_REQUEUED: MetricDefinition(
         unit="job",
-        description="Total single-document queue jobs requeued for retry.",
+        description="Single-document queue jobs requeued for retry.",
     ),
     MetricKey.INDEX_QUEUE_JOB_MS: MetricDefinition(
         unit="ms",
-        description="Total processing latency accumulated across single-document queue jobs.",
+        description="Sum of job durations in milliseconds for single-document queue jobs.",
     ),
     MetricKey.INDEX_BULK_BATCHES: MetricDefinition(
         unit="batch",
-        description="Total bulk indexing jobs processed.",
+        description="Bulk indexing batches processed.",
     ),
     MetricKey.INDEX_BULK_BATCH_SIZE: MetricDefinition(
         unit="doc",
-        description="Total documents accumulated across processed bulk indexing jobs.",
+        description="Sum of document counts across bulk indexing batches (numerator for average batch size).",
     ),
     MetricKey.INDEX_BULK_FAILED: MetricDefinition(
         unit="batch",
-        description="Total bulk indexing jobs marked as failed.",
+        description="Bulk indexing batches marked failed.",
     ),
     MetricKey.INDEX_BULK_REQUEUED: MetricDefinition(
         unit="batch",
-        description="Total bulk indexing jobs requeued for retry.",
+        description="Bulk indexing batches requeued for retry.",
     ),
     MetricKey.INDEX_BULK_JOB_MS: MetricDefinition(
         unit="ms",
-        description="Total processing latency accumulated across bulk indexing jobs.",
+        description="Sum of batch durations in milliseconds for bulk indexing.",
     ),
 }

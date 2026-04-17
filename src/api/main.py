@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 import uuid
 
 from fastapi import FastAPI, HTTPException, Path, Query, Request, APIRouter
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from typing import Annotated
 import traceback
@@ -18,6 +18,7 @@ import traceback
 
 from src.api import api_metrics as api_metrics_module
 from src.api.api_metrics import ApiMetricsMiddleware, init_api_metrics_service
+from src.api.prometheus_metrics import metrics_to_prometheus_text
 from src.core.common.bunny_talk import BunnyTalk
 from src.core.common.lock_manager import LockService, LockClient
 from src.core.common.logging_config import configure_logging
@@ -370,6 +371,32 @@ async def metrics_current(
         ),
         return_type=Metrics,
         timeout=2.0,
+    )
+
+
+@shared_router.get(
+    "/metrics/prometheus",
+    operation_id="metrics_prometheus",
+    response_class=PlainTextResponse,
+)
+async def metrics_prometheus() -> PlainTextResponse:
+    """Expose current cluster metrics in Prometheus text exposition (60s rolling window)."""
+    metrics = await _bunny_talk.rpc(
+        api_metrics_module.api_metrics.leader_queue,
+        payload=MetricsPayload(
+            probe=False,
+            query_view=True,
+            query_window=60,
+            query_keys=None,
+            hostname=HOSTNAME,
+        ),
+        return_type=Metrics,
+        timeout=2.0,
+    )
+    body = metrics_to_prometheus_text(metrics, window_seconds=60)
+    return PlainTextResponse(
+        content=body,
+        media_type="text/plain; charset=utf-8",
     )
 
 
