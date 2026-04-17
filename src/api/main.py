@@ -344,7 +344,7 @@ async def readiness_check() -> ReadyResponse:
 @shared_router.get("/metrics/current", operation_id="metrics_current")
 async def metrics_current(
     window: int = Query(
-        default=30,
+        default=60,
         description="Aggregation window in seconds — 30 or 60.",
     ),
     keys: Optional[List[str]] = Query(
