@@ -197,6 +197,29 @@ function clusterHelpIcon(tip: string): JQuery<HTMLElement> {
   })
 }
 
+const HOME_CHART_ZOOM_RESET_TARGETS = ['encoder', 'indexing', 'api-requests', 'api-latencies'] as const
+type HomeChartZoomResetTarget = (typeof HOME_CHART_ZOOM_RESET_TARGETS)[number]
+
+function isHomeChartZoomResetTarget(v: string): v is HomeChartZoomResetTarget {
+  return (HOME_CHART_ZOOM_RESET_TARGETS as readonly string[]).includes(v)
+}
+
+function homeChartZoomResetButton(target: HomeChartZoomResetTarget): JQuery<HTMLElement> {
+  return $('<button>', {
+    type: 'button',
+    class: 'dashboard-home-cluster-chart-zoom-reset',
+    attr: { 'data-home-chart-zoom-reset': target },
+    title: 'Reset zoom on this chart',
+    'aria-label': 'Reset chart zoom',
+  }).append(
+    $('<span>', {
+      class: 'material-symbols-outlined',
+      text: 'restart_alt',
+      'aria-hidden': 'true',
+    }),
+  )
+}
+
 function clusterThWithHelp(label: string, tip: string): JQuery<HTMLElement> {
   return $('<th>', { class: 'dashboard-home-cluster-th-with-help' }).append(
     $('<span>', { class: 'dashboard-home-cluster-th-inner' }).append(
@@ -2996,6 +3019,19 @@ export class HomePanel extends DashboardPanel {
     this.apiMetricsLatenciesChart?.resetZoom(mode)
   }
 
+  private resetHomeChartZoomFor(target: HomeChartZoomResetTarget): void {
+    const mode = 'none' as const
+    if (target === 'encoder') {
+      this.clusterThroughputChart?.resetZoom(mode)
+    } else if (target === 'indexing') {
+      this.indexingLatencyChart?.resetZoom(mode)
+    } else if (target === 'api-requests') {
+      this.apiMetricsRequestsChart?.resetZoom(mode)
+    } else {
+      this.apiMetricsLatenciesChart?.resetZoom(mode)
+    }
+  }
+
   private async onHomeChartHistoryRangeChanged(
     api: AmgixApi,
     $root: JQuery<HTMLElement>,
@@ -3584,6 +3620,7 @@ export class HomePanel extends DashboardPanel {
             $('<span>', { class: 'dashboard-home-cluster-chart-title', text: 'Inference Latencies' }),
             $('<div>', { class: 'dashboard-home-cluster-chart-hint-actions' }).append(
               this.buildHomeChartHistorySelect(),
+              homeChartZoomResetButton('encoder'),
               clusterHelpIcon(clusterChartHelpText()),
             ),
           ),
@@ -3657,6 +3694,7 @@ export class HomePanel extends DashboardPanel {
               }),
               $('<div>', { class: 'dashboard-home-cluster-chart-hint-actions' }).append(
                 this.buildHomeChartHistorySelect(),
+                homeChartZoomResetButton('api-requests'),
                 clusterHelpIcon(clusterApiRequestsChartHelpText()),
               ),
             ),
@@ -3695,6 +3733,7 @@ export class HomePanel extends DashboardPanel {
               }),
               $('<div>', { class: 'dashboard-home-cluster-chart-hint-actions' }).append(
                 this.buildHomeChartHistorySelect(),
+                homeChartZoomResetButton('api-latencies'),
                 clusterHelpIcon(clusterApiLatenciesChartHelpText()),
               ),
             ),
@@ -3847,6 +3886,7 @@ export class HomePanel extends DashboardPanel {
             }),
             $('<div>', { class: 'dashboard-home-cluster-chart-hint-actions' }).append(
               this.buildHomeChartHistorySelect(),
+              homeChartZoomResetButton('indexing'),
               clusterHelpIcon(indexingClusterChartHelpText()),
             ),
           ),
@@ -3977,6 +4017,14 @@ export class HomePanel extends DashboardPanel {
             return
           }
           void this.onHomeChartHistoryRangeChanged(api, $root, raw)
+        })
+        $root.on('click', '[data-home-chart-zoom-reset]', (e) => {
+          e.preventDefault()
+          const v = (e.currentTarget as HTMLElement).getAttribute('data-home-chart-zoom-reset')
+          if (v == null || !isHomeChartZoomResetTarget(v)) {
+            return
+          }
+          this.resetHomeChartZoomFor(v)
         })
       }
       this.activateHomeMetricsTab($root, route.homeMetricsTab)

@@ -560,6 +560,41 @@ body {
   min-width: 0;
 }
 
+.dashboard-home-cluster-chart-zoom-reset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 75%, var(--bg));
+  cursor: pointer;
+  appearance: none;
+  line-height: 1;
+}
+
+.dashboard-home-cluster-chart-zoom-reset:hover {
+  color: var(--text);
+}
+
+.dashboard-home-cluster-chart-zoom-reset:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--text) 40%, transparent);
+  outline-offset: 2px;
+}
+
+.dashboard-home-cluster-chart-zoom-reset .material-symbols-outlined {
+  font-size: 1.25rem;
+  font-variation-settings:
+    'FILL' 0,
+    'wght' 500,
+    'GRAD' 0,
+    'opsz' 24;
+  line-height: 1;
+}
+
 .dashboard-home-chart-history-range {
   max-width: 9.5rem;
   min-width: 0;
