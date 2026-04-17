@@ -1656,12 +1656,29 @@ function emptyClusterThroughputHistoryPoint(tMs: number): ClusterThroughputHisto
   }
 }
 
-function appendLivePointReplacingSameTime<T extends { t: number }>(rows: T[], live: T | null, nowMs: number): void {
+function bucketStartSecForTimestampMs(ms: number, bucketSec: number): number {
+  if (bucketSec <= 0 || !Number.isFinite(ms)) {
+    return 0
+  }
+  return Math.floor(Math.floor(ms / 1000) / bucketSec) * bucketSec
+}
+
+function appendLivePointReplacingSameTime<T extends { t: number }>(
+  rows: T[],
+  live: T | null,
+  nowMs: number,
+  bucketSec: number,
+): void {
   if (live == null) {
     return
   }
   const withT = { ...live, t: nowMs } as T
   const last = rows[rows.length - 1]
+  const nowBucket = bucketStartSecForTimestampMs(nowMs, bucketSec)
+  if (last != null && bucketStartSecForTimestampMs(last.t, bucketSec) === nowBucket) {
+    rows[rows.length - 1] = withT
+    return
+  }
   if (last != null && last.t === nowMs) {
     rows[rows.length - 1] = withT
   } else {
@@ -1687,7 +1704,7 @@ function sortedApiChartPoints(
       rows.push(emptyApiMetricsHistoryPoint(t))
     }
   }
-  appendLivePointReplacingSameTime(rows, live, nowMs)
+  appendLivePointReplacingSameTime(rows, live, nowMs, bucketSec)
   return rows
 }
 
@@ -1873,7 +1890,7 @@ function sortedClusterThroughputPoints(
       rows.push(emptyClusterThroughputHistoryPoint(t))
     }
   }
-  appendLivePointReplacingSameTime(rows, live, nowMs)
+  appendLivePointReplacingSameTime(rows, live, nowMs, bucketSec)
   return rows
 }
 
@@ -1941,7 +1958,7 @@ function sortedIndexingLatencyPoints(
       rows.push(emptyIndexingLatencyHistoryPoint(t))
     }
   }
-  appendLivePointReplacingSameTime(rows, live, nowMs)
+  appendLivePointReplacingSameTime(rows, live, nowMs, bucketSec)
   return rows
 }
 
