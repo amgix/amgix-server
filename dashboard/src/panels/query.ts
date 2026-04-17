@@ -1,5 +1,7 @@
 import {
+  CollectionConfigToJSON,
   ResponseError,
+  SearchQueryFusionModeEnum,
   VectorSearchWeightFieldEnum,
   type AmgixApi,
   type CollectionConfig,
@@ -14,6 +16,20 @@ import { hideDashboardError, showDashboardError } from '../error-bar'
 import { DashboardPanel } from './panel-base'
 
 const QUERY_SEARCH_LIMIT = 10
+
+const VECTOR_WEIGHT_SLIDER_MIN = 0
+const VECTOR_WEIGHT_SLIDER_MAX = 10
+const VECTOR_WEIGHT_SLIDER_STEP = 0.25
+const VECTOR_WEIGHT_SLIDER_DEFAULT = 1
+
+function vectorWeightSliderDisplayLabel(value: string): string {
+  const n = Number.parseFloat(value)
+  if (!Number.isFinite(n)) {
+    return value
+  }
+  const t = Math.round(n / VECTOR_WEIGHT_SLIDER_STEP) * VECTOR_WEIGHT_SLIDER_STEP
+  return String(parseFloat(t.toFixed(2)))
+}
 
 function formatSearchError(context: string, err: unknown): string {
   if (err instanceof ResponseError) {
@@ -47,13 +63,27 @@ function indexFieldsForVector(v: VectorConfig): string[] {
   return ['content']
 }
 
+function stripModelNamespaceForDisplay(rawModel: string): string {
+  const t = rawModel.trim()
+  if (!t) {
+    return ''
+  }
+  const i = t.lastIndexOf('/')
+  if (i < 0 || i >= t.length - 1) {
+    return t
+  }
+  const tail = t.slice(i + 1).trim()
+  return tail || t
+}
+
 function vectorNameWithOptionalModel(v: VectorConfig): string {
   const name = String(v.name ?? '').trim() || '(unnamed)'
   const raw = v.model != null ? String(v.model).trim() : ''
   if (!raw) {
     return name
   }
-  const model = raw.length > 96 ? `${raw.slice(0, 96)}…` : raw
+  const display = stripModelNamespaceForDisplay(raw)
+  const model = display.length > 96 ? `${display.slice(0, 96)}…` : display
   return `${name} - ${model}`
 }
 
@@ -75,6 +105,47 @@ function parseSearchField(raw: string): VectorSearchWeightFieldEnum | null {
     return VectorSearchWeightFieldEnum.Content
   }
   return null
+}
+
+function openQueryPanelFullConfigDialog(collectionName: string, json: string): void {
+  $('#query-full-config-dialog').remove()
+
+  const $dialog = $('<dialog>', {
+    id: 'query-full-config-dialog',
+    class: 'dashboard-collections-config-dialog',
+    'aria-labelledby': 'query-full-config-title',
+  })
+
+  const $close = $('<button>', {
+    type: 'button',
+    class: 'dashboard-collections-config-dialog-close',
+    text: 'Close',
+  })
+
+  $close.on('click', () => {
+    ;($dialog.get(0) as HTMLDialogElement | undefined)?.close()
+  })
+
+  $dialog.on('close', () => {
+    $dialog.remove()
+  })
+
+  $dialog.append(
+    $('<h4>', {
+      id: 'query-full-config-title',
+      class: 'dashboard-collections-config-dialog-title',
+      text: `Configuration for ${collectionName}`,
+    }),
+    $('<textarea>', {
+      readonly: true,
+      class: 'dashboard-collections-config-dialog-textarea',
+      text: json,
+    }),
+    $('<div>', { class: 'dashboard-collections-config-dialog-actions' }).append($close),
+  )
+
+  $('body').append($dialog)
+  ;($dialog.get(0) as HTMLDialogElement).showModal()
 }
 
 function vectorArmsFromConfig(config: CollectionConfig): QueryVectorArm[] {
@@ -134,18 +205,76 @@ export class QueryPanel extends DashboardPanel {
       attr: { novalidate: '', 'data-query-form': '' },
     })
 
+    const fusionSelectId = 'dashboard-query-fusion-select'
+    const $fusionSelect = $('<select>', {
+      id: fusionSelectId,
+      class: 'dashboard-query-select dashboard-query-fusion-select',
+      attr: { 'data-query-fusion-mode': '' },
+    }).append(
+      $('<option>', { value: SearchQueryFusionModeEnum.Rrf, text: 'RRF' }),
+      $('<option>', { value: SearchQueryFusionModeEnum.Linear, text: 'Linear' }),
+    )
+    $fusionSelect.val(SearchQueryFusionModeEnum.Rrf)
+
+    const limitSliderId = 'dashboard-query-limit-slider'
+    const limitDefault = String(QUERY_SEARCH_LIMIT)
+    const $limitSlider = $('<input>', {
+      type: 'range',
+      id: limitSliderId,
+      class: 'dashboard-query-vectors-limit-slider',
+      attr: {
+        min: '1',
+        max: '100',
+        step: '1',
+        value: limitDefault,
+        'data-query-limit-slider': '',
+        'aria-valuemin': '1',
+        'aria-valuemax': '100',
+        'aria-valuenow': limitDefault,
+        'aria-label': 'Results limit',
+      },
+    })
+    const $limitValue = $('<span>', {
+      class: 'dashboard-query-limit-value',
+      text: limitDefault,
+    })
+
+    const $vectorsList = $('<ul>', {
+      class: 'dashboard-query-vectors-list',
+      attr: { 'data-query-vectors-list': '', role: 'list' },
+    })
+
+    const $vectorsExtras = $('<div>', { class: 'dashboard-query-vectors-extras' }).append(
+      $('<div>', { class: 'dashboard-query-vectors-extras-row' }).append(
+        $('<label>', {
+          class: 'dashboard-query-vectors-extras-label',
+          attr: { for: fusionSelectId },
+          text: 'Fusion Mode:',
+        }),
+        $('<div>', { class: 'dashboard-query-vectors-extras-control' }).append($fusionSelect),
+      ),
+      $('<div>', { class: 'dashboard-query-vectors-extras-row' }).append(
+        $('<label>', {
+          class: 'dashboard-query-vectors-extras-label',
+          attr: { for: limitSliderId },
+          text: 'Results Limit:',
+        }),
+        $('<div>', {
+          class: 'dashboard-query-vectors-extras-control dashboard-query-vectors-extras-control--limit',
+        }).append($limitSlider, $limitValue),
+      ),
+    )
+
     const $vectorsBlock = $('<div>', {
       class: 'dashboard-query-vectors',
       attr: { 'data-query-vectors-wrap': '', hidden: '' },
     }).append(
-      $('<span>', {
-        class: 'dashboard-query-vectors-heading',
-        text: 'Indexed vectors (uncheck to exclude from search)',
-      }),
-      $('<ul>', {
-        class: 'dashboard-query-vectors-list',
-        attr: { 'data-query-vectors-list': '', role: 'list' },
-      }),
+      $('<div>', { class: 'dashboard-query-vectors-header' }).append(
+        $('<span>', { class: 'dashboard-query-vectors-col-title', text: 'Indexed Vectors' }),
+        $('<span>', { class: 'dashboard-query-vectors-col-title dashboard-query-vectors-col-title--weights', text: 'Weights' }),
+      ),
+      $vectorsList,
+      $vectorsExtras,
     )
 
     const $select = $('<select>', {
@@ -158,7 +287,7 @@ export class QueryPanel extends DashboardPanel {
       class: 'dashboard-query-textarea',
       attr: {
         'data-query-text': '',
-        rows: '2',
+        rows: '1',
         spellcheck: 'true',
         autocomplete: 'off',
         'aria-required': 'true',
@@ -166,15 +295,31 @@ export class QueryPanel extends DashboardPanel {
       title: 'Enter runs search. Shift+Enter inserts a new line.',
     })
 
+    const $fullConfigLink = $('<a>', {
+      href: '#',
+      class: 'dashboard-collections-full-config-link',
+      text: 'Full Configuration',
+      attr: { 'data-query-full-config': '' },
+    })
+    $fullConfigLink.on('click', (e) => {
+      e.preventDefault()
+      const apiRef = this.queryApi
+      if (apiRef != null) {
+        void this.showQueryFullConfiguration(apiRef, $root)
+      }
+    })
+
+    const $collectionRow = $('<div>', { class: 'dashboard-query-collection-row' }).append($select, $fullConfigLink)
+
+    const $submitBtn = $('<button>', {
+      type: 'submit',
+      class: 'dashboard-query-submit',
+      text: 'Search',
+      attr: { 'data-query-submit': '' },
+    })
+    const $queryRow = $('<div>', { class: 'dashboard-query-query-row' }).append($textarea, $submitBtn)
+
     const $grid = $('<div>', { class: 'dashboard-query-form-grid' })
-    const $actions = $('<div>', { class: 'dashboard-query-actions' }).append(
-      $('<button>', {
-        type: 'submit',
-        class: 'dashboard-query-submit',
-        text: 'Search',
-        attr: { 'data-query-submit': '' },
-      }),
-    )
 
     $grid.append(
       $('<label>', {
@@ -182,14 +327,13 @@ export class QueryPanel extends DashboardPanel {
         attr: { for: selectId },
         text: 'Collections:',
       }),
-      $('<div>', { class: 'dashboard-query-control-stack' }).append($select),
+      $('<div>', { class: 'dashboard-query-control-stack' }).append($collectionRow),
       $('<label>', {
         class: 'dashboard-query-side-label',
         attr: { for: queryId },
         text: 'Query:',
       }),
-      $('<div>', { class: 'dashboard-query-control-stack' }).append($textarea, $vectorsBlock),
-      $actions,
+      $('<div>', { class: 'dashboard-query-control-stack' }).append($queryRow, $vectorsBlock),
     )
 
     $form.append($grid)
@@ -197,6 +341,12 @@ export class QueryPanel extends DashboardPanel {
     const $tableWrap = $('<div>', {
       class: 'dashboard-query-results-wrap',
       attr: { 'data-query-results-wrap': '' },
+    })
+    const $searchTiming = $('<p>', {
+      class: 'dashboard-query-search-timing',
+      attr: { 'data-query-search-timing': '' },
+      hidden: true,
+      text: '',
     })
     const $table = $('<table>', {
       class: 'dashboard-query-results',
@@ -207,7 +357,7 @@ export class QueryPanel extends DashboardPanel {
       $('<tr>').append(
         $('<td>', {
           class: 'dashboard-query-results-placeholder',
-          colspan: 6,
+          colspan: 5,
           text: 'Run a search to see matching documents.',
         }),
       ),
@@ -219,7 +369,6 @@ export class QueryPanel extends DashboardPanel {
           $('<th>', { scope: 'col', text: 'ID' }),
           $('<th>', { scope: 'col', text: 'Name' }),
           $('<th>', { scope: 'col', text: 'Description' }),
-          $('<th>', { scope: 'col', text: 'Tags' }),
           $('<th>', { scope: 'col', text: 'Updated' }),
         ),
       ),
@@ -227,7 +376,7 @@ export class QueryPanel extends DashboardPanel {
     )
     $tableWrap.append($table)
 
-    $root.empty().append($form, $tableWrap)
+    $root.empty().append($form, $searchTiming, $tableWrap)
 
     $form.on('submit', (ev) => {
       ev.preventDefault()
@@ -253,6 +402,24 @@ export class QueryPanel extends DashboardPanel {
       if (apiRef != null) {
         void this.runSearch(apiRef, $root)
       }
+    })
+
+    $root.on('input', '.dashboard-query-vectors-weight-slider', function (this: HTMLInputElement) {
+      this.setAttribute('aria-valuenow', this.value)
+      const label = vectorWeightSliderDisplayLabel(this.value)
+      $(this).closest('.dashboard-query-vectors-weight').find('.dashboard-query-vectors-weight-value').text(label)
+    })
+
+    $root.on('change', 'input.dashboard-query-vectors-checkbox', function (this: HTMLInputElement) {
+      $(this).closest('li.dashboard-query-vectors-item').find('.dashboard-query-vectors-weight-slider').prop('disabled', !this.checked)
+    })
+
+    $root.on('input', '.dashboard-query-vectors-limit-slider', function (this: HTMLInputElement) {
+      this.setAttribute('aria-valuenow', this.value)
+      $(this)
+        .closest('.dashboard-query-vectors-extras-control--limit')
+        .find('.dashboard-query-limit-value')
+        .text(this.value)
     })
   }
 
@@ -338,6 +505,7 @@ export class QueryPanel extends DashboardPanel {
     for (let i = 0; i < (rows ?? []).length; i++) {
       const row = rows![i]!
       const inputId = `dashboard-query-vw-${i}`
+      const sliderId = `dashboard-query-vw-w-${i}`
       const $cb = $('<input>', {
         type: 'checkbox',
         id: inputId,
@@ -354,7 +522,33 @@ export class QueryPanel extends DashboardPanel {
         attr: { for: inputId },
       })
       $lab.append($cb, $text)
-      $ul.append($('<li>', { class: 'dashboard-query-vectors-item', role: 'listitem' }).append($lab))
+      const defVal = String(VECTOR_WEIGHT_SLIDER_DEFAULT)
+      const $slider = $('<input>', {
+        type: 'range',
+        id: sliderId,
+        class: 'dashboard-query-vectors-weight-slider',
+        attr: {
+          min: String(VECTOR_WEIGHT_SLIDER_MIN),
+          max: String(VECTOR_WEIGHT_SLIDER_MAX),
+          step: String(VECTOR_WEIGHT_SLIDER_STEP),
+          value: defVal,
+          'aria-valuemin': String(VECTOR_WEIGHT_SLIDER_MIN),
+          'aria-valuemax': String(VECTOR_WEIGHT_SLIDER_MAX),
+          'aria-valuenow': defVal,
+          'aria-label': `Weight for ${row.label}`,
+        },
+      })
+      const $weightVal = $('<span>', {
+        class: 'dashboard-query-vectors-weight-value',
+        text: vectorWeightSliderDisplayLabel(defVal),
+      })
+      const $weightCol = $('<div>', { class: 'dashboard-query-vectors-weight' }).append($slider, $weightVal)
+      const $armCol = $('<div>', { class: 'dashboard-query-vectors-arm' }).append($lab)
+      const $row = $('<li>', {
+        class: 'dashboard-query-vectors-item dashboard-query-vectors-item--with-weight',
+        role: 'listitem',
+      }).append($armCol, $weightCol)
+      $ul.append($row)
     }
   }
 
@@ -383,7 +577,13 @@ export class QueryPanel extends DashboardPanel {
       if (!vector_name || field == null) {
         return
       }
-      weights.push({ vector_name, field, weight: 1.0 })
+      const $slider = $e.closest('li.dashboard-query-vectors-item').find('.dashboard-query-vectors-weight-slider')
+      let weight = Number.parseFloat(String($slider.val() ?? ''))
+      if (!Number.isFinite(weight)) {
+        weight = VECTOR_WEIGHT_SLIDER_DEFAULT
+      }
+      weight = Math.min(VECTOR_WEIGHT_SLIDER_MAX, Math.max(VECTOR_WEIGHT_SLIDER_MIN, weight))
+      weights.push({ vector_name, field, weight })
     })
     return weights.length > 0 ? weights : 'none'
   }
@@ -421,12 +621,29 @@ export class QueryPanel extends DashboardPanel {
     }
   }
 
+  private async showQueryFullConfiguration(api: AmgixApi, $root: JQuery<HTMLElement>): Promise<void> {
+    const collectionName = String($root.find('[data-query-collection]').val() ?? '').trim()
+    if (!collectionName) {
+      showDashboardError('Choose a collection to view its configuration.')
+      return
+    }
+    try {
+      const config = await api.getCollectionConfig({ collectionName })
+      hideDashboardError()
+      const json = JSON.stringify(CollectionConfigToJSON(config), null, 2)
+      openQueryPanelFullConfigDialog(collectionName, json)
+    } catch (err) {
+      showDashboardError(formatSearchError('Could not load collection configuration', err))
+    }
+  }
+
   private async runSearch(api: AmgixApi, $root: JQuery<HTMLElement>): Promise<void> {
     const gen = ++this.searchGeneration
     const $sel = $root.find('[data-query-collection]')
     const $ta = $root.find('[data-query-text]')
     const $btn = $root.find('[data-query-submit]')
     const $tbody = $root.find('[data-query-results-body]')
+    const $timing = $root.find('[data-query-search-timing]')
 
     const collectionName = String($sel.val() ?? '').trim()
     const queryText = String($ta.val() ?? '').trim()
@@ -447,43 +664,64 @@ export class QueryPanel extends DashboardPanel {
     }
 
     hideDashboardError()
+    $timing.prop('hidden', true).text('')
     $btn.prop('disabled', true)
     $tbody.empty().append(
       $('<tr>').append(
         $('<td>', {
           class: 'dashboard-query-results-placeholder',
-          colspan: 6,
+          colspan: 5,
           text: 'Searching…',
         }),
       ),
     )
 
     try {
+      const fusionVal = String($root.find('[data-query-fusion-mode]').val() ?? '')
+      const fusion_mode =
+        fusionVal === SearchQueryFusionModeEnum.Linear
+          ? SearchQueryFusionModeEnum.Linear
+          : SearchQueryFusionModeEnum.Rrf
+
+      let limit = Number.parseInt(String($root.find('[data-query-limit-slider]').val() ?? ''), 10)
+      if (!Number.isFinite(limit)) {
+        limit = QUERY_SEARCH_LIMIT
+      }
+      limit = Math.min(100, Math.max(1, limit))
+
       const searchQuery: SearchQuery = {
         query: queryText,
-        limit: QUERY_SEARCH_LIMIT,
+        limit,
+        raw_scores: true,
+        fusion_mode,
       }
       if (vectorWeights !== 'default') {
         searchQuery.vector_weights = vectorWeights
       }
       // console.log(searchQuery)
+      const t0 = performance.now()
       const results = await api.search({
         collectionName,
         searchQuery,
       })
+      const elapsedMs = Math.max(0, Math.round(performance.now() - t0))
       if (gen !== this.searchGeneration) {
         return
       }
+      const timingText =
+        results.length > 0 ? `Found in ${elapsedMs} ms` : `No results in ${elapsedMs} ms`
+      $timing.text(timingText).prop('hidden', false)
       this.renderResults($tbody, results)
     } catch (err) {
       if (gen !== this.searchGeneration) {
         return
       }
+      $timing.prop('hidden', true).text('')
       $tbody.empty().append(
         $('<tr>').append(
           $('<td>', {
             class: 'dashboard-query-results-placeholder dashboard-query-results-placeholder--error',
-            colspan: 6,
+            colspan: 5,
             text: 'Search failed. See the error bar above.',
           }),
         ),
@@ -496,6 +734,21 @@ export class QueryPanel extends DashboardPanel {
     }
   }
 
+  private formatRawScoresDetail(r: SearchResult): string {
+    const items = r.vector_scores
+    if (items == null || items.length === 0) {
+      return ''
+    }
+    return items
+      .map((vs) => {
+        const v = String(vs.vector ?? '').trim() || '(vector)'
+        const f = String(vs.field ?? '').trim() || '(field)'
+        const s = Number.isFinite(vs.score) ? vs.score.toFixed(4) : String(vs.score)
+        return `${v} (${f}): ${s}`
+      })
+      .join('; ')
+  }
+
   private renderResults($tbody: JQuery<HTMLElement>, results: SearchResult[]): void {
     $tbody.empty()
     if (results.length === 0) {
@@ -503,7 +756,7 @@ export class QueryPanel extends DashboardPanel {
         $('<tr>').append(
           $('<td>', {
             class: 'dashboard-query-results-placeholder',
-            colspan: 6,
+            colspan: 5,
             text: 'No documents matched your query.',
           }),
         ),
@@ -514,20 +767,36 @@ export class QueryPanel extends DashboardPanel {
     for (const r of results) {
       const name = r.name != null ? String(r.name) : ''
       const desc = r.description != null ? String(r.description) : ''
-      const tags = r.tags != null && r.tags.length > 0 ? r.tags.join(', ') : ''
       const score = Number.isFinite(r.score) ? r.score.toFixed(4) : String(r.score)
       const updated = formatResultTimestamp(r.timestamp)
 
       $tbody.append(
-        $('<tr>').append(
+        $('<tr>', { class: 'dashboard-query-result-main-row' }).append(
           $('<td>', { class: 'dashboard-query-cell-num', text: score }),
           $('<td>', { class: 'dashboard-query-cell-mono', text: r.id }),
           $('<td>', { text: truncateCell(name, 200) }),
           $('<td>', { class: 'dashboard-query-cell-desc', text: truncateCell(desc, 400) }),
-          $('<td>', { text: truncateCell(tags, 200) }),
           $('<td>', { class: 'dashboard-query-cell-nowrap', text: updated }),
         ),
       )
+      const rawDetail = this.formatRawScoresDetail(r)
+      if (rawDetail) {
+        const $rawCell = $('<td>', {
+          class: 'dashboard-query-raw-scores-cell',
+          colspan: 4,
+        })
+        $rawCell.append(
+          $('<strong>', { class: 'dashboard-query-raw-scores-label', text: 'Raw Scores' }),
+          document.createTextNode(' -> '),
+          document.createTextNode(rawDetail),
+        )
+        $tbody.append(
+          $('<tr>', { class: 'dashboard-query-raw-scores-row' }).append(
+            $('<td>', { class: 'dashboard-query-raw-scores-spacer' }),
+            $rawCell,
+          ),
+        )
+      }
     }
   }
 }

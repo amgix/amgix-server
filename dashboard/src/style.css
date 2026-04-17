@@ -1519,6 +1519,7 @@ body {
 .dashboard-query-form {
   box-sizing: border-box;
   max-width: 52rem;
+  margin-bottom: 0.25rem;
 }
 
 .dashboard-query-form-grid {
@@ -1546,6 +1547,51 @@ body {
   width: 100%;
 }
 
+.dashboard-query-collection-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.dashboard-query-collection-row .dashboard-query-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  max-width: none;
+}
+
+.dashboard-query-collection-row .dashboard-collections-full-config-link {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.dashboard-query-query-row {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.65rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.dashboard-query-query-row .dashboard-query-textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  max-width: none;
+  min-height: calc(0.45rem + 0.45rem + 0.95rem * 1.4);
+  resize: vertical;
+}
+
+.dashboard-query-query-row .dashboard-query-submit {
+  flex: 0 0 auto;
+  align-self: flex-start;
+}
+
 .dashboard-query-select,
 .dashboard-query-textarea {
   box-sizing: border-box;
@@ -1562,13 +1608,8 @@ body {
   text-align: left;
 }
 
-.dashboard-query-textarea {
-  min-height: 3.25rem;
-  resize: vertical;
-  vertical-align: top;
-}
-
 .dashboard-query-vectors {
+  --query-vectors-cols: minmax(0, 1fr) minmax(11rem, 15rem);
   margin-top: 0;
   padding: 0.55rem 0.65rem;
   border: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
@@ -1576,14 +1617,26 @@ body {
   background: color-mix(in srgb, var(--text) 4%, var(--bg));
 }
 
-.dashboard-query-vectors-heading {
-  display: block;
+.dashboard-query-vectors-header {
+  display: grid;
+  grid-template-columns: var(--query-vectors-cols);
+  gap: 0.65rem 0.85rem;
+  align-items: baseline;
+  padding-bottom: 0.4rem;
   margin-bottom: 0.4rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.dashboard-query-vectors-col-title {
+  margin: 0;
   font-size: 0.8rem;
   font-weight: 600;
   letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, var(--text) 68%, var(--bg));
+  color: color-mix(in srgb, var(--text) 72%, var(--bg));
+}
+
+.dashboard-query-vectors-col-title--weights {
+  text-align: left;
 }
 
 .dashboard-query-vectors-list {
@@ -1595,8 +1648,108 @@ body {
   color: var(--text);
 }
 
+.dashboard-query-vectors-extras {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-top: 0.65rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.dashboard-query-vectors-extras-row {
+  display: grid;
+  grid-template-columns: var(--query-vectors-cols);
+  gap: 0.5rem 0.85rem;
+  align-items: center;
+}
+
+.dashboard-query-vectors-extras-label {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--text) 82%, var(--bg));
+}
+
+.dashboard-query-vectors-extras-control {
+  min-width: 0;
+}
+
+.dashboard-query-fusion-select {
+  width: 100%;
+  max-width: 12rem;
+}
+
+.dashboard-query-vectors-extras-control--limit {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.dashboard-query-vectors-limit-slider {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  height: 1.35rem;
+  accent-color: var(--link);
+}
+
+.dashboard-query-limit-value {
+  flex: 0 0 auto;
+  min-width: 2.25rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--text) 82%, var(--bg));
+}
+
 .dashboard-query-vectors-item {
   margin: 0.25rem 0;
+}
+
+.dashboard-query-vectors-item--with-weight {
+  display: grid;
+  grid-template-columns: var(--query-vectors-cols);
+  align-items: center;
+  gap: 0.65rem 0.85rem;
+}
+
+.dashboard-query-vectors-arm {
+  min-width: 0;
+}
+
+.dashboard-query-vectors-weight {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.dashboard-query-vectors-weight-slider {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  height: 1.35rem;
+  accent-color: var(--link);
+}
+
+.dashboard-query-vectors-weight-slider:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.dashboard-query-vectors-weight-value {
+  flex: 0 0 auto;
+  min-width: 2.75rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--text) 82%, var(--bg));
 }
 
 .dashboard-query-vectors-check-label {
@@ -1625,13 +1778,6 @@ body {
   color: color-mix(in srgb, var(--chart-pie-failed) 88%, var(--text));
 }
 
-.dashboard-query-actions {
-  grid-column: 2;
-  justify-self: start;
-  margin-top: 0.35rem;
-  margin-bottom: 1.25rem;
-}
-
 .dashboard-query-submit {
   font-family: var(--sans);
   font-size: 0.95rem;
@@ -1651,6 +1797,18 @@ body {
 .dashboard-query-submit:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.dashboard-query-search-timing {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0 0 0.3rem;
+  padding: 0;
+  text-align: right;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--text) 62%, var(--bg));
 }
 
 .dashboard-query-results-wrap {
@@ -1687,6 +1845,32 @@ body {
 
 .dashboard-query-results tbody tr:last-child td {
   border-bottom: none;
+}
+
+.dashboard-query-raw-scores-row td {
+  padding-top: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.dashboard-query-raw-scores-row .dashboard-query-raw-scores-spacer {
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.dashboard-query-result-main-row + .dashboard-query-raw-scores-row td {
+  border-top: none;
+}
+
+.dashboard-query-raw-scores-cell {
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: color-mix(in srgb, var(--text) 72%, var(--bg));
+  padding-bottom: 0.55rem;
+  word-break: break-word;
+}
+
+.dashboard-query-raw-scores-label {
+  font-weight: 700;
+  color: color-mix(in srgb, var(--text) 88%, var(--bg));
 }
 
 .dashboard-query-cell-num {
