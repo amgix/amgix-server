@@ -2012,6 +2012,32 @@ function clusterChartDevicePixelRatio(): number {
   return d != null && d > 0 ? d : 1
 }
 
+function homeLineChartDatasetYAt(
+  data: ReadonlyArray<{ y?: number | null } | null | undefined>,
+  index: number,
+): number | null {
+  if (index < 0 || index >= data.length) {
+    return null
+  }
+  const p = data[index]
+  if (p == null || typeof p !== 'object') {
+    return null
+  }
+  const y = p.y
+  return typeof y === 'number' && Number.isFinite(y) ? y : null
+}
+
+function homeLineChartPointRadiusScriptable(ctx: { dataIndex: number; dataset: { data: unknown } }): number {
+  const data = ctx.dataset.data as ReadonlyArray<{ y?: number | null } | null | undefined>
+  const i = ctx.dataIndex
+  if (homeLineChartDatasetYAt(data, i) == null) {
+    return 0
+  }
+  const connectsLeft = homeLineChartDatasetYAt(data, i - 1) != null
+  const connectsRight = homeLineChartDatasetYAt(data, i + 1) != null
+  return connectsLeft || connectsRight ? 0 : 1
+}
+
 function homeLineChartZoomOptions(cutoffMs: number, nowMs: number): ZoomPluginOptions {
   const spanMs = Math.max(0, nowMs - cutoffMs)
   const minRangeMs = homeChartTrendResolutionSec(Math.max(spanMs, 1)) * 1000
@@ -2513,7 +2539,7 @@ export class HomePanel extends DashboardPanel {
       borderWidth: 2,
       fill: false,
       tension: 0.4,
-      pointRadius: 1,
+      pointRadius: homeLineChartPointRadiusScriptable,
       pointHoverRadius: 5,
       pointHitRadius: 12,
       spanGaps: false,
@@ -2529,7 +2555,7 @@ export class HomePanel extends DashboardPanel {
       borderWidth: 2,
       fill: false,
       tension: 0.4,
-      pointRadius: 1,
+      pointRadius: homeLineChartPointRadiusScriptable,
       pointHoverRadius: 5,
       pointHitRadius: 12,
       spanGaps: false,
@@ -2551,7 +2577,7 @@ export class HomePanel extends DashboardPanel {
         borderWidth: 2,
         fill: false,
         tension: 0.4,
-        pointRadius: 1,
+        pointRadius: homeLineChartPointRadiusScriptable,
         pointHoverRadius: 5,
         pointHitRadius: 12,
         spanGaps: false,
@@ -2809,7 +2835,7 @@ export class HomePanel extends DashboardPanel {
       borderWidth: 2,
       fill: false,
       tension: 0.4,
-      pointRadius: 1,
+      pointRadius: homeLineChartPointRadiusScriptable,
       pointHoverRadius: 5,
       pointHitRadius: 12,
       spanGaps: false,
@@ -2825,7 +2851,7 @@ export class HomePanel extends DashboardPanel {
       borderWidth: 2,
       fill: false,
       tension: 0.4,
-      pointRadius: 1,
+      pointRadius: homeLineChartPointRadiusScriptable,
       pointHoverRadius: 5,
       pointHitRadius: 12,
       spanGaps: false,
@@ -2953,7 +2979,7 @@ export class HomePanel extends DashboardPanel {
       borderWidth: 2,
       fill: false,
       tension: 0.4,
-      pointRadius: 1,
+      pointRadius: homeLineChartPointRadiusScriptable,
       pointHoverRadius: 5,
       pointHitRadius: 12,
       spanGaps: false,
