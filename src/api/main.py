@@ -69,6 +69,18 @@ class OkResponse(BaseModel):
 # 218 = partial readiness (some index/query probes not ready); 200 = fully ready
 HTTP_STATUS_PARTIAL_READY = 218
 
+READINESS_PING_TIMEOUT_SEC = 2.0
+
+
+async def _readiness_ping(routing_key: str) -> bool:
+    if _bunny_talk is None:
+        return False
+    try:
+        await _bunny_talk.rpc(routing_key, timeout=READINESS_PING_TIMEOUT_SEC)
+        return True
+    except Exception:
+        return False
+
 
 class ReadyResponse(BaseModel):
     database: bool
@@ -291,7 +303,7 @@ async def health() -> OkResponse:
 async def readiness_check() -> ReadyResponse:
     """Check if service is ready to handle requests.
 
-    Runs four probes: database, rabbitmq, encoder (ping-encoder), rpc (ping-rpc).
+    Runs four probes: database, rabbitmq, index workers, query workers.
     Returns 200 if all pass (fully ready), 218 if some fail (partial ready).
     Response body always includes all four probe results and a ready flag.
     """
@@ -311,20 +323,12 @@ async def readiness_check() -> ReadyResponse:
         logger.error(f"RabbitMQ health check failed: {e}")
 
     index_healthy = False
-    if rabbitmq_healthy:
-        try:
-            await _bunny_talk.rpc("ping-encoder", timeout=1.0)
-            index_healthy = True
-        except Exception:
-            pass
-
     query_healthy = False
     if rabbitmq_healthy:
-        try:
-            await _bunny_talk.rpc("ping-rpc", timeout=1.0)
-            query_healthy = True
-        except Exception:
-            pass
+        index_healthy, query_healthy = await asyncio.gather(
+            _readiness_ping("ping-encoder"),
+            _readiness_ping("ping-rpc"),
+        )
 
     ready = db_healthy and rabbitmq_healthy and index_healthy and query_healthy
     body = ReadyResponse(

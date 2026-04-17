@@ -2033,9 +2033,18 @@ function $readinessStatus(ok: boolean, readinessKey: HomeReadinessKey): JQuery<H
   })
 }
 
+const HOME_READINESS_KEYS: HomeReadinessKey[] = ['database', 'rabbitmq', 'index', 'query']
+
 export class HomePanel extends DashboardPanel {
   private readyPollTimer: number | null = null
   private readyPollGeneration = 0
+  /** Consecutive failed /ready samples per key; UI shows Not ready only after 2 failures in a row. */
+  private readyFailureStreaks: Record<HomeReadinessKey, number> = {
+    database: 0,
+    rabbitmq: 0,
+    index: 0,
+    query: 0,
+  }
   private homeApi: AmgixApi | null = null
   private clusterThroughputChart: Chart<'line'> | null = null
   private encoderChartBuckets = new Map<number, ClusterThroughputHistoryPoint>()
@@ -2110,6 +2119,9 @@ export class HomePanel extends DashboardPanel {
     if (this.readyPollTimer != null) {
       window.clearInterval(this.readyPollTimer)
       this.readyPollTimer = null
+    }
+    for (const k of HOME_READINESS_KEYS) {
+      this.readyFailureStreaks[k] = 0
     }
     this.destroyApiMetricsChart()
     this.destroyClusterThroughputChart()
@@ -3417,17 +3429,25 @@ export class HomePanel extends DashboardPanel {
     this.refreshVisibleHomeCharts($root)
   }
 
+  private readinessDisplayOk(rawOk: boolean, key: HomeReadinessKey): boolean {
+    if (rawOk) {
+      this.readyFailureStreaks[key] = 0
+      return true
+    }
+    this.readyFailureStreaks[key] += 1
+    return this.readyFailureStreaks[key] < 2
+  }
+
   private applyReadinessToDom($root: JQuery<HTMLElement>, ready: ReadyResponse): void {
-    const keys: HomeReadinessKey[] = ['database', 'rabbitmq', 'index', 'query']
-    for (const key of keys) {
-      const ok = ready[key]
+    for (const key of HOME_READINESS_KEYS) {
+      const displayOk = this.readinessDisplayOk(ready[key], key)
       const $el = $root.find(`[data-home-ready="${key}"]`)
       if (!$el.length) {
         continue
       }
-      $el.text(readinessLabel(ok))
-      $el.toggleClass('dashboard-home-status--ready', ok)
-      $el.toggleClass('dashboard-home-status--not-ready', !ok)
+      $el.text(readinessLabel(displayOk))
+      $el.toggleClass('dashboard-home-status--ready', displayOk)
+      $el.toggleClass('dashboard-home-status--not-ready', !displayOk)
     }
   }
 
@@ -3547,10 +3567,26 @@ export class HomePanel extends DashboardPanel {
       }
       const rows: HomeRow[] = [
         { key: 'Amgix version', value: formatVersionLabel(info.amgix_version), readiness: null },
-        { key: 'Database', value: dbSummary, readiness: { ok: ready.database, dataKey: 'database' } },
-        { key: 'Broker', value: rmqSummary, readiness: { ok: ready.rabbitmq, dataKey: 'rabbitmq' } },
-        { key: 'Index workers', value: '', readiness: { ok: ready.index, dataKey: 'index' } },
-        { key: 'Query workers', value: '', readiness: { ok: ready.query, dataKey: 'query' } },
+        {
+          key: 'Database',
+          value: dbSummary,
+          readiness: { ok: this.readinessDisplayOk(ready.database, 'database'), dataKey: 'database' },
+        },
+        {
+          key: 'Broker',
+          value: rmqSummary,
+          readiness: { ok: this.readinessDisplayOk(ready.rabbitmq, 'rabbitmq'), dataKey: 'rabbitmq' },
+        },
+        {
+          key: 'Index workers',
+          value: '',
+          readiness: { ok: this.readinessDisplayOk(ready.index, 'index'), dataKey: 'index' },
+        },
+        {
+          key: 'Query workers',
+          value: '',
+          readiness: { ok: this.readinessDisplayOk(ready.query, 'query'), dataKey: 'query' },
+        },
         { key: 'Collection count', value: String(info.collection_count), readiness: null },
       ]
 
