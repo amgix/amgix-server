@@ -1,7 +1,6 @@
-<img src="https://amgix.io/images/cluster-map.png" style="width: 300px; float:right; margin-left: 20px"/>
-
 # **Amgix** - Open-Source Hybrid Search System
 
+<img src="https://amgix.io/images/cluster-map.png" style="width: 300px; float:right; margin-left: 20px"/>
 > **Amgix** (pronounced `a-MAG-ix`) - short for Amalgam Index  
 > *amalgam: a mixture or blend of different elements*
 
