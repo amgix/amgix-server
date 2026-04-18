@@ -296,7 +296,10 @@ class MetricsService:
                     self._pending_1m.extend(completed)
                 if completed_5m:
                     self._pending_1m.extend(completed_5m)
-                if self._pending_1m and (pending_flush is None or pending_flush.done()):
+                if completed or completed_5m:
+                    if pending_flush is None or pending_flush.done():
+                        pending_flush = self._schedule_flush()
+                elif self._pending_1m and (pending_flush is None or pending_flush.done()):
                     pending_flush = self._schedule_flush()
                 if await _wait_for_stop(self._report_stop, self._report_interval_s):
                     break
@@ -518,7 +521,18 @@ class MetricsService:
                 if agg is _Agg.AVG and bucket.n is not None:
                     merged[slot].n = (merged[slot].n or 0) + bucket.n
             result.extend(merged.values())
-        self._last_flushed_1m_start = current_1m_start
+        low = self._last_flushed_1m_start
+        has_raw_in_completed = False
+        for k in self._data:
+            for bucket in self._data[k]:
+                slot = int(bucket.bucket_start // 60) * 60
+                if low <= slot < current_1m_start:
+                    has_raw_in_completed = True
+                    break
+            if has_raw_in_completed:
+                break
+        if result or not has_raw_in_completed:
+            self._last_flushed_1m_start = current_1m_start
         return result
 
     def _collect_completed_5m_buckets_from_1m(
@@ -534,9 +548,10 @@ class MetricsService:
 
         merged: dict[tuple, MetricsBucket] = {}
         is_avg: dict[tuple, bool] = {}
+        low_5m = self._last_flushed_5m_start
         for bucket in self._pending_1m_for_5m:
             slot = int(bucket.bucket_start // _5M_BUCKET_SECONDS) * _5M_BUCKET_SECONDS
-            if slot < self._last_flushed_5m_start or slot >= current_5m_start:
+            if slot < low_5m or slot >= current_5m_start:
                 continue
             identity = (bucket.key, *bucket.dims, slot)
             avg = bucket.n is not None
@@ -554,11 +569,18 @@ class MetricsService:
             if is_avg[identity] and bucket.n is not None:
                 merged[identity].n = (merged[identity].n or 0) + bucket.n
 
-        self._pending_1m_for_5m = [
-            b for b in self._pending_1m_for_5m
-            if int(b.bucket_start // _5M_BUCKET_SECONDS) * _5M_BUCKET_SECONDS >= current_5m_start
-        ]
-        self._last_flushed_5m_start = current_5m_start
+        has_1m_in_completed_5m = any(
+            low_5m
+            <= int(b.bucket_start // _5M_BUCKET_SECONDS) * _5M_BUCKET_SECONDS
+            < current_5m_start
+            for b in self._pending_1m_for_5m
+        )
+        if merged or not has_1m_in_completed_5m:
+            self._pending_1m_for_5m = [
+                b for b in self._pending_1m_for_5m
+                if int(b.bucket_start // _5M_BUCKET_SECONDS) * _5M_BUCKET_SECONDS >= current_5m_start
+            ]
+            self._last_flushed_5m_start = current_5m_start
         return list(merged.values())
 
     def _record_event(self, k: _NormalizedKey, value: float, agg: _Agg, n: Optional[int]) -> None:

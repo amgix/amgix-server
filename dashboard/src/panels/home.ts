@@ -1586,9 +1586,42 @@ function apiMetricTrendsToPointsByBucketStart(
   }
   const out = new Map<number, ApiMetricsHistoryPoint>()
   for (const [slot, acc] of byStart) {
+    if (!acc.sawAll && !acc.sawSearch && !acc.sawIngest && !acc.saw4 && !acc.saw5 && acc.allMsN === 0) {
+      continue
+    }
     out.set(slot, apiScratchToHistoryPoint(slot, acc, expectedBucketSec))
   }
   return out
+}
+
+function finiteMetricOrKeep(prev: number | null, next: number | null): number | null {
+  if (typeof next === 'number' && Number.isFinite(next)) {
+    return next
+  }
+  return prev
+}
+
+function mergeApiMetricsHistoryPointIntoMap(
+  store: Map<number, ApiMetricsHistoryPoint>,
+  k: number,
+  patch: ApiMetricsHistoryPoint,
+): void {
+  const tMs = k * 1000
+  const existing = store.get(k)
+  if (existing == null) {
+    store.set(k, { ...patch, t: tMs })
+    return
+  }
+  store.set(k, {
+    t: tMs,
+    allRps: finiteMetricOrKeep(existing.allRps, patch.allRps),
+    allMs: finiteMetricOrKeep(existing.allMs, patch.allMs),
+    searchRps: finiteMetricOrKeep(existing.searchRps, patch.searchRps),
+    searchMs: finiteMetricOrKeep(existing.searchMs, patch.searchMs),
+    ingestRps: finiteMetricOrKeep(existing.ingestRps, patch.ingestRps),
+    ingestMs: finiteMetricOrKeep(existing.ingestMs, patch.ingestMs),
+    errRps: finiteMetricOrKeep(existing.errRps, patch.errRps),
+  })
 }
 
 function trimChartBucketMap(store: Map<number, unknown>, cutoffBucketStartSec: number): void {
@@ -1601,6 +1634,14 @@ function trimChartBucketMap(store: Map<number, unknown>, cutoffBucketStartSec: n
 
 function bucketStartCutoffSec(historyMs: number, nowMs: number): number {
   return Math.floor((nowMs - historyMs) / 1000)
+}
+
+function trendQueryBounds(resolutionSec: number, historyMs: number): { since: Date; until: Date } {
+  const resMs = resolutionSec * 1000
+  const nudgedNowMs = Date.now() + 30_000
+  const until = new Date(Math.floor(nudgedNowMs / resMs) * resMs)
+  const since = new Date(Math.floor((nudgedNowMs - historyMs) / resMs) * resMs)
+  return { since, until }
 }
 
 function denseBucketStartsSecInclusive(cutoffMs: number, nowMs: number, bucketSec: number): number[] {
@@ -3290,15 +3331,14 @@ export class HomePanel extends DashboardPanel {
     tab: HomeMetricsTabId,
     generation: number,
   ): Promise<void> {
-    const until = new Date()
-    const since = new Date(until.getTime() - this.homeChartHistoryMs)
+    const resolution = this.trendResolutionSec()
+    const { since, until } = trendQueryBounds(resolution, this.homeChartHistoryMs)
     const keys =
       tab === 'api'
         ? [...API_CHART_TREND_KEYS]
         : tab === 'encoder'
           ? [...ENCODER_CHART_TREND_KEYS]
           : [...INDEXING_CHART_TREND_KEYS]
-    const resolution = this.trendResolutionSec()
     try {
       const trends = await api.metricsTrends({
         since,
@@ -3313,7 +3353,7 @@ export class HomePanel extends DashboardPanel {
       if (tab === 'api') {
         const m = apiMetricTrendsToPointsByBucketStart(trends, resolution)
         for (const [k, v] of m) {
-          this.apiChartBuckets.set(k, v)
+          mergeApiMetricsHistoryPointIntoMap(this.apiChartBuckets, k, v)
         }
         trimChartBucketMap(this.apiChartBuckets, cutoffSec)
       } else if (tab === 'encoder') {
@@ -3695,16 +3735,15 @@ export class HomePanel extends DashboardPanel {
     let trendsOk = true
     if (tab === 'api' || tab === 'encoder' || tab === 'indexing') {
       trendsOk = false
-      const until = new Date()
       const patchMs = this.chartTrendPatchMs()
-      const since = new Date(until.getTime() - patchMs)
+      const resolution = this.trendResolutionSec()
+      const { since, until } = trendQueryBounds(resolution, patchMs)
       const keys =
         tab === 'api'
           ? [...API_CHART_TREND_KEYS]
           : tab === 'encoder'
             ? [...ENCODER_CHART_TREND_KEYS]
             : [...INDEXING_CHART_TREND_KEYS]
-      const resolution = this.trendResolutionSec()
       try {
         const trends = await api.metricsTrends({
           since,
@@ -3719,7 +3758,7 @@ export class HomePanel extends DashboardPanel {
         if (tab === 'api') {
           const patch = apiMetricTrendsToPointsByBucketStart(trends, resolution)
           for (const [k, v] of patch) {
-            this.apiChartBuckets.set(k, v)
+            mergeApiMetricsHistoryPointIntoMap(this.apiChartBuckets, k, v)
           }
           trimChartBucketMap(this.apiChartBuckets, cutoffSec)
         } else if (tab === 'encoder') {
@@ -4327,7 +4366,11 @@ export class HomePanel extends DashboardPanel {
       }
       this.activateHomeMetricsTab($root, route.homeMetricsTab)
       this.applyClusterViewToDom($root, metrics)
-      void this.bootstrapHomeChartTrends(api, $root, route.homeMetricsTab, generation)
+      await this.bootstrapHomeChartTrends(api, $root, route.homeMetricsTab, generation)
+
+      if (generation !== this.readyPollGeneration) {
+        return
+      }
 
       this.readyPollTimer = window.setInterval(() => {
         void this.pollHomeRefresh(api, $root, generation)
