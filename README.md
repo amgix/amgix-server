@@ -1,3 +1,5 @@
+<img src="https://amgix.io/images/cluster-map.png" style="width: 300px; float:right; margin-left: 20px"/>
+
 # **Amgix** - Open-Source Hybrid Search System
 
 > **Amgix** (pronounced `a-MAG-ix`) - short for Amalgam Index  
