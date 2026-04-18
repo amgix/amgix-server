@@ -1540,6 +1540,11 @@ a.dashboard-home-loaded-models-count:hover {
   max-width: 10rem;
 }
 
+.dashboard-cluster-map-canvas .dashboard-cluster-map-node-label--stale {
+  opacity: 0.52;
+  filter: grayscale(0.42);
+}
+
 .dashboard-cluster-map-canvas .dashboard-cluster-map-node-label--compact {
   min-width: 8rem;
   max-width: 8rem;

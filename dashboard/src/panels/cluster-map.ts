@@ -28,6 +28,8 @@ const CLUSTER_MAP_MIN_SCALE = 0.5
 const CLUSTER_MAP_MAX_SCALE = 4
 const CLUSTER_MAP_FIT_PADDING = 40
 const CLUSTER_MAP_METRIC_WINDOW_SEC = 60
+/** Gray out API / encoder nodes when leader has not received a heartbeat for this long (seconds). */
+const CLUSTER_MAP_STALE_LAST_SEEN_SEC = 20
 
 const CLUSTER_MAP_BROKER_NODE_ID = 'broker_rmq'
 const CLUSTER_MAP_DB_NODE_ID = 'cluster_db'
@@ -307,7 +309,23 @@ function buildNodeRow(iconName: string, caption: ClusterMapNodeRowCaption): stri
   return `<span class='dashboard-cluster-map-node-row'>${icon}${text}</span>`
 }
 
-function buildMaterialIconNodeLabel(host: string, node: NodeView, bucket: ClusterMapNodeBucket): string {
+function clusterMapNodeHeartbeatStale(node: NodeView, nowSec: number): boolean {
+  const ls = node.last_seen
+  if (ls == null || typeof ls !== 'number' || !Number.isFinite(ls)) {
+    return false
+  }
+  return nowSec - ls >= CLUSTER_MAP_STALE_LAST_SEEN_SEC
+}
+
+function buildMaterialIconNodeLabel(
+  host: string,
+  node: NodeView,
+  bucket: ClusterMapNodeBucket,
+  stale: boolean,
+): string {
+  const labelClass = stale
+    ? 'dashboard-cluster-map-node-label dashboard-cluster-map-node-label--stale'
+    : 'dashboard-cluster-map-node-label'
   const caption: ClusterMapNodeRowCaption =
     bucket !== 'api' && node.is_leader === true ? { kind: 'leader', host } : { kind: 'plain', text: host }
   const row = buildNodeRow(roleMaterialLigature(bucket), caption)
@@ -331,7 +349,7 @@ function buildMaterialIconNodeLabel(host: string, node: NodeView, bucket: Cluste
       errText !== ''
         ? `<span class='dashboard-cluster-map-node-latency'>${escapeHtmlText(errText)} err/s</span>`
         : `<span class='dashboard-cluster-map-node-latency dashboard-cluster-map-node-latency--empty'>- err/s</span>`
-    return `<span class='dashboard-cluster-map-node-label'>${row}${latencyLine}${reqLine}${errLine}</span>`
+    return `<span class='${labelClass}'>${row}${latencyLine}${reqLine}${errLine}</span>`
   }
 
   const docText = encoderClusterMapDocsRateText(node)
@@ -339,7 +357,7 @@ function buildMaterialIconNodeLabel(host: string, node: NodeView, bucket: Cluste
     docText !== ''
       ? `<span class='dashboard-cluster-map-node-latency'>${escapeHtmlText(docText)} passage/s</span>`
       : `<span class='dashboard-cluster-map-node-latency dashboard-cluster-map-node-latency--empty'>- passage/s</span>`
-  return `<span class='dashboard-cluster-map-node-label'>${row}${latencyLine}${docLine}</span>`
+  return `<span class='${labelClass}'>${row}${latencyLine}${docLine}</span>`
 }
 
 function buildCompactNodeLabel(iconName: string, caption: string): string {
@@ -673,6 +691,7 @@ function buildClusterGraph(view: Metrics | null, systemInfo: SystemInfoResponse 
   const apiHeat = apiLatencyHeatStrokeByHost(apiEntries)
   const encoderHeat = encoderDocLatencyHeatByKind(encoderByKind)
   const elements: ElementDefinition[] = []
+  const nowSec = Date.now() / 1000
 
   const hasBroker = apiEntries.length > 0 && encodersAll.length > 0
   let brokerY = CLUSTER_MAP_BROKER_Y
@@ -702,17 +721,18 @@ function buildClusterGraph(view: Metrics | null, systemInfo: SystemInfoResponse 
       const heatStroke = apiHeat.get(host) ?? CLUSTER_MAP_NODE_API_STROKE
       const borderWidth =
         apiHeat.has(host) ? CLUSTER_MAP_NODE_HEAT_STROKE_WIDTH : CLUSTER_MAP_NODE_STROKE_WIDTH
+      const stale = clusterMapNodeHeartbeatStale(node, nowSec)
       elements.push(
         htmlNode(
           nodeId,
-          buildMaterialIconNodeLabel(host, node, 'api'),
+          buildMaterialIconNodeLabel(host, node, 'api', stale),
           pos,
           CLUSTER_MAP_NODE_API_FILL,
           heatStroke,
           borderWidth,
           CLUSTER_MAP_NODE_WIDTH,
           CLUSTER_MAP_NODE_HEIGHT,
-          'map-node html-node api-node',
+          stale ? 'map-node html-node api-node map-node-stale' : 'map-node html-node api-node',
         ),
       )
     })
@@ -769,17 +789,20 @@ function buildClusterGraph(view: Metrics | null, systemInfo: SystemInfoResponse 
         const heatStroke = encoderHeat.get(host) ?? stroke
         const borderWidth =
           encoderHeat.has(host) ? CLUSTER_MAP_NODE_HEAT_STROKE_WIDTH : CLUSTER_MAP_NODE_STROKE_WIDTH
+        const stale = clusterMapNodeHeartbeatStale(node, nowSec)
         elements.push(
           htmlNode(
             nodeId,
-            buildMaterialIconNodeLabel(host, node, kind),
+            buildMaterialIconNodeLabel(host, node, kind, stale),
             pos,
             fill,
             heatStroke,
             borderWidth,
             CLUSTER_MAP_NODE_WIDTH,
             CLUSTER_MAP_NODE_HEIGHT,
-            `map-node html-node encoder-node encoder-node-${kind}`,
+            stale
+              ? `map-node html-node encoder-node encoder-node-${kind} map-node-stale`
+              : `map-node html-node encoder-node encoder-node-${kind}`,
           ),
         )
       })
@@ -1135,6 +1158,12 @@ export class ClusterMapPanel extends DashboardPanel {
             label: '',
             'overlay-opacity': 0,
             'text-opacity': 0,
+          },
+        },
+        {
+          selector: 'node.map-node-stale',
+          style: {
+            opacity: 0.48,
           },
         },
         {
