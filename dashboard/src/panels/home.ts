@@ -49,7 +49,7 @@ const HOME_METRICS_PANEL_ENCODER_ID = 'dashboard-home-metrics-panel-encoder'
 
 const CLUSTER_METRICS_WINDOW_SEC = 60
 
-const DEFAULT_HOME_CHART_HISTORY_MS = 10 * 60 * 1000
+const DEFAULT_HOME_CHART_HISTORY_MS = 30 * 60 * 1000
 
 const HOME_CHART_HISTORY_ONE_DAY_MS = 24 * 60 * 60 * 1000
 const HOME_CHART_HISTORY_SEVEN_DAYS_MS = 7 * HOME_CHART_HISTORY_ONE_DAY_MS
@@ -2277,6 +2277,7 @@ export class HomePanel extends DashboardPanel {
   private metricsChartLiveView: Metrics | null = null
   private homeChartHistoryMs = DEFAULT_HOME_CHART_HISTORY_MS
   private homeChartRangeListenerAttached = false
+  private trendsFailed = false
 
   override deactivate(): void {
     this.clearHomeLoadRetry()
@@ -3735,9 +3736,9 @@ export class HomePanel extends DashboardPanel {
     let trendsOk = true
     if (tab === 'api' || tab === 'encoder' || tab === 'indexing') {
       trendsOk = false
-      const patchMs = this.chartTrendPatchMs()
+      const windowMs = this.trendsFailed ? this.homeChartHistoryMs : this.chartTrendPatchMs()
       const resolution = this.trendResolutionSec()
-      const { since, until } = trendQueryBounds(resolution, patchMs)
+      const { since, until } = trendQueryBounds(resolution, windowMs)
       const keys =
         tab === 'api'
           ? [...API_CHART_TREND_KEYS]
@@ -3754,6 +3755,7 @@ export class HomePanel extends DashboardPanel {
         if (generation !== this.readyPollGeneration) {
           return
         }
+        this.trendsFailed = false
         const cutoffSec = bucketStartCutoffSec(this.homeChartHistoryMs, Date.now())
         if (tab === 'api') {
           const patch = apiMetricTrendsToPointsByBucketStart(trends, resolution)
@@ -3779,6 +3781,7 @@ export class HomePanel extends DashboardPanel {
         if (generation !== this.readyPollGeneration) {
           return
         }
+        this.trendsFailed = true
       }
     }
 
