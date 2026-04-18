@@ -7,7 +7,7 @@ Requires:
   - API dependencies installed (see amgix-server/src/api/requirements.txt), e.g. in a venv.
 
 Optional:
-  - AMGIX_VERSION — written into the spec info.version (default: v1.2.0-dash).
+  - AMGIX_VERSION - written into the spec info.version (default: v1.2.0-dash).
 """
 from __future__ import annotations
 

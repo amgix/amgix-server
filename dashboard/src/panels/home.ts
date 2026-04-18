@@ -538,7 +538,7 @@ function openHomeLoadedModelsDialog(hostname: string, models: string[]): void {
     $('<h4>', {
       id: titleId,
       class: 'dashboard-collections-config-dialog-title',
-      text: `Loaded models — ${hostname}`,
+      text: `Loaded models - ${hostname}`,
     }),
     $('<div>', { class: 'dashboard-home-loaded-models-dialog-body' }).append($list),
     $('<div>', { class: 'dashboard-collections-config-dialog-actions' }).append($close),

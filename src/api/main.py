@@ -353,7 +353,7 @@ async def readiness_check() -> ReadyResponse:
 async def metrics_current(
     window: int = Query(
         default=60,
-        description="Aggregation window in seconds — 30 or 60.",
+        description="Aggregation window in seconds - 30 or 60.",
     ),
     keys: Optional[List[str]] = Query(
         default=None,
@@ -413,7 +413,7 @@ async def metrics_trends(
     until: datetime,
     resolution: int = Query(
         default=60,
-        description="Bucket size in seconds — 60 for 1-minute, 300 for 5-minute.",
+        description="Bucket size in seconds - 60 for 1-minute, 300 for 5-minute.",
     ),
     keys: Optional[List[str]] = Query(default=None),
 ) -> List[MetricTrend]:
@@ -422,7 +422,7 @@ async def metrics_trends(
     Args:
         since: Inclusive start of the time range (ISO 8601, UTC assumed if no timezone given).
         until: Exclusive end of the time range (ISO 8601, UTC assumed if no timezone given).
-        resolution: Bucket size in seconds — 60 for 1-minute, 300 for 5-minute.
+        resolution: Bucket size in seconds - 60 for 1-minute, 300 for 5-minute.
         keys: One or more metric keys to return. Omit to return all keys.
     """
     if resolution not in (60, 300):
