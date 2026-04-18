@@ -718,4 +718,11 @@ def _bucket_start(ts: float) -> int:
 
 
 async def _wait_for_stop(stop_event: threading.Event, timeout_s: float) -> bool:
-    return await asyncio.to_thread(stop_event.wait, timeout_s)
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    chunk = 0.25
+    while not stop_event.is_set():
+        remaining = deadline - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(min(chunk, remaining))
+    return stop_event.is_set()
