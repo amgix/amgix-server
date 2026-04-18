@@ -17,7 +17,7 @@ services:
       - "3306:3306"
     volumes:
       - ../data/mariadb:/var/lib/mysql
-      - ../data/mariadb.cnf:/etc/mysql/mariadb.conf.d/99-mariadb.cnf
+      - ./mariadb.cnf:/etc/mysql/mariadb.conf.d/99-mariadb.cnf
      
     networks:
       - amgix-net
