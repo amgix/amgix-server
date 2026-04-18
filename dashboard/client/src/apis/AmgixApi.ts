@@ -765,7 +765,7 @@ export class AmgixApi extends runtime.BaseAPI {
     }
 
     /**
-     * Check if service is ready to handle requests.  Runs four probes: database, rabbitmq, encoder (ping-encoder), rpc (ping-rpc). Returns 200 if all pass (fully ready), 218 if some fail (partial ready). Response body always includes all four probe results and a ready flag.
+     * Check if service is ready to handle requests.  Runs four probes: database, rabbitmq, index workers, query workers. Returns 200 if all pass (fully ready), 218 if some fail (partial ready). Response body always includes all four probe results and a ready flag.
      * Readiness Check
      */
     async healthReadyRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ReadyResponse>> {
@@ -776,7 +776,7 @@ export class AmgixApi extends runtime.BaseAPI {
     }
 
     /**
-     * Check if service is ready to handle requests.  Runs four probes: database, rabbitmq, encoder (ping-encoder), rpc (ping-rpc). Returns 200 if all pass (fully ready), 218 if some fail (partial ready). Response body always includes all four probe results and a ready flag.
+     * Check if service is ready to handle requests.  Runs four probes: database, rabbitmq, index workers, query workers. Returns 200 if all pass (fully ready), 218 if some fail (partial ready). Response body always includes all four probe results and a ready flag.
      * Readiness Check
      */
     async healthReady(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ReadyResponse> {
@@ -910,6 +910,49 @@ export class AmgixApi extends runtime.BaseAPI {
     }
 
     /**
+     * Creates request options for metricsPrometheus without sending the request
+     */
+    async metricsPrometheusRequestOpts(): Promise<runtime.RequestOpts> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+
+        let urlPath = `/v1/metrics/prometheus`;
+
+        return {
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     * Expose current cluster metrics in Prometheus text exposition (60s rolling window).
+     * Metrics Prometheus
+     */
+    async metricsPrometheusRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<string>> {
+        const requestOptions = await this.metricsPrometheusRequestOpts();
+        const response = await this.request(requestOptions, initOverrides);
+
+        if (this.isJsonMime(response.headers.get('content-type'))) {
+            return new runtime.JSONApiResponse<string>(response);
+        } else {
+            return new runtime.TextApiResponse(response) as any;
+        }
+    }
+
+    /**
+     * Expose current cluster metrics in Prometheus text exposition (60s rolling window).
+     * Metrics Prometheus
+     */
+    async metricsPrometheus(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<string> {
+        const response = await this.metricsPrometheusRaw(initOverrides);
+        return await response.value();
+    }
+
+    /**
      * Creates request options for metricsTrends without sending the request
      */
     async metricsTrendsRequestOpts(requestParameters: MetricsTrendsRequest): Promise<runtime.RequestOpts> {
@@ -959,7 +1002,7 @@ export class AmgixApi extends runtime.BaseAPI {
     }
 
     /**
-     * Return historical metric buckets for the given time range and resolution.  Args:     since: Inclusive start of the time range (ISO 8601, UTC assumed if no timezone given).     until: Exclusive end of the time range (ISO 8601, UTC assumed if no timezone given).     resolution: Bucket size in seconds — 60 for 1-minute, 300 for 5-minute.     keys: One or more metric keys to return. Omit to return all keys.
+     * Return historical metric buckets for the given time range and resolution.  Args:     since: Inclusive start of the time range (ISO 8601, UTC assumed if no timezone given).     until: Exclusive end of the time range (ISO 8601, UTC assumed if no timezone given).     resolution: Bucket size in seconds - 60 for 1-minute, 300 for 5-minute.     keys: One or more metric keys to return. Omit to return all keys.
      * Metrics Trends
      */
     async metricsTrendsRaw(requestParameters: MetricsTrendsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<MetricTrend>>> {
@@ -970,7 +1013,7 @@ export class AmgixApi extends runtime.BaseAPI {
     }
 
     /**
-     * Return historical metric buckets for the given time range and resolution.  Args:     since: Inclusive start of the time range (ISO 8601, UTC assumed if no timezone given).     until: Exclusive end of the time range (ISO 8601, UTC assumed if no timezone given).     resolution: Bucket size in seconds — 60 for 1-minute, 300 for 5-minute.     keys: One or more metric keys to return. Omit to return all keys.
+     * Return historical metric buckets for the given time range and resolution.  Args:     since: Inclusive start of the time range (ISO 8601, UTC assumed if no timezone given).     until: Exclusive end of the time range (ISO 8601, UTC assumed if no timezone given).     resolution: Bucket size in seconds - 60 for 1-minute, 300 for 5-minute.     keys: One or more metric keys to return. Omit to return all keys.
      * Metrics Trends
      */
     async metricsTrends(requestParameters: MetricsTrendsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<MetricTrend>> {
