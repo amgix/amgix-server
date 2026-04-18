@@ -555,16 +555,12 @@ function encoderGroupHeight(count: number): number {
   if (count <= 0) {
     return 0
   }
-  if (count === 3) {
-    return CLUSTER_MAP_ROW_GAP_Y
-  }
   const rows = Math.ceil(count / 3)
   return (rows - 1) * CLUSTER_MAP_ROW_GAP_Y
 }
 
 /**
- * 1: center. 2: side by side. 3: two on top, one centered below.
- * 4+: rows of up to 3, horizontal within each row (same y for that row).
+ * 1: center. 2: side by side. 3+: rows of up to 3, horizontal within each row (same y for that row).
  */
 function encoderGroupNodePositions(count: number, baseY: number): ClusterMapPosition[] {
   if (count <= 0) {
@@ -580,14 +576,6 @@ function encoderGroupNodePositions(count: number, baseY: number): ClusterMapPosi
     return [
       { x: xs[0] ?? 0, y: baseY },
       { x: xs[1] ?? 0, y: baseY },
-    ]
-  }
-  if (count === 3) {
-    const topXs = centeredPositions(2, gap)
-    return [
-      { x: topXs[0] ?? 0, y: baseY },
-      { x: topXs[1] ?? 0, y: baseY },
-      { x: 0, y: baseY + rowGap },
     ]
   }
   const out: ClusterMapPosition[] = []
