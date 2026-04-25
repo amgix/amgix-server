@@ -345,6 +345,46 @@ function applyCollectionStatsToDom(
   set('total', grandTotal)
 }
 
+type QueueBreakdown = {
+  queuedUpsert: number
+  queuedDelete: number
+  requeuedUpsert: number
+  requeuedDelete: number
+  failedUpsert: number
+  failedDelete: number
+  queuedTotal: number
+  requeuedTotal: number
+  failedTotal: number
+}
+
+function getQueueBreakdown(queueInfo: QueueInfo): QueueBreakdown {
+  const q = queueInfo as QueueInfo & Record<string, unknown>
+  const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+
+  const queuedUpsert = n(q.queued_upsert)
+  const queuedDelete = n(q.queued_delete)
+  const requeuedUpsert = n(q.requeued_upsert)
+  const requeuedDelete = n(q.requeued_delete)
+  const failedUpsert = n(q.failed_upsert)
+  const failedDelete = n(q.failed_delete)
+
+  const queuedTotal = n(q.queued) || queuedUpsert + queuedDelete
+  const requeuedTotal = n(q.requeued) || requeuedUpsert + requeuedDelete
+  const failedTotal = n(q.failed) || failedUpsert + failedDelete
+
+  return {
+    queuedUpsert,
+    queuedDelete,
+    requeuedUpsert,
+    requeuedDelete,
+    failedUpsert,
+    failedDelete,
+    queuedTotal,
+    requeuedTotal,
+    failedTotal,
+  }
+}
+
 export class CollectionsPanel extends DashboardPanel {
   private queuePieChart: Chart | null = null
   private statsPollTimer: number | null = null
@@ -573,7 +613,8 @@ export class CollectionsPanel extends DashboardPanel {
       }
       const docCount = collStats.doc_count
       const queueInfo = collStats.queue
-      const grandTotal = docCount + queueInfo.queued + queueInfo.requeued + queueInfo.failed
+      const queueBreakdown = getQueueBreakdown(queueInfo)
+      const grandTotal = docCount + queueBreakdown.queuedTotal + queueBreakdown.requeuedTotal + queueBreakdown.failedTotal
       const chartVisible = this.queuePieChart !== null
       const shouldShowChart = grandTotal > 0
       if (chartVisible !== shouldShowChart) {
@@ -581,14 +622,31 @@ export class CollectionsPanel extends DashboardPanel {
         await this.selectCollection(api, name, $nav, $detail)
         return
       }
-      applyCollectionStatsToDom($detail, docCount, queueInfo, grandTotal)
+      applyCollectionStatsToDom(
+        $detail,
+        docCount,
+        {
+          ...queueInfo,
+          queued: queueBreakdown.queuedTotal,
+          requeued: queueBreakdown.requeuedTotal,
+          failed: queueBreakdown.failedTotal,
+        },
+        grandTotal,
+      )
+      const setSplit = (kind: string, upsert: number, del: number) => {
+        $detail.find(`tr[data-stat="${kind}"] td[data-stat-upsert]`).text(formatInt(upsert))
+        $detail.find(`tr[data-stat="${kind}"] td[data-stat-delete]`).text(formatInt(del))
+      }
+      setSplit('queued', queueBreakdown.queuedUpsert, queueBreakdown.queuedDelete)
+      setSplit('requeued', queueBreakdown.requeuedUpsert, queueBreakdown.requeuedDelete)
+      setSplit('failed', queueBreakdown.failedUpsert, queueBreakdown.failedDelete)
       this.updateQueueTotalRate($detail, queueInfo.total)
       if (this.queuePieChart) {
         this.queuePieChart.data.datasets[0].data = [
           docCount,
-          queueInfo.queued,
-          queueInfo.requeued,
-          queueInfo.failed,
+          queueBreakdown.queuedTotal,
+          queueBreakdown.requeuedTotal,
+          queueBreakdown.failedTotal,
         ]
         this.queuePieChart.update('none')
       }
@@ -640,16 +698,17 @@ export class CollectionsPanel extends DashboardPanel {
 
       const docCount = collStats.doc_count
       const queueInfo = collStats.queue
-      const grandTotal = docCount + queueInfo.queued + queueInfo.requeued + queueInfo.failed
+      const queueBreakdown = getQueueBreakdown(queueInfo)
+      const grandTotal = docCount + queueBreakdown.queuedTotal + queueBreakdown.requeuedTotal + queueBreakdown.failedTotal
 
       const $vectorsSection = buildVectorsSection(config, name)
 
       const $statsBody = $('<tbody>')
       $statsBody.append(
         statRow('indexed', 'Indexed', docCount),
-        statRow('queued', 'Queued', queueInfo.queued),
-        statRow('requeued', 'Requeued', queueInfo.requeued),
-        statRow('failed', 'Failed', queueInfo.failed),
+        statRow('queued', 'Queued', queueBreakdown.queuedTotal),
+        statRow('requeued', 'Requeued', queueBreakdown.requeuedTotal),
+        statRow('failed', 'Failed', queueBreakdown.failedTotal),
         queueTotalRateRow(),
       )
       $statsBody.append(
@@ -668,13 +727,52 @@ export class CollectionsPanel extends DashboardPanel {
           $('<tr>').append(
             $('<th>', {
               class: 'dashboard-collections-doc-stats-table-heading',
-              colspan: 2,
+              colspan: 3,
               scope: 'colgroup',
               text: 'Document Stats',
             }),
           ),
+          $('<tr>').append(
+            $('<th>', { scope: 'col', text: '' }),
+            $('<th>', { scope: 'col', text: 'upsert' }),
+            $('<th>', { scope: 'col', text: 'delete' }),
+          ),
         ),
         $statsBody,
+      )
+
+      $statsBody.find('tr[data-stat="indexed"] td[data-stat-value]').replaceWith(
+        $('<td>', { 'data-stat-upsert': '1', text: formatInt(docCount) }),
+        $('<td>', { 'data-stat-delete': '1', text: DASH }),
+      )
+      $statsBody.find('tr[data-stat="queued"] td[data-stat-value]').replaceWith(
+        $('<td>', { 'data-stat-upsert': '1', text: formatInt(queueBreakdown.queuedUpsert) }),
+        $('<td>', { 'data-stat-delete': '1', text: formatInt(queueBreakdown.queuedDelete) }),
+      )
+      $statsBody.find('tr[data-stat="requeued"] td[data-stat-value]').replaceWith(
+        $('<td>', { 'data-stat-upsert': '1', text: formatInt(queueBreakdown.requeuedUpsert) }),
+        $('<td>', { 'data-stat-delete': '1', text: formatInt(queueBreakdown.requeuedDelete) }),
+      )
+      $statsBody.find('tr[data-stat="failed"] td[data-stat-value]').replaceWith(
+        $('<td>', { 'data-stat-upsert': '1', text: formatInt(queueBreakdown.failedUpsert) }),
+        $('<td>', { 'data-stat-delete': '1', text: formatInt(queueBreakdown.failedDelete) }),
+      )
+      $statsBody.find('tr[data-stat="queue-total-rate"] td').replaceWith(
+        $('<td>').append(
+          $('<span>', { class: 'dashboard-collections-queue-rate-wrap' }).append(
+            $('<span>', {
+              class: 'material-symbols-outlined material-symbols--btn dashboard-collections-queue-rate-icon',
+              'aria-hidden': 'true',
+            }),
+            ' ',
+            $('<span>', { class: 'dashboard-collections-queue-rate-value' }),
+          ),
+        ),
+        $('<td>', { text: DASH }),
+      )
+      $statsBody.find('tr[data-stat="total"] td[data-stat-value]').replaceWith(
+        $('<td>', { 'data-stat-upsert': '1', text: formatInt(grandTotal) }),
+        $('<td>', { 'data-stat-delete': '1', text: DASH }),
       )
 
       const $statsTableWrap = $('<div>', {
@@ -816,7 +914,16 @@ export class CollectionsPanel extends DashboardPanel {
         if (tableH > 0) {
           chartCanvas.parentElement!.style.height = `${tableH}px`
         }
-        this.mountQueuePieChart(chartCanvas, docCount, queueInfo)
+        this.mountQueuePieChart(
+          chartCanvas,
+          docCount,
+          {
+            ...queueInfo,
+            queued: queueBreakdown.queuedTotal,
+            requeued: queueBreakdown.requeuedTotal,
+            failed: queueBreakdown.failedTotal,
+          },
+        )
       }
 
       this.statsPollTimer = window.setInterval(() => {

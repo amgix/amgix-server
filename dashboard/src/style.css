@@ -1190,6 +1190,7 @@ a.dashboard-home-loaded-models-count:hover {
   flex: 0 1 auto;
   min-width: min(100%, 14rem);
   max-width: 22rem;
+  width: min(100%, 22rem);
   overflow-x: auto;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -1210,6 +1211,26 @@ a.dashboard-home-loaded-models-count:hover {
   font-weight: 600;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--text) 5%, var(--bg));
+}
+
+.dashboard-collections-doc-stats-table thead tr:nth-child(2) th {
+  padding: 0.35rem 0.65rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--text) 72%, var(--bg));
+  border-bottom: 1px solid var(--border);
+}
+
+.dashboard-collections-doc-stats-table thead tr:nth-child(2) th:first-child {
+  text-align: left;
+}
+
+.dashboard-collections-doc-stats-table thead tr:nth-child(2) th:not(:first-child) {
+  text-align: right;
+}
+
+.dashboard-collections-doc-stats-table thead tr:nth-child(2) th:last-child {
+  padding-right: 0.75rem;
 }
 
 .dashboard-collections-doc-stats-table tbody th {
@@ -1279,6 +1300,7 @@ a.dashboard-home-loaded-models-count:hover {
   align-items: center;
   justify-content: flex-end;
   gap: 0.35rem;
+  min-width: 7.5ch;
 }
 
 .dashboard-collections-queue-rate-icon {
@@ -1301,6 +1323,12 @@ a.dashboard-home-loaded-models-count:hover {
 .dashboard-collections-queue-rate-icon--flat {
   color: color-mix(in srgb, var(--text) 55%, var(--bg));
   font-size: 1rem;
+}
+
+.dashboard-collections-queue-rate-value {
+  display: inline-block;
+  min-width: 5.75ch;
+  text-align: right;
 }
 
 .dashboard-collections-doc-stats-chart-wrap {
