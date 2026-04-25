@@ -1632,15 +1632,17 @@ function trimChartBucketMap(store: Map<number, unknown>, cutoffBucketStartSec: n
   }
 }
 
-function bucketStartCutoffSec(historyMs: number, nowMs: number): number {
-  return Math.floor((nowMs - historyMs) / 1000)
+function bucketStartCutoffSec(historyMs: number, nowMs: number, bucketSec: number): number {
+  const rawSec = Math.floor((nowMs - historyMs) / 1000)
+  return Math.floor(rawSec / bucketSec) * bucketSec
 }
 
 function trendQueryBounds(resolutionSec: number, historyMs: number): { since: Date; until: Date } {
   const resMs = resolutionSec * 1000
   const nudgedNowMs = Date.now() + 30_000
   const until = new Date(Math.floor(nudgedNowMs / resMs) * resMs)
-  const since = new Date(Math.floor((nudgedNowMs - historyMs) / resMs) * resMs)
+  // Over-fetch one extra bucket so the left edge always has data when available.
+  const since = new Date(Math.floor((nudgedNowMs - historyMs - resMs) / resMs) * resMs)
   return { since, until }
 }
 
@@ -2519,7 +2521,8 @@ export class HomePanel extends DashboardPanel {
     }
 
     const now = Date.now()
-    const cutoff = now - this.homeChartHistoryMs
+    const resolution = this.trendResolutionSec()
+    const cutoff = Math.floor((now - this.homeChartHistoryMs) / (resolution * 1000)) * (resolution * 1000)
     const spanMs = now - cutoff
     const liveView = this.metricsChartLiveView
     const aggLive = aggregateClusterThroughput(liveView, HOME_CHART_METRICS_LIVE_WINDOW_SEC)
@@ -2843,7 +2846,8 @@ export class HomePanel extends DashboardPanel {
     }
 
     const now = Date.now()
-    const cutoff = now - this.homeChartHistoryMs
+    const resolution = this.trendResolutionSec()
+    const cutoff = Math.floor((now - this.homeChartHistoryMs) / (resolution * 1000)) * (resolution * 1000)
     const liveView = this.metricsChartLiveView
     const liveMs = weightedIndexingJobMsFromNodes(liveView)
     const livePoint: IndexingLatencyHistoryPoint | null =
@@ -2983,7 +2987,8 @@ export class HomePanel extends DashboardPanel {
     }
 
     const now = Date.now()
-    const cutoff = now - this.homeChartHistoryMs
+    const resolution = this.trendResolutionSec()
+    const cutoff = Math.floor((now - this.homeChartHistoryMs) / (resolution * 1000)) * (resolution * 1000)
     const liveView = this.metricsChartLiveView
     const aggLive = aggregateApiChartMetrics(liveView, HOME_CHART_METRICS_LIVE_WINDOW_SEC)
     const livePoint: ApiMetricsHistoryPoint | null =
@@ -3350,7 +3355,7 @@ export class HomePanel extends DashboardPanel {
       if (generation !== this.readyPollGeneration) {
         return
       }
-      const cutoffSec = bucketStartCutoffSec(this.homeChartHistoryMs, Date.now())
+      const cutoffSec = bucketStartCutoffSec(this.homeChartHistoryMs, Date.now(), resolution)
       if (tab === 'api') {
         const m = apiMetricTrendsToPointsByBucketStart(trends, resolution)
         for (const [k, v] of m) {
@@ -3756,7 +3761,7 @@ export class HomePanel extends DashboardPanel {
           return
         }
         this.trendsFailed = false
-        const cutoffSec = bucketStartCutoffSec(this.homeChartHistoryMs, Date.now())
+        const cutoffSec = bucketStartCutoffSec(this.homeChartHistoryMs, Date.now(), resolution)
         if (tab === 'api') {
           const patch = apiMetricTrendsToPointsByBucketStart(trends, resolution)
           for (const [k, v] of patch) {
