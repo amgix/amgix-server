@@ -2,7 +2,7 @@ import pytest
 import requests
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Callable, List
 from tests.conftest import skip_if_not_supported
 from src.core.common import QueuedDocumentStatus
@@ -2717,9 +2717,10 @@ def test_document_status_api(setup_collection):
     print("\n--- Test 4: Update document multiple times and check status ---")
     
     # First update
+    base_ts = datetime.now(timezone.utc)
     update_doc_1 = {
         "id": doc_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": base_ts.isoformat(),
         "name": "Updated Status Test Document - First Update",
         "content": "This is the first update to the test document",
         "tags": ["test"]
@@ -2729,10 +2730,10 @@ def test_document_status_api(setup_collection):
     assert response.status_code == 200, f"Failed to update document first time: {response.text}"
     print("✓ First document update queued successfully")
     
-    # Second update
+    # Second update — timestamp must be strictly newer so encoder doesn't skip it as stale
     update_doc_2 = {
         "id": doc_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": (base_ts + timedelta(seconds=1)).isoformat(),
         "name": "Updated Status Test Document - Second Update",
         "content": "This is the second update to the test document",
         "tags": ["test"]
