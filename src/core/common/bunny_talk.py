@@ -1,9 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, date, timezone
 import json
 import asyncio
 import contextvars
 import inspect
-from inspect import Signature
 from logging import Logger
 import os
 import time
@@ -11,8 +10,9 @@ import traceback
 import uuid
 import random
 from typing import Any, Dict, Tuple, Union, Optional, get_origin, get_args, get_type_hints
+from types import UnionType as _UnionType
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from aio_pika import DeliveryMode, ExchangeType, Message, RobustConnection, RobustChannel, RobustExchange, RobustQueue, connect_robust
 from aio_pika.exceptions import AMQPException, ChannelNotFoundEntity
 from src.core.common.constants import APP_PREFIX, MAX_QUEUE_MESSAGES, MAX_QUEUE_SIZE_BYTES, RPC_TIMEOUT_SECONDS, MAX_DB_RETRIES
@@ -78,6 +78,32 @@ CLASSIC_QUEUE_ARGUMENTS = {
         'x-overflow': 'reject-publish',
         'x-expires': max((RPC_TIMEOUT_SECONDS + 5) * 1000, 10000)
     }
+
+# Types that need coercion when crossing the JSON boundary (plain primitives are pass-through)
+_COERCE_TYPES = (datetime, date, BaseModel)
+
+def _needs_coercion(annotation: Any) -> bool:
+    """Return True if the annotation requires TypeAdapter coercion from JSON."""
+    if annotation is None or annotation is type(None):
+        return False
+    origin = get_origin(annotation)
+    # Unwrap Optional[X] (typing.Union) and X | Y (types.UnionType, Python 3.10+)
+    if origin is Union or isinstance(annotation, _UnionType):
+        args = [a for a in get_args(annotation) if a is not type(None)]
+        return any(_needs_coercion(a) for a in args)
+    if origin is list:
+        args = get_args(annotation)
+        return bool(args) and _needs_coercion(args[0])
+    if inspect.isclass(annotation):
+        return issubclass(annotation, _COERCE_TYPES)
+    return False
+
+def _make_adapter_if_needed(annotation: Any) -> Optional[TypeAdapter]:
+    """Return a TypeAdapter for types needing coercion, or None for fast pass-through."""
+    if _needs_coercion(annotation):
+        return TypeAdapter(annotation)
+    return None
+
 
 class BunnyTalk:
     """
@@ -268,25 +294,13 @@ class BunnyTalk:
         
         # Resolve all type hints once using typing.get_type_hints
         hints = get_type_hints(handler, globalns=getattr(handler, '__globals__', None))
-        param_types = {}
+        # Map param name → TypeAdapter for types that need coercion, None for pass-through primitives
+        param_adapters: Dict[str, Optional[TypeAdapter]] = {}
         for name, param in sig.parameters.items():
             annotation = hints.get(name, inspect.Parameter.empty)
             if annotation == inspect.Parameter.empty:
                 raise TypeError(f"Missing or unresolvable type annotation for parameter '{name}' in handler '{handler.__name__}'")
-
-            # Only keep types that require conversion (BaseModel or List[BaseModel])
-            keep: Optional[Any] = None
-            if inspect.isclass(annotation) and issubclass(annotation, BaseModel):
-                keep = annotation
-            else:
-                origin = get_origin(annotation)
-                if origin is list:
-                    args = get_args(annotation) or ()
-                    item_type = args[0] if len(args) > 0 else None
-                    if inspect.isclass(item_type) and issubclass(item_type, BaseModel):
-                        keep = annotation
-
-            param_types[name] = keep
+            param_adapters[name] = _make_adapter_if_needed(annotation)
 
         async def process_message(message: Message):
             try:
@@ -315,7 +329,7 @@ class BunnyTalk:
                     # This is an RPC call, send response back
                     try:
                         # Automatically map parameters to handler function
-                        result = await self._call_handler_with_params_local(handler, payload, param_names, param_types, is_async)
+                        result = await self._call_handler_with_params_local(handler, payload, param_names, param_adapters, is_async)
                         # Wrap result in RPCResponse
                         if isinstance(result, RPCResponse):
                             response = result
@@ -348,7 +362,7 @@ class BunnyTalk:
                     )
                 else:
                     # Regular event, automatically map parameters to handler function
-                    await self._call_handler_with_params_local(handler, payload, param_names, param_types, is_async)
+                    await self._call_handler_with_params_local(handler, payload, param_names, param_adapters, is_async)
                 
                 await message.ack()
             except Exception as e:
@@ -473,38 +487,37 @@ class BunnyTalk:
             except Exception as ack_err:
                 self.logger.warning(f"Failed to ack RPC reply message after error: {ack_err}")
     
-    async def _call_handler_with_params_local(self, handler: callable, payload: Dict[str, Any], param_names: list, param_types: dict, is_async: bool) -> Any:
-        """Call handler with mapped parameters, auto-deserializing BaseModel and List[BaseModel]."""
+    async def _call_handler_with_params_local(
+        self,
+        handler: callable,
+        payload: Dict[str, Any],
+        param_names: list,
+        param_adapters: Dict[str, TypeAdapter],
+        is_async: bool,
+    ) -> Any:
+        """
+        Map JSON payload fields to the handler, using Pydantic adapters so primitives like
+        `datetime` round-trip through JSON (ISO strings) back into typed Python values.
+        """
         args = payload.get('args', [])
         kwargs = payload.get('kwargs', {})
 
-        def convert_value(expected_type, value, name: str):
-            # No conversion needed → pass through
-            if expected_type is None:
+        def convert_value(param_name: str, value: Any) -> Any:
+            adapter = param_adapters.get(param_name)
+            if not adapter:
                 return value
-
-            # expected_type is either BaseModel or List[BaseModel]
-            origin = get_origin(expected_type)
-            if origin is list:
-                (item_type,) = get_args(expected_type)
-                return [item_type.model_validate(item) for item in value]
-            else:
-                return expected_type.model_validate(value)
-
-            return value
+            return adapter.validate_python(value)
 
         # Map positional args
         bound_args: Dict[str, Any] = {}
         for i, arg in enumerate(args):
             if i < len(param_names):
                 param_name = param_names[i]
-                expected_type = param_types.get(param_name)
-                bound_args[param_name] = convert_value(expected_type, arg, param_name)
+                bound_args[param_name] = convert_value(param_name, arg)
 
         # Map keyword args
         for key, value in kwargs.items():
-            expected_type = param_types.get(key)
-            bound_args[key] = convert_value(expected_type, value, key)
+            bound_args[key] = convert_value(key, value)
 
         if is_async:
             return await handler(**bound_args)
