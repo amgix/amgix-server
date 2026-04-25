@@ -9,6 +9,7 @@ from src.core.common import (
     MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH, MAX_DOCUMENT_TAGS_COUNT,
     MAX_DOCUMENT_ID_LENGTH, MAX_DOCUMENT_NAME_LENGTH, MAX_DOCUMENT_DESCRIPTION_LENGTH,
     MAX_DOCUMENT_CONTENT_LENGTH, MAX_DOCUMENT_TAG_LENGTH, QueuedDocumentStatusLiteral,
+    QueueOperationTypeLiteral,
     MetadataValueType, MetadataValueTypeLiteral
 )
 
@@ -276,6 +277,8 @@ class QueueDocument(BaseModel):
     collection_name: str = Field(..., description="Name of the collection this document belongs to")
     collection_id: str = Field(..., description="UUID identifier for the collection")
     doc_id: str = Field(..., description="Unique identifier for the document")
+    op_type: QueueOperationTypeLiteral = Field(..., description="Operation type for this queue entry (upsert or delete)")
+    doc_timestamp: datetime = Field(..., description="Caller-supplied operation timestamp used for ordering")
     status: QueuedDocumentStatusLiteral = Field(..., description="Current processing status of the document")
     info: Optional[str] = Field(None, description="Status information")
     document: Optional[Document] = Field(None, description="The document being processed (optional for status queries)")

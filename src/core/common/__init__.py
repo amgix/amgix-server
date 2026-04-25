@@ -71,6 +71,8 @@ __all__ = [
     "SearchFusionModeLiteral",
     "QueuedDocumentStatus",
     "QueuedDocumentStatusLiteral",
+    "QueueOperationType",
+    "QueueOperationTypeLiteral",
     "DenseDistance",
     "DenseDistanceLiteral",
     "MetadataValueType",

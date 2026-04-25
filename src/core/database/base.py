@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 import copy
 from enum import Enum
 from typing import Dict, List, Any, Optional, Union, Callable, Hashable, Tuple
+from datetime import datetime
 from heapq import nlargest
 import uuid
 import asyncio
@@ -10,7 +11,7 @@ from ..models.cluster import MetricsBucket
 from ..models.document import Document, DocumentWithVectors, SearchResult, QueueDocument, QueueInfo, DocumentStatusResponse
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig
 from ..common import (
-    APP_PREFIX, DOC_NAMESPACE, DatabaseInfo, DatabaseFeatures, 
+    APP_PREFIX, DOC_NAMESPACE, DatabaseInfo, DatabaseFeatures, QueueOperationTypeLiteral,
     MAX_DATABASE_WAIT_SECONDS
 )
 from ..common.lock_manager import LockClient
@@ -409,7 +410,14 @@ class DatabaseBase(ABC):
         return f"{APP_PREFIX}_sys_{collection_type.value}"
     
     @abstractmethod
-    async def add_to_queue(self, collection_name: str, collection_id: str, documents: List[Document]) -> List[str]:
+    async def add_to_queue(
+        self,
+        collection_name: str,
+        collection_id: str,
+        documents: List[Document],
+        op_type: QueueOperationTypeLiteral,
+        request_timestamp: Optional[datetime] = None,
+    ) -> List[str]:
         """
         Add documents to the processing queue.
         
@@ -417,6 +425,8 @@ class DatabaseBase(ABC):
             collection_name: Name of the collection these documents belong to
             collection_id: Internal collection identifier
             documents: List of documents to add to the queue
+            op_type: Queue operation type (upsert or delete)
+            request_timestamp: Caller-supplied timestamp for delete operations
             
         Returns:
             List[str]: The queue_ids for the queue entries
@@ -424,12 +434,13 @@ class DatabaseBase(ABC):
         pass
     
     @abstractmethod
-    async def get_from_queue(self, queue_ids: List[str]) -> List['QueueDocument']:
+    async def get_from_queue(self, queue_ids: List[str], suppress_not_found: bool = False) -> List['QueueDocument']:
         """
         Retrieve documents from the processing queue.
         
         Args:
             queue_ids: List of unique identifiers for queue entries
+            suppress_not_found: If True, return only found entries instead of raising AmgixNotFound
             
         Returns:
             List[QueueDocument]: List of queue documents with status and metadata
@@ -453,6 +464,18 @@ class DatabaseBase(ABC):
         
         Args:
             collection_name: Name of the collection to clear from queue
+        """
+        pass
+
+    @abstractmethod
+    async def delete_upserts_from_queue(self, collection_name: str, doc_id: str, before_timestamp: datetime) -> None:
+        """
+        Remove upsert queue entries for a document with doc_timestamp <= before_timestamp.
+
+        Args:
+            collection_name: Name of the collection
+            doc_id: Document identifier
+            before_timestamp: Delete upsert entries with doc_timestamp at or before this timestamp
         """
         pass
     

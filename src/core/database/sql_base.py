@@ -20,7 +20,7 @@ from ..common import (
     SEARCH_PREFETCH_MULTIPLIER, IDF_THRESHOLD_MULTIPLIER, DEFAULT_SQL_BATCH_SIZE,
     MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH, UUID_LENGTH, MAX_DOCUMENT_TAG_LENGTH,
     MAX_FIELD_VECTOR_NAME_LENGTH, MAX_INTERNAL_COLLECTION_NAME_LENGTH,
-    MAX_DOCUMENT_ID_LENGTH, QueuedDocumentStatus, MAX_STATUS_LENGTH, MAX_SEARCH_LIMIT,
+    MAX_DOCUMENT_ID_LENGTH, QueuedDocumentStatus, QueueOperationType, QueueOperationTypeLiteral, MAX_STATUS_LENGTH, MAX_SEARCH_LIMIT,
     get_user_collection_name, MetadataValueType, COLLECTION_INGEST_LOCK_TIMEOUT,
     MAX_HOSTNAME_LENGTH, MAX_METRIC_SOURCE_LENGTH, MAX_METRIC_KEY_LENGTH,
 )
@@ -365,6 +365,8 @@ class SQLBase(DatabaseBase):
                 self.format_sql("column_varchar", name="collection_name", size=MAX_INTERNAL_COLLECTION_NAME_LENGTH, null_constraint=" NOT NULL"),
                 self.format_sql("column_varchar", name="collection_id", size=UUID_LENGTH, null_constraint=" NOT NULL"),
                 self.format_sql("column_varchar", name="doc_id", size=MAX_DOCUMENT_ID_LENGTH, null_constraint=" NOT NULL"),
+                self.format_sql("column_varchar", name="op_type", size=MAX_STATUS_LENGTH, null_constraint=" NOT NULL"),
+                self.format_sql("column_timestamp", name="doc_timestamp", default=self.SQL_TEMPLATES["current_timestamp"]),
                 self.format_sql("column_varchar", name="status", size=MAX_STATUS_LENGTH, null_constraint=" NOT NULL"),
                 self.format_sql("column_longtext", name="document", null_constraint=" NOT NULL"),
                 self.format_sql("column_text", name="info", null_constraint=""),
@@ -383,6 +385,8 @@ class SQLBase(DatabaseBase):
             query_simple_indexes = [
                 ("collection_doc", self.quote_column_list(["collection_name", "doc_id"])),
                 ("timestamp", self.quote_column_list(["timestamp"])),
+                ("doc_timestamp", self.quote_column_list(["doc_timestamp"])),
+                ("op_type", self.quote_column_list(["op_type"])),
                 ("status", self.quote_column_list(["status"]))
             ]
             
@@ -1968,7 +1972,14 @@ class SQLBase(DatabaseBase):
     # Queue Methods
     # ==========================================
     
-    async def add_to_queue(self, collection_name: str, collection_id: str, documents: List[Document]) -> List[str]:
+    async def add_to_queue(
+        self,
+        collection_name: str,
+        collection_id: str,
+        documents: List[Document],
+        op_type: QueueOperationTypeLiteral,
+        request_timestamp: Optional[datetime] = None,
+    ) -> List[str]:
         """
         Add documents to the processing queue.
         
@@ -1976,6 +1987,8 @@ class SQLBase(DatabaseBase):
             collection_name: Name of the collection these documents belong to
             collection_id: Internal collection identifier
             documents: List of documents to add to the queue
+            op_type: Queue operation type (upsert or delete)
+            request_timestamp: Caller-supplied timestamp for delete operations
             
         Returns:
             List[str]: The queue_ids for the queue entries
@@ -1991,7 +2004,8 @@ class SQLBase(DatabaseBase):
             queue_id = str(uuid.uuid4())
             queue_ids.append(queue_id)
             document_json = document.model_dump_json()
-            rows.append((queue_id, collection_name, collection_id, document.id, QueuedDocumentStatus.QUEUED, document_json, None, current_time, current_time, 0))
+            doc_timestamp = request_timestamp if op_type == QueueOperationType.DELETE else document.timestamp
+            rows.append((queue_id, collection_name, collection_id, document.id, op_type, doc_timestamp, QueuedDocumentStatus.QUEUED, document_json, None, current_time, current_time, 0))
         
         # Insert in batches
         batch_size = self.DEFAULT_BATCH_SIZE
@@ -1999,7 +2013,7 @@ class SQLBase(DatabaseBase):
             batch = rows[i:i + batch_size]
             sql = self.generate_batch_insert_sql(
                 self.queue_collection,
-                ['queue_id', 'collection_name', 'collection_id', 'doc_id', 'status', 'document', 'info', 'created_at', 'timestamp', 'try_count'],
+                ['queue_id', 'collection_name', 'collection_id', 'doc_id', 'op_type', 'doc_timestamp', 'status', 'document', 'info', 'created_at', 'timestamp', 'try_count'],
                 len(batch)
             )
             params = self.flatten_batch_params(batch)
@@ -2007,12 +2021,13 @@ class SQLBase(DatabaseBase):
         
         return queue_ids
     
-    async def get_from_queue(self, queue_ids: List[str]) -> List['QueueDocument']:
+    async def get_from_queue(self, queue_ids: List[str], suppress_not_found: bool = False) -> List['QueueDocument']:
         """
         Retrieve documents from the processing queue.
         
         Args:
             queue_ids: List of unique identifiers for queue entries
+            suppress_not_found: If True, return only found entries instead of raising AmgixNotFound
             
         Returns:
             List[QueueDocument]: List of queue documents with status and metadata
@@ -2029,7 +2044,7 @@ class SQLBase(DatabaseBase):
         )
         
         # Check if we got the expected number of results
-        if len(result) != len(queue_ids):
+        if len(result) != len(queue_ids) and not suppress_not_found:
             found_ids = {row["queue_id"] for row in result}
             missing_ids = set(queue_ids) - found_ids
             raise AmgixNotFound(f"Queue documents not found for queue_ids: {', '.join(missing_ids)}")
@@ -2049,12 +2064,18 @@ class SQLBase(DatabaseBase):
             if getattr(timestamp_with_tz, "tzinfo", None) is None:
                 timestamp_with_tz = timestamp_with_tz.replace(tzinfo=timezone.utc)
 
+            doc_timestamp_with_tz = row["doc_timestamp"]
+            if getattr(doc_timestamp_with_tz, "tzinfo", None) is None:
+                doc_timestamp_with_tz = doc_timestamp_with_tz.replace(tzinfo=timezone.utc)
+
             # Create QueueDocument
             queue_doc = QueueDocument(
                 queue_id=row["queue_id"],
                 collection_name=row["collection_name"],
                 collection_id=row["collection_id"],
                 doc_id=row["doc_id"],
+                op_type=row["op_type"],
+                doc_timestamp=doc_timestamp_with_tz,
                 status=row["status"],
                 document=document,
                 info=row["info"],
@@ -2099,9 +2120,21 @@ class SQLBase(DatabaseBase):
             ),
             (collection_name,)
         )
-        
 
-    
+    async def delete_upserts_from_queue(self, collection_name: str, doc_id: str, before_timestamp: datetime) -> None:
+        await self.execute_sql_no_result(
+            self.format_sql("delete",
+                table=self.queue_collection,
+                where_clause=(
+                    f"{self.quote_identifier('collection_name')}=%s"
+                    f" AND {self.quote_identifier('doc_id')}=%s"
+                    f" AND {self.quote_identifier('op_type')}=%s"
+                    f" AND {self.quote_identifier('doc_timestamp')}<=%s"
+                )
+            ),
+            (collection_name, doc_id, QueueOperationType.UPSERT, before_timestamp)
+        )
+
     async def update_queue_status(self, queue_ids: List[str], status: str, try_count: int, info: str) -> None:
         """
         Update the status of documents in the processing queue.
@@ -2148,7 +2181,7 @@ class SQLBase(DatabaseBase):
         result = await self.execute_sql(
             self.format_sql("select", 
                 table=self.queue_collection,
-                columns=self.quote_column_list(["queue_id", "collection_id", "doc_id", "status", "info", "timestamp", "created_at", "try_count"]),
+                columns=self.quote_column_list(["queue_id", "collection_id", "doc_id", "op_type", "doc_timestamp", "status", "info", "timestamp", "created_at", "try_count"]),
                 where=where_clause,
                 order_by=f" ORDER BY {self.quote_identifier('timestamp')}"
             ),
@@ -2163,20 +2196,25 @@ class SQLBase(DatabaseBase):
             if timestamp_with_tz.tzinfo is None:
                 timestamp_with_tz = timestamp_with_tz.replace(tzinfo=timezone.utc)
 
-            # MariaDB returns naive datetime objects, so we need to add timezone info
             created_at_with_tz = row["created_at"]
             if created_at_with_tz.tzinfo is None:
                 created_at_with_tz = created_at_with_tz.replace(tzinfo=timezone.utc)
 
+            doc_timestamp_with_tz = row["doc_timestamp"]
+            if doc_timestamp_with_tz.tzinfo is None:
+                doc_timestamp_with_tz = doc_timestamp_with_tz.replace(tzinfo=timezone.utc)
+
             queue_doc = QueueDocument(
                 queue_id=row["queue_id"],
-                collection_name=collection_name,  # We know this from the method parameter
+                collection_name=collection_name,
                 collection_id=row["collection_id"],
-                doc_id=row["doc_id"],            # Use the actual doc_id from the database
+                doc_id=row["doc_id"],
+                op_type=row["op_type"],
+                doc_timestamp=doc_timestamp_with_tz,
                 status=row["status"],
                 info=row["info"],
-                document=None,                   # Not used upstream, set to None
-                created_at=created_at_with_tz,   # Use actual timestamp instead of current time
+                document=None,
+                created_at=created_at_with_tz,
                 timestamp=timestamp_with_tz,
                 try_count=row["try_count"]
             )

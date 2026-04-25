@@ -19,7 +19,7 @@ from .embed_router_service import EmbedRouterService
 from src.core.models.vector import CollectionConfigInternal, SearchQuery, VectorConfigInternal, VectorSearchWeight, ModelValidationResponse, ModelValidationResult
 from src.core.common.metrics_definitions import MetricKey
 from src.core.common.metrics_service import MetricsService
-from src.core.common import VectorType, QueuedDocumentStatus, MAX_QUEUE_DELIVERY_ATTEMPTS, MAX_DB_RETRIES
+from src.core.common import VectorType, QueuedDocumentStatus, QueueOperationType, MAX_QUEUE_DELIVERY_ATTEMPTS, MAX_DB_RETRIES
 from src.core.models.document import Document, SearchResult, QueueDocument
 from src.core.common.bunny_talk import BunnyTalk
 from src.core.common.lock_manager import LockService, LockClient
@@ -75,11 +75,16 @@ class EncoderService(EncoderBase):
             single_active_consumer=True
         )
         await self.bunny_talk.listen(
+            routing_key="document-delete-sync",
+            handler=self.document_delete_sync,
+            prefetch_count=2
+        )
+        await self.bunny_talk.listen(
             routing_key="ping-encoder",
             handler=self.ping
         )
         self.index_metrics.start_reporting()
-        self.logger.info("Registered document_upsert handler for 'documents' and 'documents-bulk' queues")
+        self.logger.info("Registered Encoder handlers (document_upsert, document_upsert_bulk, document_delete_sync)")
 
     async def ping(self) -> bool:
         return True
@@ -102,6 +107,14 @@ class EncoderService(EncoderBase):
             collection_name = queue_doc.collection_name
             doc_id = queue_doc.doc_id
             try_count = queue_doc.try_count  # Set try_count from queue document
+
+            if queue_doc.op_type == QueueOperationType.DELETE:
+                await self.document_delete_sync(collection_name, doc_id, queue_doc.doc_timestamp)
+                try:
+                    await self.database.delete_from_queue([queue_id])
+                except Exception as queue_error:
+                    self.logger.error(f"Failed to delete queue entry {queue_id} after delete: {str(queue_error)}")
+                return
 
             # Retrieve collection config (cached) and vectorize
             collection_config, from_cache = await EncoderBase.get_collection_info_cached(self.database, collection_name)
@@ -147,6 +160,11 @@ class EncoderService(EncoderBase):
             # Use distributed locking to prevent race conditions in multi-encoder setup
             lock_name = f"doc-{self.database._string_to_uuid(f"{collection_name}-{doc_id}")}"
             async with self.lock_client.acquire(lock_name, timeout=5.0):
+                # Verify queue entry still exists — a concurrent delete may have drained it
+                if not await self.database.get_from_queue([queue_id], suppress_not_found=True):
+                    self.logger.info(f"Queue entry {queue_id} already removed (concurrent delete), skipping upsert")
+                    return
+
                 # Check if document already exists (now safely locked)
                 existing_document = (await self.database.get_documents(collection_name, [doc_id], suppress_not_found=True))[0]
                 
@@ -321,6 +339,17 @@ class EncoderService(EncoderBase):
                 # Acquire all document locks in single batch
                 lock_names = [f"doc-{self.database._string_to_uuid(f"{collection_name}-{qd.doc_id}")}" for qd in queue_docs]
                 async with self.lock_client.acquire(lock_names, timeout=5.0):
+
+                    # Re-verify queue entries still exist — concurrent deletes may have drained some
+                    still_queued = await self.database.get_from_queue([qd.queue_id for qd in queue_docs], suppress_not_found=True)
+                    still_queued_ids = {qd.queue_id for qd in still_queued}
+                    drained = [qd.queue_id for qd in queue_docs if qd.queue_id not in still_queued_ids]
+                    if drained:
+                        self.logger.info(f"Bulk: {len(drained)} queue entries already removed (concurrent delete), skipping: {drained}")
+                    queue_docs = [qd for qd in queue_docs if qd.queue_id in still_queued_ids]
+                    queue_ids = [qd.queue_id for qd in queue_docs]
+                    if not queue_docs:
+                        return
 
                     existing_docs = await self.database.get_documents(collection_name, [qd.doc_id for qd in queue_docs], suppress_not_found=True)
 
@@ -499,6 +528,41 @@ class EncoderService(EncoderBase):
         
         await self.database.set_collection_stats(collection_name, {"doc_count": new_doc_count, "avgdls": avgdls})
 
+    async def document_delete_sync(self, collection_name: str, document_id: str, request_timestamp: datetime) -> None:
+        """Delete a document synchronously."""
+
+        self.bunny_talk.log_trace_context(f"RpcService: document_id {document_id}")
+
+        # Use distributed locking to prevent race conditions in multi-encoder setup
+        lock_name = f"doc-{self.database._string_to_uuid(f"{collection_name}-{document_id}")}"
+        async with self.lock_client.acquire(lock_name, timeout=RPC_TIMEOUT_SECONDS):
+
+            # Get document before deleting to retrieve token_lengths for stats update
+            docs = await self.database.get_documents(collection_name, [document_id], suppress_not_found=True)
+            doc_with_vectors = docs[0] if docs else None
+
+            if doc_with_vectors is None:
+                self.logger.warning(f"Document {document_id} not found in {collection_name}, skipping delete")
+                return
+
+            await self.database.delete_document(collection_name, document_id)
+            await self.database.delete_upserts_from_queue(collection_name, document_id, request_timestamp)
+
+            # Send stats update with negative values
+            updates = {}
+            for field_vector_name, token_length in doc_with_vectors.token_lengths.items():
+                updates[field_vector_name] = {
+                    "new_doc_count": -1,
+                    "new_sum_token_lengths": -token_length,
+                    "update_doc_count": 0,
+                    "update_sum_token_lengths": 0,
+                    "old_sum_token_lengths": 0
+                }
+
+            if updates:
+                await self.bunny_talk.talk("collection-stats", collection_name=collection_name, updates=updates)
+
+
 class RpcService(EncoderBase):
     """Service for handling RPC calls."""
 
@@ -626,7 +690,7 @@ class RpcService(EncoderBase):
     async def document_upsert_sync(self, collection_name: str, document: Document) -> None:
         """Upsert a document synchronously."""
 
-        self.bunny_talk.log_trace_context(f"EncoderService: document_id {document.id}")
+        self.bunny_talk.log_trace_context(f"RpcService: document_id {document.id}")
 
         # Retrieve collection config and vectorize
         collection_config = await self.database.get_collection_info_internal(collection_name)

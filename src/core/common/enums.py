@@ -154,6 +154,22 @@ QueuedDocumentStatusLiteral = Literal[
     QueuedDocumentStatus.FAILED
 ]
 
+# Queue operation types
+class QueueOperationType:
+    UPSERT = "upsert"
+    DELETE = "delete"
+
+    @classmethod
+    def all(cls) -> list[str]:
+        """Return all available queue operation types."""
+        return [cls.UPSERT, cls.DELETE]
+
+# Type-safe literal for queue operation types
+QueueOperationTypeLiteral = Literal[
+    QueueOperationType.UPSERT,
+    QueueOperationType.DELETE,
+]
+
 # Metadata value types
 class MetadataValueType:
     STRING = "string"

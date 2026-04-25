@@ -4,7 +4,7 @@ import os
 import logging
 import asyncio
 import pathlib
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from contextlib import asynccontextmanager
 import uuid
@@ -39,7 +39,7 @@ from src.core.models.vector import VectorData
 from src.core.common import (
     VectorType, get_real_collection_name, get_user_collection_name,
     APP_NAME, MAX_BULK_UPLOAD, MAX_COLLECTION_NAME_LENGTH,
-    RPC_TIMEOUT_SECONDS,APP_PREFIX
+    RPC_TIMEOUT_SECONDS,APP_PREFIX, QueueOperationType
 )
 from src.core.database.common import (
     get_connected_database,
@@ -662,10 +662,22 @@ async def empty_collection(collection_name: CollectionName) -> OkResponse:
     return OkResponse(ok=ok)
 
 
-async def upload_documents_to_queue(collection_name: str, collection_id: str, documents: List[Document]):
+async def upload_documents_to_queue(
+    collection_name: str,
+    collection_id: str,
+    documents: List[Document],
+    op_type: str,
+    request_timestamp: Optional[datetime] = None,
+):
     """Upload documents to the processing queue and publish events for encoder."""
     # Add documents to the processing queue
-    queue_ids = await _database.add_to_queue(collection_name, collection_id, documents)
+    queue_ids = await _database.add_to_queue(
+        collection_name,
+        collection_id,
+        documents,
+        op_type,
+        request_timestamp,
+    )
     
     try:
         if len(documents) > 1:
@@ -725,7 +737,12 @@ async def upsert_document(collection_name: CollectionName, document: Document = 
     real_collection_name = get_real_collection_name(collection_name)
     collection_config = await _database.get_collection_info_internal(real_collection_name)
     validate_metadata_types(collection_config, document)
-    await upload_documents_to_queue(real_collection_name, collection_config.collection_id, [document])
+    await upload_documents_to_queue(
+        real_collection_name,
+        collection_config.collection_id,
+        [document],
+        QueueOperationType.UPSERT,
+    )
     return OkResponse(ok=True)
 
 @shared_router.post("/collections/{collection_name}/documents/sync", operation_id="upsert_document_sync")
@@ -789,7 +806,12 @@ async def upsert_documents_bulk(
     collection_config = await _database.get_collection_info_internal(real_collection_name)
     for document in request.documents:
         validate_metadata_types(collection_config, document)
-    await upload_documents_to_queue(real_collection_name, collection_config.collection_id, request.documents)
+    await upload_documents_to_queue(
+        real_collection_name,
+        collection_config.collection_id,
+        request.documents,
+        QueueOperationType.UPSERT,
+    )
     return OkResponse(ok=True)
 
 
@@ -815,10 +837,14 @@ async def get_document(collection_name: CollectionName, document_id: str = Path(
 
 
 @shared_router.delete("/collections/{collection_name}/documents/{document_id}", operation_id="delete_document")
-async def delete_document(collection_name: CollectionName, document_id: str = Path(...)) -> OkResponse:
-    """Delete a document.
+async def delete_document(
+        collection_name: CollectionName, 
+        document_id: str = Path(...),
+        request_timestamp: datetime = Query(..., description="Caller-supplied delete timestamp (UTC)"),
+    ) -> OkResponse:
+    """Delete a document asynchronously.
 
-    Deletes a specific document by its ID from the specified collection.
+    Queues a document for deletion and returns immediately. The document will be deleted asynchronously.
 
     Args:
         collection_name: The name of the collection.
@@ -827,28 +853,70 @@ async def delete_document(collection_name: CollectionName, document_id: str = Pa
     Returns:
         An `OkResponse` object indicating the success of the operation.
     """
+
+    if request_timestamp.tzinfo is None or request_timestamp.utcoffset() != timedelta(0):
+        raise HTTPException(
+            status_code=422,
+            detail=f"'request_timestamp' must include a UTC timezone (e.g. 2024-01-01T00:00:00Z). Got {request_timestamp}",
+        )
+    request_timestamp = request_timestamp.astimezone(timezone.utc)
+
+    real_collection_name = get_real_collection_name(collection_name)
+    collection_config = await _database.get_collection_info_internal(real_collection_name)
+    document = Document(
+        id=document_id,
+        timestamp=request_timestamp,
+        name="__delete__",
+    )
+
+    await upload_documents_to_queue(
+        real_collection_name,
+        collection_config.collection_id,
+        [document],
+        QueueOperationType.DELETE,
+        request_timestamp,
+    )
+
+    return OkResponse(ok=True)
+
+
+@shared_router.delete("/collections/{collection_name}/documents/{document_id}/sync", operation_id="delete_document_sync")
+async def delete_document_sync(
+    collection_name: CollectionName, 
+    document_id: str = Path(...),
+    request_timestamp: datetime = Query(..., description="Caller-supplied delete timestamp (UTC)")
+    ) -> OkResponse:
+    """Delete a document synchronously.
+
+    Deletes a specific document by its ID from the specified collection and waits for the operation to complete.
+
+    Args:
+        collection_name: The name of the collection.
+        document_id: The unique identifier of the document to delete.
+
+    Returns:
+        An `OkResponse` object indicating the success of the operation.
+    """
+    
+    if request_timestamp.tzinfo is None or request_timestamp.utcoffset() != timedelta(0):
+        raise HTTPException(
+            status_code=422,
+            detail=f"'request_timestamp' must include a UTC timezone (e.g. 2024-01-01T00:00:00Z). Got {request_timestamp}",
+        )
+    request_timestamp = request_timestamp.astimezone(timezone.utc)
+
     real_collection_name = get_real_collection_name(collection_name)
     
-    # Get document before deleting to retrieve token_lengths for stats update
-    doc_with_vectors = (await _database.get_documents(real_collection_name, [document_id], suppress_not_found=True))[0]
-    
-    ok = await _database.delete_document(real_collection_name, document_id)
-    
-    # Send stats update with negative values
-    updates = {}
-    for field_vector_name, token_length in doc_with_vectors.token_lengths.items():
-        updates[field_vector_name] = {
-            "new_doc_count": -1,
-            "new_sum_token_lengths": -token_length,
-            "update_doc_count": 0,
-            "update_sum_token_lengths": 0,
-            "old_sum_token_lengths": 0
-        }
-    
-    if updates:
-        await _bunny_talk.talk("collection-stats", collection_name=real_collection_name, updates=updates)
-    
-    return OkResponse(ok=ok)
+    await _bunny_talk.rpc(
+        "document-delete-sync",
+        collection_name=real_collection_name,
+        start_trace=True,
+        document_id=document_id,
+        request_timestamp=request_timestamp,
+        trace_meta={"collection": real_collection_name, "document_id": document_id}
+    )
+
+    return OkResponse(ok=True)
 
 
 @shared_router.get("/collections/{collection_name}/documents/{document_id}/status", operation_id="get_document_status")

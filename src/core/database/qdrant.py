@@ -16,7 +16,7 @@ from .base import DatabaseBase, AmgixNotFound
 from ..models.cluster import MetricsBucket
 from ..models.document import Document, DocumentWithVectors, SearchResult, QueueDocument, QueueInfo, DocumentStatus, DocumentStatusResponse, VectorScore
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config
-from ..common import APP_PREFIX, VectorType, DatabaseInfo, DatabaseFeatures, SEARCH_PREFETCH_MULTIPLIER, DenseDistance, QueuedDocumentStatus, get_user_collection_name, MetadataValueType
+from ..common import APP_PREFIX, VectorType, DatabaseInfo, DatabaseFeatures, SEARCH_PREFETCH_MULTIPLIER, DenseDistance, QueuedDocumentStatus, QueueOperationType, QueueOperationTypeLiteral, get_user_collection_name, MetadataValueType
 from ..common.lock_manager import LockClient
 
 
@@ -146,6 +146,24 @@ class QdrantDatabase(DatabaseBase):
                 )
             else:
                 self.logger.debug(f"System queue collection already exists")
+
+            # Ensure new queue payload indexes exist for all deployments.
+            queue_info = await self.client.get_collection(collection_name=self.queue_collection)
+            payload_schema = getattr(queue_info, "payload_schema", None) or {}
+
+            if "op_type" not in payload_schema:
+                await self.client.create_payload_index(
+                    collection_name=self.queue_collection,
+                    field_name="op_type",
+                    field_schema=rest.PayloadSchemaType.KEYWORD
+                )
+
+            if "doc_timestamp" not in payload_schema:
+                await self.client.create_payload_index(
+                    collection_name=self.queue_collection,
+                    field_name="doc_timestamp",
+                    field_schema=rest.PayloadSchemaType.DATETIME
+                )
         except Exception as e:
             if "already exists" in str(e).lower():
                 self.logger.info(f"System queue collection already exists")
@@ -845,7 +863,14 @@ class QdrantDatabase(DatabaseBase):
             self.logger.debug(f"is_connected check failed: {str(e)}")
             return False
             
-    async def add_to_queue(self, collection_name: str, collection_id: str, documents: List[Document]) -> List[str]:
+    async def add_to_queue(
+        self,
+        collection_name: str,
+        collection_id: str,
+        documents: List[Document],
+        op_type: QueueOperationTypeLiteral,
+        request_timestamp: Optional[datetime] = None,
+    ) -> List[str]:
         """
         Add documents to the processing queue.
         
@@ -853,6 +878,8 @@ class QdrantDatabase(DatabaseBase):
             collection_name: Name of the collection these documents belong to
             collection_id: Internal collection identifier
             documents: List of documents to add to the queue
+            op_type: Queue operation type (upsert or delete)
+            request_timestamp: Caller-supplied timestamp for delete operations
             
         Returns:
             List[str]: The queue_ids for the queue entries
@@ -860,7 +887,7 @@ class QdrantDatabase(DatabaseBase):
         current_time = datetime.now(timezone.utc)
         points = []
         queue_ids = []
-        
+
         for document in documents:
             queue_id = str(uuid.uuid4())
             queue_ids.append(queue_id)
@@ -870,6 +897,8 @@ class QdrantDatabase(DatabaseBase):
                 collection_name=collection_name,
                 collection_id=collection_id,
                 doc_id=document.id,
+                op_type=op_type,
+                doc_timestamp=request_timestamp if op_type == QueueOperationType.DELETE else document.timestamp,
                 status=QueuedDocumentStatus.QUEUED,
                 document=document,
                 info=None,
@@ -895,12 +924,13 @@ class QdrantDatabase(DatabaseBase):
         
         return queue_ids
     
-    async def get_from_queue(self, queue_ids: List[str]) -> List['QueueDocument']:
+    async def get_from_queue(self, queue_ids: List[str], suppress_not_found: bool = False) -> List['QueueDocument']:
         """
         Retrieve documents from the processing queue.
         
         Args:
             queue_ids: List of unique identifiers for queue entries
+            suppress_not_found: If True, return only found entries instead of raising AmgixNotFound
             
         Returns:
             List[QueueDocument]: List of queue documents with status and metadata
@@ -912,7 +942,7 @@ class QdrantDatabase(DatabaseBase):
         )
         
         # Check if we got the expected number of results
-        if len(result) != len(queue_ids):
+        if len(result) != len(queue_ids) and not suppress_not_found:
             found_ids = {point.id for point in result}
             missing_ids = set(queue_ids) - found_ids
             raise AmgixNotFound(f"Queue documents not found for queue_ids: {', '.join(missing_ids)}")
@@ -960,9 +990,32 @@ class QdrantDatabase(DatabaseBase):
                 ]
             )
         )
-        
 
-    
+    async def delete_upserts_from_queue(self, collection_name: str, doc_id: str, before_timestamp: datetime) -> None:
+        await self.client.delete(
+            collection_name=self.queue_collection,
+            points_selector=rest.Filter(
+                must=[
+                    rest.FieldCondition(
+                        key="collection_name",
+                        match=rest.MatchValue(value=collection_name)
+                    ),
+                    rest.FieldCondition(
+                        key="doc_id",
+                        match=rest.MatchValue(value=doc_id)
+                    ),
+                    rest.FieldCondition(
+                        key="op_type",
+                        match=rest.MatchValue(value=QueueOperationType.UPSERT)
+                    ),
+                    rest.FieldCondition(
+                        key="doc_timestamp",
+                        range=rest.DatetimeRange(lte=before_timestamp)
+                    ),
+                ]
+            )
+        )
+
     async def update_queue_status(self, queue_ids: List[str], status: str, try_count: int, info: str) -> None:
         """
         Update the status of documents in the processing queue.
