@@ -325,24 +325,26 @@ function applyQueueTotalRateToDom(
 function applyCollectionStatsToDom(
   $detail: JQuery<HTMLElement>,
   docCount: number,
-  queueInfo: QueueInfo,
+  breakdown: QueueBreakdown,
   grandTotal: number,
 ): void {
   const $root = $detail.find('[data-collections-doc-stats]')
   if (!$root.length) {
     return
   }
-  const set = (kind: string, n: number) => {
-    $root.find(`tr[data-stat="${kind}"] td[data-stat-value]`).text(formatInt(n))
+  const setSplit = (kind: string, upsert: number, del: number) => {
+    $root.find(`tr[data-stat="${kind}"] td[data-stat-upsert]`).text(formatInt(upsert))
+    $root.find(`tr[data-stat="${kind}"] td[data-stat-delete]`).text(formatInt(del))
     if ((DOC_STATS_PIE_KINDS as readonly string[]).includes(kind)) {
-      $root.find(`tr[data-stat="${kind}"]`).toggleClass('dashboard-collections-doc-stats-stat--inactive', n === 0)
+      $root.find(`tr[data-stat="${kind}"]`).toggleClass('dashboard-collections-doc-stats-stat--inactive', upsert + del === 0)
     }
   }
-  set('indexed', docCount)
-  set('queued', queueInfo.queued)
-  set('requeued', queueInfo.requeued)
-  set('failed', queueInfo.failed)
-  set('total', grandTotal)
+  $root.find(`tr[data-stat="indexed"] td[data-stat-upsert]`).text(formatInt(docCount))
+  $root.find(`tr[data-stat="indexed"]`).toggleClass('dashboard-collections-doc-stats-stat--inactive', docCount === 0)
+  setSplit('queued', breakdown.queuedUpsert, breakdown.queuedDelete)
+  setSplit('requeued', breakdown.requeuedUpsert, breakdown.requeuedDelete)
+  setSplit('failed', breakdown.failedUpsert, breakdown.failedDelete)
+  $root.find(`tr[data-stat="total"] td[data-stat-upsert]`).text(formatInt(grandTotal))
 }
 
 type QueueBreakdown = {
@@ -622,24 +624,7 @@ export class CollectionsPanel extends DashboardPanel {
         await this.selectCollection(api, name, $nav, $detail)
         return
       }
-      applyCollectionStatsToDom(
-        $detail,
-        docCount,
-        {
-          ...queueInfo,
-          queued: queueBreakdown.queuedTotal,
-          requeued: queueBreakdown.requeuedTotal,
-          failed: queueBreakdown.failedTotal,
-        },
-        grandTotal,
-      )
-      const setSplit = (kind: string, upsert: number, del: number) => {
-        $detail.find(`tr[data-stat="${kind}"] td[data-stat-upsert]`).text(formatInt(upsert))
-        $detail.find(`tr[data-stat="${kind}"] td[data-stat-delete]`).text(formatInt(del))
-      }
-      setSplit('queued', queueBreakdown.queuedUpsert, queueBreakdown.queuedDelete)
-      setSplit('requeued', queueBreakdown.requeuedUpsert, queueBreakdown.requeuedDelete)
-      setSplit('failed', queueBreakdown.failedUpsert, queueBreakdown.failedDelete)
+      applyCollectionStatsToDom($detail, docCount, queueBreakdown, grandTotal)
       this.updateQueueTotalRate($detail, queueInfo.total)
       if (this.queuePieChart) {
         this.queuePieChart.data.datasets[0].data = [

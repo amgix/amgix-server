@@ -90,6 +90,13 @@ export interface DeleteCollectionQueueRequest {
 export interface DeleteDocumentRequest {
     collectionName: string;
     documentId: string;
+    requestTimestamp: Date;
+}
+
+export interface DeleteDocumentSyncRequest {
+    collectionName: string;
+    documentId: string;
+    requestTimestamp: Date;
 }
 
 export interface EmptyCollectionRequest {
@@ -371,7 +378,18 @@ export class AmgixApi extends runtime.BaseAPI {
             );
         }
 
+        if (requestParameters['requestTimestamp'] == null) {
+            throw new runtime.RequiredError(
+                'requestTimestamp',
+                'Required parameter "requestTimestamp" was null or undefined when calling deleteDocument().'
+            );
+        }
+
         const queryParameters: any = {};
+
+        if (requestParameters['requestTimestamp'] != null) {
+            queryParameters['request_timestamp'] = (requestParameters['requestTimestamp'] as any).toISOString();
+        }
 
         const headerParameters: runtime.HTTPHeaders = {};
 
@@ -389,7 +407,7 @@ export class AmgixApi extends runtime.BaseAPI {
     }
 
     /**
-     * Delete a document.  Deletes a specific document by its ID from the specified collection.  Args:     collection_name: The name of the collection.     document_id: The unique identifier of the document to delete.  Returns:     An `OkResponse` object indicating the success of the operation.
+     * Delete a document asynchronously.  Queues a document for deletion and returns immediately. The document will be deleted asynchronously.  Args:     collection_name: The name of the collection.     document_id: The unique identifier of the document to delete.  Returns:     An `OkResponse` object indicating the success of the operation.
      * Delete Document
      */
     async deleteDocumentRaw(requestParameters: DeleteDocumentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<OkResponse>> {
@@ -400,11 +418,77 @@ export class AmgixApi extends runtime.BaseAPI {
     }
 
     /**
-     * Delete a document.  Deletes a specific document by its ID from the specified collection.  Args:     collection_name: The name of the collection.     document_id: The unique identifier of the document to delete.  Returns:     An `OkResponse` object indicating the success of the operation.
+     * Delete a document asynchronously.  Queues a document for deletion and returns immediately. The document will be deleted asynchronously.  Args:     collection_name: The name of the collection.     document_id: The unique identifier of the document to delete.  Returns:     An `OkResponse` object indicating the success of the operation.
      * Delete Document
      */
     async deleteDocument(requestParameters: DeleteDocumentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<OkResponse> {
         const response = await this.deleteDocumentRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * Creates request options for deleteDocumentSync without sending the request
+     */
+    async deleteDocumentSyncRequestOpts(requestParameters: DeleteDocumentSyncRequest): Promise<runtime.RequestOpts> {
+        if (requestParameters['collectionName'] == null) {
+            throw new runtime.RequiredError(
+                'collectionName',
+                'Required parameter "collectionName" was null or undefined when calling deleteDocumentSync().'
+            );
+        }
+
+        if (requestParameters['documentId'] == null) {
+            throw new runtime.RequiredError(
+                'documentId',
+                'Required parameter "documentId" was null or undefined when calling deleteDocumentSync().'
+            );
+        }
+
+        if (requestParameters['requestTimestamp'] == null) {
+            throw new runtime.RequiredError(
+                'requestTimestamp',
+                'Required parameter "requestTimestamp" was null or undefined when calling deleteDocumentSync().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['requestTimestamp'] != null) {
+            queryParameters['request_timestamp'] = (requestParameters['requestTimestamp'] as any).toISOString();
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+
+        let urlPath = `/v1/collections/{collection_name}/documents/{document_id}/sync`;
+        urlPath = urlPath.replace(`{${"collection_name"}}`, encodeURIComponent(String(requestParameters['collectionName'])));
+        urlPath = urlPath.replace(`{${"document_id"}}`, encodeURIComponent(String(requestParameters['documentId'])));
+
+        return {
+            path: urlPath,
+            method: 'DELETE',
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     * Delete a document synchronously.  Deletes a specific document by its ID from the specified collection and waits for the operation to complete.  Args:     collection_name: The name of the collection.     document_id: The unique identifier of the document to delete.  Returns:     An `OkResponse` object indicating the success of the operation.
+     * Delete Document Sync
+     */
+    async deleteDocumentSyncRaw(requestParameters: DeleteDocumentSyncRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<OkResponse>> {
+        const requestOptions = await this.deleteDocumentSyncRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) => OkResponseFromJSON(jsonValue));
+    }
+
+    /**
+     * Delete a document synchronously.  Deletes a specific document by its ID from the specified collection and waits for the operation to complete.  Args:     collection_name: The name of the collection.     document_id: The unique identifier of the document to delete.  Returns:     An `OkResponse` object indicating the success of the operation.
+     * Delete Document Sync
+     */
+    async deleteDocumentSync(requestParameters: DeleteDocumentSyncRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<OkResponse> {
+        const response = await this.deleteDocumentSyncRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

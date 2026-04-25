@@ -21,23 +21,41 @@ import { mapValues } from '../runtime';
  */
 export interface QueueInfo {
     /**
-     * Number of documents queued for processing
+     * Number of upsert queue entries queued for processing
      * @type {number}
      * @memberof QueueInfo
      */
-    queued: number;
+    queued_upsert: number;
     /**
-     * Number of documents requeued after failure
+     * Number of delete queue entries queued for processing
      * @type {number}
      * @memberof QueueInfo
      */
-    requeued: number;
+    queued_delete: number;
     /**
-     * Number of failed documents
+     * Number of upsert queue entries requeued after failure
      * @type {number}
      * @memberof QueueInfo
      */
-    failed: number;
+    requeued_upsert: number;
+    /**
+     * Number of delete queue entries requeued after failure
+     * @type {number}
+     * @memberof QueueInfo
+     */
+    requeued_delete: number;
+    /**
+     * Number of failed upsert queue entries
+     * @type {number}
+     * @memberof QueueInfo
+     */
+    failed_upsert: number;
+    /**
+     * Number of failed delete queue entries
+     * @type {number}
+     * @memberof QueueInfo
+     */
+    failed_delete: number;
     /**
      * Total number of queue entries
      * @type {number}
@@ -50,9 +68,12 @@ export interface QueueInfo {
  * Check if a given object implements the QueueInfo interface.
  */
 export function instanceOfQueueInfo(value: object): value is QueueInfo {
-    if (!('queued' in value) || value['queued'] === undefined) return false;
-    if (!('requeued' in value) || value['requeued'] === undefined) return false;
-    if (!('failed' in value) || value['failed'] === undefined) return false;
+    if (!('queued_upsert' in value) || value['queued_upsert'] === undefined) return false;
+    if (!('queued_delete' in value) || value['queued_delete'] === undefined) return false;
+    if (!('requeued_upsert' in value) || value['requeued_upsert'] === undefined) return false;
+    if (!('requeued_delete' in value) || value['requeued_delete'] === undefined) return false;
+    if (!('failed_upsert' in value) || value['failed_upsert'] === undefined) return false;
+    if (!('failed_delete' in value) || value['failed_delete'] === undefined) return false;
     if (!('total' in value) || value['total'] === undefined) return false;
     return true;
 }
@@ -67,9 +88,12 @@ export function QueueInfoFromJSONTyped(json: any, ignoreDiscriminator: boolean):
     }
     return {
         
-        'queued': json['queued'],
-        'requeued': json['requeued'],
-        'failed': json['failed'],
+        'queued_upsert': json['queued_upsert'],
+        'queued_delete': json['queued_delete'],
+        'requeued_upsert': json['requeued_upsert'],
+        'requeued_delete': json['requeued_delete'],
+        'failed_upsert': json['failed_upsert'],
+        'failed_delete': json['failed_delete'],
         'total': json['total'],
     };
 }
@@ -85,9 +109,12 @@ export function QueueInfoToJSONTyped(value?: QueueInfo | null, ignoreDiscriminat
 
     return {
         
-        'queued': value['queued'],
-        'requeued': value['requeued'],
-        'failed': value['failed'],
+        'queued_upsert': value['queued_upsert'],
+        'queued_delete': value['queued_delete'],
+        'requeued_upsert': value['requeued_upsert'],
+        'requeued_delete': value['requeued_delete'],
+        'failed_upsert': value['failed_upsert'],
+        'failed_delete': value['failed_delete'],
         'total': value['total'],
     };
 }

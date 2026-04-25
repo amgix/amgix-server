@@ -26,6 +26,12 @@ export interface DocumentStatus {
      */
     status: DocumentStatusStatusEnum;
     /**
+     * Queue operation type (upsert or delete) for queue-related statuses
+     * @type {DocumentStatusOpTypeEnum}
+     * @memberof DocumentStatus
+     */
+    op_type?: DocumentStatusOpTypeEnum;
+    /**
      * Status information
      * @type {string}
      * @memberof DocumentStatus
@@ -63,6 +69,15 @@ export const DocumentStatusStatusEnum = {
 } as const;
 export type DocumentStatusStatusEnum = typeof DocumentStatusStatusEnum[keyof typeof DocumentStatusStatusEnum];
 
+/**
+ * @export
+ */
+export const DocumentStatusOpTypeEnum = {
+    Upsert: 'upsert',
+    Delete: 'delete'
+} as const;
+export type DocumentStatusOpTypeEnum = typeof DocumentStatusOpTypeEnum[keyof typeof DocumentStatusOpTypeEnum];
+
 
 /**
  * Check if a given object implements the DocumentStatus interface.
@@ -84,6 +99,7 @@ export function DocumentStatusFromJSONTyped(json: any, ignoreDiscriminator: bool
     return {
         
         'status': json['status'],
+        'op_type': json['op_type'] == null ? undefined : json['op_type'],
         'info': json['info'] == null ? undefined : json['info'],
         'timestamp': (new Date(json['timestamp'])),
         'queue_id': json['queue_id'] == null ? undefined : json['queue_id'],
@@ -103,6 +119,7 @@ export function DocumentStatusToJSONTyped(value?: DocumentStatus | null, ignoreD
     return {
         
         'status': value['status'],
+        'op_type': value['op_type'],
         'info': value['info'],
         'timestamp': value['timestamp'].toISOString(),
         'queue_id': value['queue_id'],
