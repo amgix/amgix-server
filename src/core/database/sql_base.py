@@ -199,6 +199,7 @@ class SQLBase(DatabaseBase):
         "version_query": "SELECT VERSION() AS version",
         "table_exists_query": "SELECT COUNT(*) AS relation_exists FROM information_schema.tables WHERE table_name = %s",
         "index_exists_query": "SELECT COUNT(*) AS relation_exists FROM information_schema.statistics WHERE index_name = %s",
+        "column_exists_query": "SELECT COUNT(*) AS relation_exists FROM information_schema.columns WHERE table_name = %s AND column_name = %s",
 
         "vector_test_create": f"CREATE TEMPORARY TABLE {APP_PREFIX}_test_vector_idx (v VECTOR(1), VECTOR INDEX(v) USING HNSW WITH (M=8))",
         "vector_test_drop": f"DROP TEMPORARY TABLE {APP_PREFIX}_test_vector_idx",
@@ -321,6 +322,16 @@ class SQLBase(DatabaseBase):
         async def _index_exists(index_name: str) -> bool:
             return await _relation_exists("index_exists_query", index_name)
 
+        async def _column_exists(table_name: str, column_name: str) -> bool:
+            result = await self.execute_sql(
+                self.format_sql("column_exists_query"),
+                (table_name, column_name),
+            )
+            exists = result[0].get("relation_exists", 0) if result else 0
+            if isinstance(exists, str):
+                return exists.lower() not in ("", "0", "false", "f", "no")
+            return bool(exists)
+
         # Create the system meta table if it doesn't exist
         try:
             columns = [
@@ -399,8 +410,16 @@ class SQLBase(DatabaseBase):
             )
 
             if await _table_exists(self.queue_collection):
-                self.logger.info(f"System queue table already exists")
-            else:
+                if not await _column_exists(self.queue_collection, "op_type") or not await _column_exists(
+                    self.queue_collection, "doc_timestamp"
+                ):
+                    self.logger.warning("System queue table schema is outdated; recreating")
+                    await self.execute_sql_no_result(
+                        self.format_sql("drop_table", tables=self.quote_identifier(self.queue_collection))
+                    )
+                else:
+                    self.logger.info("System queue table already exists")
+            if not await _table_exists(self.queue_collection):
                 await self.execute_sql_no_result(query_ddl)
                 self.logger.info(f"Created system queue table")
 
