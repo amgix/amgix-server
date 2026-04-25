@@ -1114,34 +1114,43 @@ class QdrantDatabase(DatabaseBase):
             QueueInfo: Counts of documents in each queue state
         """
         counts = {}
-        
+
         # Only query for statuses that exist in the queue (INDEXED documents are removed from queue)
         queue_statuses = [s for s in QueuedDocumentStatus.all() if s != QueuedDocumentStatus.INDEXED]
-        
+        queue_ops = [QueueOperationType.UPSERT, QueueOperationType.DELETE]
+
         for status in queue_statuses:
-            result = await self.client.count(
-                collection_name=self.queue_collection,
-                count_filter=rest.Filter(
-                    must=[
-                        rest.FieldCondition(
-                            key="collection_name",
-                            match=rest.MatchValue(value=collection_name)
-                        ),
-                        rest.FieldCondition(
-                            key="status",
-                            match=rest.MatchValue(value=status)
-                        )
-                    ]
+            for op_type in queue_ops:
+                result = await self.client.count(
+                    collection_name=self.queue_collection,
+                    count_filter=rest.Filter(
+                        must=[
+                            rest.FieldCondition(
+                                key="collection_name",
+                                match=rest.MatchValue(value=collection_name)
+                            ),
+                            rest.FieldCondition(
+                                key="status",
+                                match=rest.MatchValue(value=status)
+                            ),
+                            rest.FieldCondition(
+                                key="op_type",
+                                match=rest.MatchValue(value=op_type)
+                            ),
+                        ]
+                    )
                 )
-            )
-            counts[status] = result.count
-        
+                counts[(status, op_type)] = result.count
+
         total = sum(counts.values())
-        
+
         return QueueInfo(
-            queued=counts[QueuedDocumentStatus.QUEUED],
-            requeued=counts[QueuedDocumentStatus.REQUEUED],
-            failed=counts[QueuedDocumentStatus.FAILED],
+            queued_upsert=counts[(QueuedDocumentStatus.QUEUED, QueueOperationType.UPSERT)],
+            queued_delete=counts[(QueuedDocumentStatus.QUEUED, QueueOperationType.DELETE)],
+            requeued_upsert=counts[(QueuedDocumentStatus.REQUEUED, QueueOperationType.UPSERT)],
+            requeued_delete=counts[(QueuedDocumentStatus.REQUEUED, QueueOperationType.DELETE)],
+            failed_upsert=counts[(QueuedDocumentStatus.FAILED, QueueOperationType.UPSERT)],
+            failed_delete=counts[(QueuedDocumentStatus.FAILED, QueueOperationType.DELETE)],
             total=total
         )
     

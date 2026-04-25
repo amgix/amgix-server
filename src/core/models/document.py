@@ -297,9 +297,12 @@ class QueueInfo(BaseModel):
     Queue statistics for a collection.
     Provides counts of documents in different queue states.
     """
-    queued: int = Field(..., description="Number of documents queued for processing")
-    requeued: int = Field(..., description="Number of documents requeued after failure")
-    failed: int = Field(..., description="Number of failed documents")
+    queued_upsert: int = Field(..., description="Number of upsert queue entries queued for processing")
+    queued_delete: int = Field(..., description="Number of delete queue entries queued for processing")
+    requeued_upsert: int = Field(..., description="Number of upsert queue entries requeued after failure")
+    requeued_delete: int = Field(..., description="Number of delete queue entries requeued after failure")
+    failed_upsert: int = Field(..., description="Number of failed upsert queue entries")
+    failed_delete: int = Field(..., description="Number of failed delete queue entries")
     total: int = Field(..., description="Total number of queue entries")
 
 

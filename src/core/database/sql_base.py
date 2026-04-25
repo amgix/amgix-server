@@ -2232,35 +2232,40 @@ class SQLBase(DatabaseBase):
         Returns:
             QueueInfo: Counts of documents in each queue state
         """
-        # Query for counts grouped by status
+        # Query for counts grouped by status and operation type
         result = await self.execute_sql(
             self.format_sql("select",
                 table=self.queue_collection,
-                columns=f"{self.quote_identifier('status')}, COUNT(*) as count",
+                columns=f"{self.quote_identifier('status')}, {self.quote_identifier('op_type')}, COUNT(*) as count",
                 where=f" WHERE {self.quote_identifier('collection_name')}=%s",
-                group_by=f" GROUP BY {self.quote_identifier('status')}",
+                group_by=f" GROUP BY {self.quote_identifier('status')}, {self.quote_identifier('op_type')}",
                 order_by="",
                 joins=""
             ),
             (collection_name,)
         )
         
-        # Initialize counts for all queue statuses (excluding INDEXED)
+        # Initialize counts for all queue statuses (excluding INDEXED) and operation types
         queue_statuses = [s for s in QueuedDocumentStatus.all() if s != QueuedDocumentStatus.INDEXED]
-        counts = {status: 0 for status in queue_statuses}
+        queue_ops = [QueueOperationType.UPSERT, QueueOperationType.DELETE]
+        counts = {(status, op_type): 0 for status in queue_statuses for op_type in queue_ops}
         
         # Update counts from query results
         for row in result:
             status = row["status"]
-            if status in counts:
-                counts[status] = row["count"]
+            op_type = row["op_type"]
+            if (status, op_type) in counts:
+                counts[(status, op_type)] = row["count"]
         
         total = sum(counts.values())
         
         return QueueInfo(
-            queued=counts[QueuedDocumentStatus.QUEUED],
-            requeued=counts[QueuedDocumentStatus.REQUEUED],
-            failed=counts[QueuedDocumentStatus.FAILED],
+            queued_upsert=counts[(QueuedDocumentStatus.QUEUED, QueueOperationType.UPSERT)],
+            queued_delete=counts[(QueuedDocumentStatus.QUEUED, QueueOperationType.DELETE)],
+            requeued_upsert=counts[(QueuedDocumentStatus.REQUEUED, QueueOperationType.UPSERT)],
+            requeued_delete=counts[(QueuedDocumentStatus.REQUEUED, QueueOperationType.DELETE)],
+            failed_upsert=counts[(QueuedDocumentStatus.FAILED, QueueOperationType.UPSERT)],
+            failed_delete=counts[(QueuedDocumentStatus.FAILED, QueueOperationType.DELETE)],
             total=total
         )
     
