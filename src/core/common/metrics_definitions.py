@@ -15,6 +15,10 @@ class MetricKey(StrEnum):
     API_BULK_UPLOAD_MS = "api_bulk_upload_ms"
     API_SEARCH = "api_search"
     API_SEARCH_MS = "api_search_ms"
+    API_ASYNC_DELETE = "api_async_delete"
+    API_ASYNC_DELETE_MS = "api_async_delete_ms"
+    API_SYNC_DELETE = "api_sync_delete"
+    API_SYNC_DELETE_MS = "api_sync_delete_ms"
     API_ERROR_4XX = "api_error_4xx"
     API_ERROR_5XX = "api_error_5xx"
     EMBED_BATCHES_ORIGIN = "embed_batches_origin"
@@ -84,6 +88,22 @@ METRIC_DEFINITIONS: dict[MetricKey, MetricDefinition] = {
     MetricKey.API_SEARCH_MS: MetricDefinition(
         unit="ms",
         description="Sum of request durations in milliseconds for search on the API process.",
+    ),
+    MetricKey.API_ASYNC_DELETE: MetricDefinition(
+        unit="req",
+        description="Async single-document delete requests handled by the API process.",
+    ),
+    MetricKey.API_ASYNC_DELETE_MS: MetricDefinition(
+        unit="ms",
+        description="Sum of request durations in milliseconds for async single-document deletes on the API process.",
+    ),
+    MetricKey.API_SYNC_DELETE: MetricDefinition(
+        unit="req",
+        description="Sync single-document delete requests handled by the API process.",
+    ),
+    MetricKey.API_SYNC_DELETE_MS: MetricDefinition(
+        unit="ms",
+        description="Sum of request durations in milliseconds for sync single-document deletes on the API process.",
     ),
     MetricKey.API_ERROR_4XX: MetricDefinition(
         unit="err",

@@ -42,6 +42,8 @@ _CLASSIFIED_OPERATIONS: dict[str, tuple[MetricKey, MetricKey]] = {
     "upsert_document_sync":  (MetricKey.API_SYNC_UPLOAD,  MetricKey.API_SYNC_UPLOAD_MS),
     "upsert_documents_bulk": (MetricKey.API_BULK_UPLOAD,  MetricKey.API_BULK_UPLOAD_MS),
     "search":                (MetricKey.API_SEARCH,        MetricKey.API_SEARCH_MS),
+    "delete_document":       (MetricKey.API_ASYNC_DELETE, MetricKey.API_ASYNC_DELETE_MS),
+    "delete_document_sync":  (MetricKey.API_SYNC_DELETE,  MetricKey.API_SYNC_DELETE_MS),
 }
 
 
