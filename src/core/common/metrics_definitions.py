@@ -32,6 +32,8 @@ class MetricKey(StrEnum):
     INDEX_QUEUE_DOCS_SKIPPED_STALE = "index_queue_docs_skipped_stale"
     INDEX_QUEUE_DOCS_NEW = "index_queue_docs_new"
     INDEX_QUEUE_DOCS_UPDATED = "index_queue_docs_updated"
+    INDEX_QUEUE_DOCS_DELETED = "index_queue_docs_deleted"
+    INDEX_QUEUE_DELETE_JOB_MS = "index_queue_delete_job_ms"
     INDEX_QUEUE_FAILED = "index_queue_failed"
     INDEX_QUEUE_REQUEUED = "index_queue_requeued"
     INDEX_QUEUE_JOB_MS = "index_queue_job_ms"
@@ -156,6 +158,14 @@ METRIC_DEFINITIONS: dict[MetricKey, MetricDefinition] = {
     MetricKey.INDEX_QUEUE_DOCS_UPDATED: MetricDefinition(
         unit="doc",
         description="Existing documents updated from the single-document queue.",
+    ),
+    MetricKey.INDEX_QUEUE_DOCS_DELETED: MetricDefinition(
+        unit="doc",
+        description="Documents deleted by the single-document delete handler.",
+    ),
+    MetricKey.INDEX_QUEUE_DELETE_JOB_MS: MetricDefinition(
+        unit="ms",
+        description="Sum of handler durations in milliseconds for single-document deletes.",
     ),
     MetricKey.INDEX_QUEUE_FAILED: MetricDefinition(
         unit="job",

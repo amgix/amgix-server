@@ -126,10 +126,10 @@ const HOME_INDEXING_TABLE_EXTRA_KEYS = [
   'index_queue_docs_skipped_stale',
   'index_queue_docs_new',
   'index_queue_docs_updated',
+  'index_queue_docs_deleted',
   'index_queue_failed',
   'index_queue_requeued',
   'index_bulk_batches',
-  'index_bulk_batch_size',
   'index_bulk_failed',
   'index_bulk_requeued',
 ] as const
@@ -310,6 +310,11 @@ function clusterIndexingDocsPerSecHelpText(): string {
   return `New and updated documents indexed per second (single-doc path and bulk batches), over the last ${w}s.`
 }
 
+function clusterIndexingDelPerSecHelpText(): string {
+  const w = CLUSTER_METRICS_WINDOW_SEC
+  return `Documents deleted per second over the last ${w}s.`
+}
+
 function clusterIndexingStalePerSecHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
   return `Documents per second skipped because they were older than what is already indexed, over the last ${w}s.`
@@ -333,11 +338,6 @@ function clusterIndexingQueueJobMsHelpText(): string {
 function clusterIndexingBulkBatchesHelpText(): string {
   const w = CLUSTER_METRICS_WINDOW_SEC
   return `Bulk indexing batches completed per second, over the last ${w}s.`
-}
-
-function clusterIndexingBulkBatchSizeHelpText(): string {
-  const w = CLUSTER_METRICS_WINDOW_SEC
-  return `Mean documents per completed bulk batch, over the last ${w}s.`
 }
 
 function clusterIndexingBulkJobMsHelpText(): string {
@@ -1049,47 +1049,47 @@ function formatIndexingSingleSumRateCell(list: NodeMetricSeries[], key: string):
 
 function formatIndexingMetricsCells(node: NodeView): {
   docsPerSec: string
+  delPerSec: string
   stalePerSec: string
   queueFailPerSec: string
   queueRequeuePerSec: string
   queueJobMs: string
   bulkBatchesPerSec: string
-  bulkBatchSize: string
   bulkJobMs: string
   bulkFailPerSec: string
   bulkRequeuePerSec: string
 } {
   const list = node.metrics ?? []
   const docsPerSec = formatIndexingSumRateCell(list, CLUSTER_INDEXING_DOCS_COUNTER_KEYS)
+  const delPerSec = formatIndexingSingleSumRateCell(list, 'index_queue_docs_deleted')
   const stalePerSec = formatIndexingSingleSumRateCell(list, 'index_queue_docs_skipped_stale')
   const queueFailPerSec = formatIndexingSingleSumRateCell(list, 'index_queue_failed')
   const queueRequeuePerSec = formatIndexingSingleSumRateCell(list, 'index_queue_requeued')
   const queueJobMs = formatApiAvgMsCell(list, 'index_queue_job_ms')
   const bulkBatchesPerSec = formatIndexingSingleSumRateCell(list, 'index_bulk_batches')
-  const bulkBatchSize = formatApiAvgMsCell(list, 'index_bulk_batch_size')
   const bulkJobMs = formatApiAvgMsCell(list, 'index_bulk_job_ms')
   const bulkFailPerSec = formatIndexingSingleSumRateCell(list, 'index_bulk_failed')
   const bulkRequeuePerSec = formatIndexingSingleSumRateCell(list, 'index_bulk_requeued')
   const empty =
     docsPerSec === '' &&
+    delPerSec === '' &&
     stalePerSec === '' &&
     queueFailPerSec === '' &&
     queueRequeuePerSec === '' &&
     queueJobMs === '' &&
     bulkBatchesPerSec === '' &&
-    bulkBatchSize === '' &&
     bulkJobMs === '' &&
     bulkFailPerSec === '' &&
     bulkRequeuePerSec === ''
   if (empty) {
     return {
       docsPerSec: '',
+      delPerSec: '',
       stalePerSec: '',
       queueFailPerSec: '',
       queueRequeuePerSec: '',
       queueJobMs: '',
       bulkBatchesPerSec: '',
-      bulkBatchSize: '',
       bulkJobMs: '',
       bulkFailPerSec: '',
       bulkRequeuePerSec: '',
@@ -1097,12 +1097,12 @@ function formatIndexingMetricsCells(node: NodeView): {
   }
   return {
     docsPerSec,
+    delPerSec,
     stalePerSec,
     queueFailPerSec,
     queueRequeuePerSec,
     queueJobMs,
     bulkBatchesPerSec,
-    bulkBatchSize,
     bulkJobMs,
     bulkFailPerSec,
     bulkRequeuePerSec,
@@ -3549,14 +3549,14 @@ export class HomePanel extends DashboardPanel {
               $nodeTd,
               $('<td>', { class: 'dashboard-home-v', text: apiM.allReq }),
               $('<td>', { class: 'dashboard-home-v', text: apiM.allMs }),
+              $('<td>', { class: 'dashboard-home-v', text: apiM.searchReq }),
+              $('<td>', { class: 'dashboard-home-v', text: apiM.searchMs }),
               $('<td>', { class: 'dashboard-home-v', text: apiM.asyncReq }),
               $('<td>', { class: 'dashboard-home-v', text: apiM.asyncMs }),
               $('<td>', { class: 'dashboard-home-v', text: apiM.syncReq }),
               $('<td>', { class: 'dashboard-home-v', text: apiM.syncMs }),
               $('<td>', { class: 'dashboard-home-v', text: apiM.bulkReq }),
               $('<td>', { class: 'dashboard-home-v', text: apiM.bulkMs }),
-              $('<td>', { class: 'dashboard-home-v', text: apiM.searchReq }),
-              $('<td>', { class: 'dashboard-home-v', text: apiM.searchMs }),
               $('<td>', { class: 'dashboard-home-v', text: apiM.errPerSec }),
             ),
           )
@@ -3637,12 +3637,12 @@ export class HomePanel extends DashboardPanel {
               $('<td>', { class: 'dashboard-home-v', text: formatEncoderRoleCell(node.role) }),
               $nodeTd,
               $('<td>', { class: 'dashboard-home-v', text: m.docsPerSec }),
+              $('<td>', { class: 'dashboard-home-v', text: m.delPerSec }),
               $('<td>', { class: 'dashboard-home-v', text: m.stalePerSec }),
               $('<td>', { class: 'dashboard-home-v', text: m.queueFailPerSec }),
               $('<td>', { class: 'dashboard-home-v', text: m.queueRequeuePerSec }),
               $('<td>', { class: 'dashboard-home-v', text: m.queueJobMs }),
               $('<td>', { class: 'dashboard-home-v', text: m.bulkBatchesPerSec }),
-              $('<td>', { class: 'dashboard-home-v', text: m.bulkBatchSize }),
               $('<td>', { class: 'dashboard-home-v', text: m.bulkJobMs }),
               $('<td>', { class: 'dashboard-home-v', text: m.bulkFailPerSec }),
               $('<td>', { class: 'dashboard-home-v', text: m.bulkRequeuePerSec }),
@@ -4003,14 +4003,14 @@ export class HomePanel extends DashboardPanel {
             $('<th>', { text: 'Node' }),
             clusterThWithHelp('Reqs/s', clusterApiAllReqColumnHelpText()),
             clusterThWithHelp('ms/req', clusterApiAllMsColumnHelpText()),
+            clusterThWithHelp('Srch/s', clusterApiSearchReqColumnHelpText()),
+            clusterThWithHelp('ms/Srch', clusterApiSearchMsColumnHelpText()),
             clusterThWithHelp('Async/s', clusterApiAsyncReqColumnHelpText()),
             clusterThWithHelp('ms/Async', clusterApiAsyncMsColumnHelpText()),
             clusterThWithHelp('Sync/s', clusterApiSyncReqColumnHelpText()),
             clusterThWithHelp('ms/Sync', clusterApiSyncMsColumnHelpText()),
             clusterThWithHelp('Bulk/s', clusterApiBulkReqColumnHelpText()),
             clusterThWithHelp('ms/Bulk', clusterApiBulkMsColumnHelpText()),
-            clusterThWithHelp('Srch/s', clusterApiSearchReqColumnHelpText()),
-            clusterThWithHelp('ms/Srch', clusterApiSearchMsColumnHelpText()),
             clusterThWithHelp('Err/s', clusterApiErrPerSecColumnHelpText()),
           ),
         )
@@ -4268,12 +4268,12 @@ export class HomePanel extends DashboardPanel {
             $('<th>', { text: 'Role' }),
             $('<th>', { text: 'Node' }),
             clusterThWithHelp('Docs/s', clusterIndexingDocsPerSecHelpText()),
+            clusterThWithHelp('Del/s', clusterIndexingDelPerSecHelpText()),
             clusterThWithHelp('Stale/s', clusterIndexingStalePerSecHelpText()),
             clusterThWithHelp('Doc fail/s', clusterIndexingQueueFailHelpText()),
             clusterThWithHelp('Doc rq/s', clusterIndexingQueueRequeueHelpText()),
             clusterThWithHelp('Doc ms', clusterIndexingQueueJobMsHelpText()),
             clusterThWithHelp('Bulk/s', clusterIndexingBulkBatchesHelpText()),
-            clusterThWithHelp('Bulk sz', clusterIndexingBulkBatchSizeHelpText()),
             clusterThWithHelp('Bulk ms', clusterIndexingBulkJobMsHelpText()),
             clusterThWithHelp('Bulk fail/s', clusterIndexingBulkFailHelpText()),
             clusterThWithHelp('Bulk rq/s', clusterIndexingBulkRequeueHelpText()),

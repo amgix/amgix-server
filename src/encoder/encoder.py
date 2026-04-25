@@ -532,35 +532,39 @@ class EncoderService(EncoderBase):
         """Delete a document synchronously."""
 
         self.bunny_talk.log_trace_context(f"RpcService: document_id {document_id}")
+        t0 = time.perf_counter_ns()
+        try:
+            # Use distributed locking to prevent race conditions in multi-encoder setup
+            lock_name = f"doc-{self.database._string_to_uuid(f"{collection_name}-{document_id}")}"
+            async with self.lock_client.acquire(lock_name, timeout=RPC_TIMEOUT_SECONDS):
 
-        # Use distributed locking to prevent race conditions in multi-encoder setup
-        lock_name = f"doc-{self.database._string_to_uuid(f"{collection_name}-{document_id}")}"
-        async with self.lock_client.acquire(lock_name, timeout=RPC_TIMEOUT_SECONDS):
+                # Get document before deleting to retrieve token_lengths for stats update
+                docs = await self.database.get_documents(collection_name, [document_id], suppress_not_found=True)
+                doc_with_vectors = docs[0] if docs else None
 
-            # Get document before deleting to retrieve token_lengths for stats update
-            docs = await self.database.get_documents(collection_name, [document_id], suppress_not_found=True)
-            doc_with_vectors = docs[0] if docs else None
+                if doc_with_vectors is None:
+                    self.logger.warning(f"Document {document_id} not found in {collection_name}, skipping delete")
+                    return
 
-            if doc_with_vectors is None:
-                self.logger.warning(f"Document {document_id} not found in {collection_name}, skipping delete")
-                return
+                await self.database.delete_document(collection_name, document_id)
+                await self.database.delete_upserts_from_queue(collection_name, document_id, request_timestamp)
+                self.index_metrics.record(MetricKey.INDEX_QUEUE_DOCS_DELETED)
 
-            await self.database.delete_document(collection_name, document_id)
-            await self.database.delete_upserts_from_queue(collection_name, document_id, request_timestamp)
+                # Send stats update with negative values
+                updates = {}
+                for field_vector_name, token_length in doc_with_vectors.token_lengths.items():
+                    updates[field_vector_name] = {
+                        "new_doc_count": -1,
+                        "new_sum_token_lengths": -token_length,
+                        "update_doc_count": 0,
+                        "update_sum_token_lengths": 0,
+                        "old_sum_token_lengths": 0
+                    }
 
-            # Send stats update with negative values
-            updates = {}
-            for field_vector_name, token_length in doc_with_vectors.token_lengths.items():
-                updates[field_vector_name] = {
-                    "new_doc_count": -1,
-                    "new_sum_token_lengths": -token_length,
-                    "update_doc_count": 0,
-                    "update_sum_token_lengths": 0,
-                    "old_sum_token_lengths": 0
-                }
-
-            if updates:
-                await self.bunny_talk.talk("collection-stats", collection_name=collection_name, updates=updates)
+                if updates:
+                    await self.bunny_talk.talk("collection-stats", collection_name=collection_name, updates=updates)
+        finally:
+            self.index_metrics.record(MetricKey.INDEX_QUEUE_DELETE_JOB_MS, (time.perf_counter_ns() - t0) / 1_000_000.0, n=1)
 
 
 class RpcService(EncoderBase):
