@@ -1082,7 +1082,7 @@ class QdrantDatabase(DatabaseBase):
         queue_entries = []
         for point in result[0]:
             payload = point.payload
-            
+
             # Create QueueDocument with only the fields we actually use
             # Avoid loading the full document object into memory
             queue_doc = QueueDocument(
@@ -1090,6 +1090,8 @@ class QdrantDatabase(DatabaseBase):
                 collection_name=collection_name,  # We know this from the method parameter
                 collection_id=payload.get("collection_id"),
                 doc_id=payload.get("doc_id"),
+                op_type=payload.get("op_type"),
+                doc_timestamp=payload.get("doc_timestamp"),
                 status=payload.get("status"),
                 info=payload.get("info"),
                 document=None,                   # Not used upstream, set to None

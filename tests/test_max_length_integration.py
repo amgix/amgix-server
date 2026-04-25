@@ -354,7 +354,10 @@ def test_max_length_integration(backend_capabilities):
         # Test 9: Delete document
         print("\n9️⃣ Deleting document...")
         try:
-            response = requests.delete(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc2_id}")
+            response = requests.delete(
+                f"{API_BASE_URL}/collections/{collection_name}/documents/{doc2_id}/sync",
+                params={"request_timestamp": datetime.now(timezone.utc).isoformat()},
+            )
             assert response.status_code == 200, f"Failed to delete document: {response.text}"
             print("✅ Document deletion successful")
         except Exception as e:

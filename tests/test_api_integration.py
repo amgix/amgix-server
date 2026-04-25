@@ -923,7 +923,10 @@ def test_document_deletion(setup_collection):
     wait_for_document(collection_name, "doc1")
     
     # Now delete the document
-    response = requests.delete(f"{API_BASE_URL}/collections/{collection_name}/documents/doc1")
+    response = requests.delete(
+        f"{API_BASE_URL}/collections/{collection_name}/documents/doc1/sync",
+        params={"request_timestamp": datetime.now(timezone.utc).isoformat()},
+    )
     assert response.status_code == 200
     assert response.json()["ok"] is True
     
@@ -963,6 +966,43 @@ def test_empty_search_query(setup_collection):
     
     response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query)
     assert response.status_code == 422  # Empty query should be rejected
+
+
+@pytest.mark.all_backends
+def test_document_async_deletion(setup_collection):
+    """Test document deletion via async endpoint."""
+    collection_name = setup_collection
+
+    doc_id = "doc_async_delete"
+    doc = create_test_document(
+        doc_id,
+        "Async Delete Document",
+        "This document is used to test async delete behavior."
+    )
+
+    # Upsert document
+    response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents", json=doc)
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+
+    # Wait for document to be ready
+    wait_for_document(collection_name, doc_id)
+
+    # Delete asynchronously
+    response = requests.delete(
+        f"{API_BASE_URL}/collections/{collection_name}/documents/{doc_id}",
+        params={"request_timestamp": datetime.now(timezone.utc).isoformat()},
+    )
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+
+    # Wait for async delete to complete
+    deleted = wait_until(
+        lambda: requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc_id}").status_code == 404,
+        timeout_s=60.0,
+        interval_s=0.25,
+    )
+    assert deleted, f"Timed out waiting for document {doc_id} to be deleted"
 
 
 @pytest.mark.all_backends
