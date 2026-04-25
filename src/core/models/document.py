@@ -398,6 +398,7 @@ class DocumentStatus(BaseModel):
     Individual status entry for a document.
     """
     status: QueuedDocumentStatusLiteral = Field(..., description="Status of the document (queued, requeued, indexed, failed)")
+    op_type: Optional[QueueOperationTypeLiteral] = Field(None, description="Queue operation type (upsert or delete) for queue-related statuses")
     info: Optional[str] = Field(None, description="Status information")
     timestamp: datetime = Field(..., description="When this status occurred")
     queue_id: Optional[str] = Field(None, description="Queue entry ID (only for queue-related statuses)")

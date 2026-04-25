@@ -1171,6 +1171,7 @@ class QdrantDatabase(DatabaseBase):
         for entry in queue_entries:
             statuses.append(DocumentStatus(
                 status=entry.status,
+                op_type=entry.op_type,
                 info=entry.info,
                 timestamp=entry.timestamp,
                 queue_id=entry.queue_id,
