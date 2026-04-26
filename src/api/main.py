@@ -693,7 +693,6 @@ async def upload_documents_to_queue(
                 },
             )
         else:
-            logger.info(f"Uploading single document {documents[0].id} to queue {queue_ids[0]}")
             # Single document - pass single queue_id
             await _bunny_talk.talk(
                 "documents",
