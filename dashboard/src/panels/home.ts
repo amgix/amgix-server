@@ -137,6 +137,8 @@ const HOME_INDEXING_TABLE_EXTRA_KEYS = [
 const HOME_CLUSTER_INFO_API_KEYS = [
   'api_requests',
   'api_request_ms',
+  'api_search',
+  'api_search_ms',
   'api_error_4xx',
   'api_error_5xx',
 ] as const
@@ -1699,6 +1701,65 @@ function emptyClusterThroughputHistoryPoint(tMs: number): ClusterThroughputHisto
   }
 }
 
+function midOrFallback(a: number | null, b: number | null): number | null {
+  if (a != null && Number.isFinite(a) && b != null && Number.isFinite(b)) {
+    return (a + b) / 2
+  }
+  return a ?? b
+}
+
+function midpointApiMetricsHistoryPoint(
+  tMs: number,
+  a: ApiMetricsHistoryPoint,
+  b: ApiMetricsHistoryPoint,
+): ApiMetricsHistoryPoint {
+  return {
+    t: tMs,
+    allRps: midOrFallback(a.allRps, b.allRps),
+    allMs: midOrFallback(a.allMs, b.allMs),
+    searchRps: midOrFallback(a.searchRps, b.searchRps),
+    searchMs: midOrFallback(a.searchMs, b.searchMs),
+    ingestRps: midOrFallback(a.ingestRps, b.ingestRps),
+    ingestMs: midOrFallback(a.ingestMs, b.ingestMs),
+    errRps: midOrFallback(a.errRps, b.errRps),
+  }
+}
+
+function midpointIndexingLatencyHistoryPoint(
+  tMs: number,
+  a: IndexingLatencyHistoryPoint,
+  b: IndexingLatencyHistoryPoint,
+): IndexingLatencyHistoryPoint {
+  return {
+    t: tMs,
+    queueJobMs: midOrFallback(a.queueJobMs, b.queueJobMs),
+    bulkJobMs: midOrFallback(a.bulkJobMs, b.bulkJobMs),
+  }
+}
+
+function midpointClusterThroughputHistoryPoint(
+  tMs: number,
+  a: ClusterThroughputHistoryPoint,
+  b: ClusterThroughputHistoryPoint,
+): ClusterThroughputHistoryPoint {
+  const byKey = new Map<string, number>()
+  for (const [k, av] of a.byKey) {
+    const bv = b.byKey.get(k)
+    byKey.set(k, bv != null && Number.isFinite(bv) ? (av + bv) / 2 : av)
+  }
+  for (const [k, bv] of b.byKey) {
+    if (!byKey.has(k)) {
+      byKey.set(k, bv)
+    }
+  }
+  return {
+    t: tMs,
+    byKey,
+    avgMs: midOrFallback(a.avgMs, b.avgMs),
+    e2eMs: midOrFallback(a.e2eMs, b.e2eMs),
+  }
+}
+
 function bucketStartSecForTimestampMs(ms: number, bucketSec: number): number {
   if (bucketSec <= 0 || !Number.isFinite(ms)) {
     return 0
@@ -2270,12 +2331,15 @@ export class HomePanel extends DashboardPanel {
   private homeApi: AmgixApi | null = null
   private clusterThroughputChart: Chart<'line'> | null = null
   private encoderChartBuckets = new Map<number, ClusterThroughputHistoryPoint>()
+  private prevClusterThroughputLivePoint: ClusterThroughputHistoryPoint | null = null
   private indexingLatencyChart: Chart<'line'> | null = null
   private indexingChartBuckets = new Map<number, IndexingLatencyHistoryPoint>()
+  private prevIndexingLatencyLivePoint: IndexingLatencyHistoryPoint | null = null
   private clusterSeriesLabels = new Map<string, string>()
   private apiMetricsRequestsChart: Chart<'line'> | null = null
   private apiMetricsLatenciesChart: Chart<'line'> | null = null
   private apiChartBuckets = new Map<number, ApiMetricsHistoryPoint>()
+  private prevApiMetricsLivePoint: ApiMetricsHistoryPoint | null = null
   private metricsChartLiveView: Metrics | null = null
   private homeChartHistoryMs = DEFAULT_HOME_CHART_HISTORY_MS
   private homeChartRangeListenerAttached = false
@@ -2368,9 +2432,12 @@ export class HomePanel extends DashboardPanel {
     this.destroyClusterThroughputChart()
     this.destroyIndexingLatencyChart()
     this.encoderChartBuckets.clear()
+    this.prevClusterThroughputLivePoint = null
     this.indexingChartBuckets.clear()
+    this.prevIndexingLatencyLivePoint = null
     this.clusterSeriesLabels.clear()
     this.apiChartBuckets.clear()
+    this.prevApiMetricsLivePoint = null
     this.metricsChartLiveView = null
     this.homePollRefreshFailures.reset()
   }
@@ -2543,12 +2610,25 @@ export class HomePanel extends DashboardPanel {
           }
         : null
 
+    if (livePoint != null && this.prevClusterThroughputLivePoint != null) {
+      const prevBucketSec = bucketStartSecForTimestampMs(this.prevClusterThroughputLivePoint.t, resolution)
+      if (!this.encoderChartBuckets.has(prevBucketSec)) {
+        const tMs = prevBucketSec * 1000
+        const t2 = this.encoderChartBuckets.get(prevBucketSec - resolution)
+        const fill = t2 != null
+          ? midpointClusterThroughputHistoryPoint(tMs, t2, this.prevClusterThroughputLivePoint)
+          : { ...this.prevClusterThroughputLivePoint, t: tMs }
+        this.encoderChartBuckets.set(prevBucketSec, fill)
+      }
+    }
+    this.prevClusterThroughputLivePoint = livePoint
+
     const clusterThroughputHistory = sortedClusterThroughputPoints(
       this.encoderChartBuckets,
       livePoint,
       cutoff,
       now,
-      this.trendResolutionSec(),
+      resolution,
     )
 
     for (const pt of clusterThroughputHistory) {
@@ -2859,12 +2939,25 @@ export class HomePanel extends DashboardPanel {
           }
         : null
 
+    if (livePoint != null && this.prevIndexingLatencyLivePoint != null) {
+      const prevBucketSec = bucketStartSecForTimestampMs(this.prevIndexingLatencyLivePoint.t, resolution)
+      if (!this.indexingChartBuckets.has(prevBucketSec)) {
+        const tMs = prevBucketSec * 1000
+        const t2 = this.indexingChartBuckets.get(prevBucketSec - resolution)
+        const fill = t2 != null
+          ? midpointIndexingLatencyHistoryPoint(tMs, t2, this.prevIndexingLatencyLivePoint)
+          : { ...this.prevIndexingLatencyLivePoint, t: tMs }
+        this.indexingChartBuckets.set(prevBucketSec, fill)
+      }
+    }
+    this.prevIndexingLatencyLivePoint = livePoint
+
     const indexingHistory = sortedIndexingLatencyPoints(
       this.indexingChartBuckets,
       livePoint,
       cutoff,
       now,
-      this.trendResolutionSec(),
+      resolution,
     )
 
     const queueLineColor = '#2563eb'
@@ -3005,12 +3098,25 @@ export class HomePanel extends DashboardPanel {
           }
         : null
 
+    if (livePoint != null && this.prevApiMetricsLivePoint != null) {
+      const prevBucketSec = bucketStartSecForTimestampMs(this.prevApiMetricsLivePoint.t, resolution)
+      if (!this.apiChartBuckets.has(prevBucketSec)) {
+        const tMs = prevBucketSec * 1000
+        const t2 = this.apiChartBuckets.get(prevBucketSec - resolution)
+        const fill = t2 != null
+          ? midpointApiMetricsHistoryPoint(tMs, t2, this.prevApiMetricsLivePoint)
+          : { ...this.prevApiMetricsLivePoint, t: tMs }
+        this.apiChartBuckets.set(prevBucketSec, fill)
+      }
+    }
+    this.prevApiMetricsLivePoint = livePoint
+
     const apiMetricsHistory = sortedApiChartPoints(
       this.apiChartBuckets,
       livePoint,
       cutoff,
       now,
-      this.trendResolutionSec(),
+      resolution,
     )
 
     const yNum = (v: number | null) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
@@ -3191,6 +3297,7 @@ export class HomePanel extends DashboardPanel {
       $root.find('[data-home-cluster-info="encoder-nodes"]').text(dash)
       $root.find('[data-home-cluster-info="api-rps"]').text(dash)
       $root.find('[data-home-cluster-info="api-ms"]').text(dash)
+      $root.find('[data-home-cluster-info="search-ms"]').text(dash)
       $root.find('[data-home-cluster-info="index-docs-s"]').text(dash)
       $root.find('[data-home-cluster-info="infer-ms"]').text(dash)
       $root.find('[data-home-cluster-info="api-err-4xx"]').text(dash)
@@ -3212,6 +3319,12 @@ export class HomePanel extends DashboardPanel {
       $apiMs.text(`${formatClusterAvgMsCell(apiAgg.allMs)} ms`)
     } else {
       $apiMs.text(dash)
+    }
+    const $searchMs = $root.find('[data-home-cluster-info="search-ms"]')
+    if (apiAgg.searchMs != null && Number.isFinite(apiAgg.searchMs)) {
+      $searchMs.text(`${formatClusterAvgMsCell(apiAgg.searchMs)} ms`)
+    } else {
+      $searchMs.text(dash)
     }
     const indexDocsS = aggregateClusterIndexingDocsPerSec(view)
     const $indexDocsS = $root.find('[data-home-cluster-info="index-docs-s"]')
@@ -3322,8 +3435,11 @@ export class HomePanel extends DashboardPanel {
     this.syncHomeChartHistorySelects($root)
     this.resetHomeChartZoom()
     this.apiChartBuckets.clear()
+    this.prevApiMetricsLivePoint = null
     this.encoderChartBuckets.clear()
+    this.prevClusterThroughputLivePoint = null
     this.indexingChartBuckets.clear()
+    this.prevIndexingLatencyLivePoint = null
     const tab = readHomeMetricsTabFromDom($root)
     if (tab === 'api' || tab === 'encoder' || tab === 'indexing') {
       await this.bootstrapHomeChartTrends(api, $root, tab, this.readyPollGeneration)
@@ -3934,13 +4050,11 @@ export class HomePanel extends DashboardPanel {
       )
       const $clusterInfoTbody = $('<tbody>').append(
         clusterOverviewPairRow('API Nodes', 'api-nodes', { label: 'Request Latency (avg)', key: 'api-ms' }),
-        clusterOverviewPairRow('Encoder Nodes', 'encoder-nodes', {
-          label: 'Indexing Throughput (avg)',
-          key: 'index-docs-s',
-        }),
-        clusterOverviewPairRow('Global RPS', 'api-rps', { label: 'Inference Latency (avg)', key: 'infer-ms' }),
-        clusterOverviewPairRow('4xx Errors', 'api-err-4xx', null),
+        clusterOverviewPairRow('Encoder Nodes', 'encoder-nodes', { label: 'Search Latency (avg)', key: 'search-ms' }),
+        clusterOverviewPairRow('Global RPS', 'api-rps', { label: 'Indexing Throughput (avg)', key: 'index-docs-s' }),
+        clusterOverviewPairRow('4xx Errors', 'api-err-4xx', { label: 'Inference Latency (avg)', key: 'infer-ms' }),
         clusterOverviewPairRow('5xx Errors', 'api-err-5xx', null),
+
       )
       const $clusterInfoTable = $('<table>', {
         class: 'dashboard-home-table dashboard-home-cluster-overview-table',
