@@ -110,12 +110,14 @@ RUN mkdir -p /data/qdrant /data/rabbitmq && \
     chmod 755 /data /data/qdrant /data/rabbitmq
 
 # Configure RabbitMQ for custom data directory and console logging
+# RUN rabbitmq-plugins enable --offline rabbitmq_management
 RUN mkdir -p /etc/rabbitmq && \
     echo "listeners.tcp.default = 5672" > /etc/rabbitmq/rabbitmq.conf && \
     echo "loopback_users.guest = false" >> /etc/rabbitmq/rabbitmq.conf && \
     echo "log.console = true" >> /etc/rabbitmq/rabbitmq.conf && \
     echo "log.console.level = info" >> /etc/rabbitmq/rabbitmq.conf && \
     echo "log.file = false" >> /etc/rabbitmq/rabbitmq.conf && \
+    echo "management.tcp.ip = 0.0.0.0" >> /etc/rabbitmq/rabbitmq.conf && \
     chown -R rabbitmq:rabbitmq /data/rabbitmq
     # echo "RABBITMQ_DATA_DIR=/data/rabbitmq" > /etc/rabbitmq/rabbitmq-env.conf && \
     # echo "RABBITMQ_NODENAME=rabbit@localhost" > /etc/rabbitmq/rabbitmq-env.conf && \
