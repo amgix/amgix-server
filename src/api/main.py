@@ -814,7 +814,11 @@ async def upsert_documents_bulk(
     return OkResponse(ok=True)
 
 
-@shared_router.get("/collections/{collection_name}/documents/{document_id}", operation_id="get_document")
+@shared_router.get("/collections/{collection_name}/documents/{document_id}", 
+        operation_id="get_document",
+        response_model=None,
+        responses={200: { "model": Document}},
+    )
 async def get_document(collection_name: CollectionName, document_id: str = Path(...)) -> Document:
     """Retrieve a single document.
 
@@ -832,7 +836,9 @@ async def get_document(collection_name: CollectionName, document_id: str = Path(
     """
     real_collection_name = get_real_collection_name(collection_name)
     doc_with_vectors = (await _database.get_documents(real_collection_name, [document_id]))[0]
-    return Document(**doc_with_vectors.model_dump(exclude={'vectors', 'token_lengths'}))
+    return Document.model_construct(
+        **doc_with_vectors.model_dump(exclude={'vectors', 'token_lengths'}),
+    )
 
 
 @shared_router.delete("/collections/{collection_name}/documents/{document_id}", operation_id="delete_document")
