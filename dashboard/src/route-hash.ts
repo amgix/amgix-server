@@ -1,6 +1,6 @@
 export type DashboardPanelId = 'home' | 'clustermap' | 'collections' | 'query'
 
-export type HomeMetricsTabId = 'api' | 'indexing' | 'encoder'
+export type HomeMetricsTabId = 'api' | 'indexing' | 'encoder' | 'broker'
 
 /**
  * Parse the URL fragment (without leading `#`), lowercase.
@@ -23,7 +23,7 @@ export function parseDashboardRouteHash(raw: string): {
     if (rest === 'api' || rest === '') {
       return { panel: 'home', homeMetricsTab: 'api', canonicalFragment: 'home' }
     }
-    if (rest === 'indexing' || rest === 'encoder') {
+    if (rest === 'indexing' || rest === 'encoder' || rest === 'broker') {
       return { panel: 'home', homeMetricsTab: rest, canonicalFragment: s }
     }
     return { panel: 'home', homeMetricsTab: 'api', canonicalFragment: 'home' }

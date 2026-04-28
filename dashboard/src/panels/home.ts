@@ -43,9 +43,11 @@ const HOME_READY_POLL_MS = 10_000
 const HOME_METRICS_TAB_API_ID = 'dashboard-home-metrics-tab-api'
 const HOME_METRICS_TAB_INDEXING_ID = 'dashboard-home-metrics-tab-indexing'
 const HOME_METRICS_TAB_ENCODER_ID = 'dashboard-home-metrics-tab-encoder'
+const HOME_METRICS_TAB_BROKER_ID = 'dashboard-home-metrics-tab-broker'
 const HOME_METRICS_PANEL_API_ID = 'dashboard-home-metrics-panel-api'
 const HOME_METRICS_PANEL_INDEXING_ID = 'dashboard-home-metrics-panel-indexing'
 const HOME_METRICS_PANEL_ENCODER_ID = 'dashboard-home-metrics-panel-encoder'
+const HOME_METRICS_PANEL_BROKER_ID = 'dashboard-home-metrics-panel-broker'
 
 const CLUSTER_METRICS_WINDOW_SEC = 60
 
@@ -72,12 +74,6 @@ function homeChartTrendResolutionSec(historyMs: number): 60 | 300 {
   return historyMs <= HOME_CHART_HISTORY_ONE_DAY_MS ? 60 : 300
 }
 
-function homeChartTrendPatchMs(historyMs: number, resolutionSec: 60 | 300): number {
-  if (resolutionSec >= 300) {
-    return Math.min(historyMs, 20 * 60 * 1000)
-  }
-  return Math.min(historyMs, 2 * 60 * 1000)
-}
 
 function formatClusterChartXAxisTickLabel(valueMs: number, spanMs: number): string {
   if (!Number.isFinite(valueMs) || !Number.isFinite(spanMs) || spanMs <= 0) {
@@ -118,6 +114,42 @@ const ENCODER_CHART_TREND_KEYS = [
 ] as const
 
 const INDEXING_CHART_TREND_KEYS = ['index_queue_job_ms', 'index_bulk_job_ms'] as const
+const BROKER_CHART_TREND_KEYS = [
+  'broker_search',
+  'broker_documents_upsert',
+  'broker_documents_bulk',
+  'broker_collection_stats',
+] as const
+const BROKER_QUEUE_ROWS = [
+  {
+    key: 'broker_search',
+    queue: 'search',
+    label: 'Search',
+    description: 'Queue for search requests',
+    color: '#8b5cf6',
+  },
+  {
+    key: 'broker_documents_upsert',
+    queue: 'documents',
+    label: 'Upserts/Deletes',
+    description: 'Queue for single document upserts/deletes',
+    color: '#38bdf8',
+  },
+  {
+    key: 'broker_documents_bulk',
+    queue: 'documents-bulk',
+    label: 'Documents Bulk',
+    description: 'Queue for bulk document upserts',
+    color: '#f59e0b',
+  },
+  {
+    key: 'broker_collection_stats',
+    queue: 'collection-stats',
+    label: 'Collection Stats',
+    description: 'Queue for collection stats updates',
+    color: '#ef4444',
+  },
+] as const
 
 /** New + updated docs indexed (single-doc and bulk paths both record these). */
 const CLUSTER_INDEXING_DOCS_COUNTER_KEYS = ['index_queue_docs_new', 'index_queue_docs_updated'] as const
@@ -164,11 +196,13 @@ function homeIndexingTableMetricKeys(): string[] {
 function homeMetricsCurrentKeys(tab: HomeMetricsTabId): string[] {
   const apiOverview = [...HOME_CLUSTER_INFO_API_KEYS]
   const encOverview = [...ENCODER_CHART_TREND_KEYS]
+  const brokerOverview = [...BROKER_CHART_TREND_KEYS]
   if (tab === 'api') {
     return uniqStrings([
       ...API_CHART_TREND_KEYS,
       ...encOverview,
       ...INDEXING_CHART_TREND_KEYS,
+      ...brokerOverview,
       ...CLUSTER_INDEXING_DOCS_COUNTER_KEYS,
     ])
   }
@@ -177,13 +211,17 @@ function homeMetricsCurrentKeys(tab: HomeMetricsTabId): string[] {
       ...homeEncoderTableMetricKeys(),
       ...apiOverview,
       ...INDEXING_CHART_TREND_KEYS,
+      ...brokerOverview,
       ...CLUSTER_INDEXING_DOCS_COUNTER_KEYS,
     ])
   }
   if (tab === 'indexing') {
-    return uniqStrings([...homeIndexingTableMetricKeys(), ...apiOverview, ...encOverview])
+    return uniqStrings([...homeIndexingTableMetricKeys(), ...apiOverview, ...encOverview, ...brokerOverview])
   }
-  return uniqStrings([...apiOverview, ...encOverview, ...CLUSTER_INDEXING_DOCS_COUNTER_KEYS])
+  if (tab === 'broker') {
+    return uniqStrings([...brokerOverview, ...apiOverview, ...encOverview, ...CLUSTER_INDEXING_DOCS_COUNTER_KEYS])
+  }
+  return uniqStrings([...apiOverview, ...encOverview, ...brokerOverview, ...CLUSTER_INDEXING_DOCS_COUNTER_KEYS])
 }
 
 const CLUSTER_CHART_X_TICK_COUNT = 7
@@ -217,7 +255,7 @@ function clusterHelpIcon(tip: string): JQuery<HTMLElement> {
   })
 }
 
-const HOME_CHART_ZOOM_RESET_TARGETS = ['encoder', 'indexing', 'api-requests', 'api-latencies'] as const
+const HOME_CHART_ZOOM_RESET_TARGETS = ['encoder', 'indexing', 'api-requests', 'api-latencies', 'broker'] as const
 type HomeChartZoomResetTarget = (typeof HOME_CHART_ZOOM_RESET_TARGETS)[number]
 
 function isHomeChartZoomResetTarget(v: string): v is HomeChartZoomResetTarget {
@@ -958,6 +996,67 @@ function clusterChartLegendRpsValue(baseLabel: string, y: number | null): {
   }
 }
 
+function formatBrokerMsgCell(count: number): string {
+  if (!Number.isFinite(count)) {
+    return ''
+  }
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(Math.max(0, count))
+}
+
+function clusterChartLegendMsgValue(baseLabel: string, y: number | null): {
+  labelStem: string
+  valuePart: string | null
+} {
+  return {
+    labelStem: `${baseLabel}: `,
+    valuePart: typeof y === 'number' && Number.isFinite(y) ? `${formatBrokerMsgCell(y)} msg` : '- msg',
+  }
+}
+
+function latencyColorRgb(ms: number): string {
+  if (!Number.isFinite(ms)) {
+    return 'rgb(140, 142, 149)'
+  }
+  if (ms <= 50) {
+    return 'rgb(0, 170, 0)'
+  }
+  if (ms <= 300) {
+    const t = (ms - 50) / 250
+    const r = Math.round(220 * t)
+    return `rgb(${r}, 170, 0)`
+  }
+  if (ms < 1000) {
+    const t = (ms - 300) / 700
+    const g = Math.round(170 * (1 - t))
+    return `rgb(220, ${g}, 0)`
+  }
+  return 'rgb(220, 0, 0)'
+}
+
+function brokerSearchDepthColor(depth: number): string {
+  if (!Number.isFinite(depth) || depth <= 10) {
+    return ''
+  }
+  if (depth <= 50) {
+    const t = (depth - 10) / 40
+    const g = Math.round(170 * (1 - t))
+    return `rgb(220, ${g}, 0)`
+  }
+  return 'rgb(220, 0, 0)'
+}
+
+function brokerDocsDepthColor(depth: number): string {
+  if (!Number.isFinite(depth) || depth <= 100) {
+    return ''
+  }
+  if (depth <= 500) {
+    const t = (depth - 100) / 400
+    const g = Math.round(170 * (1 - t))
+    return `rgb(220, ${g}, 0)`
+  }
+  return 'rgb(220, 0, 0)'
+}
+
 function formatEmbeddingMetricsCells(node: NodeView): {
   rps: string
   avgMs: string
@@ -1596,49 +1695,6 @@ function apiMetricTrendsToPointsByBucketStart(
   return out
 }
 
-function finiteMetricOrKeep(prev: number | null, next: number | null): number | null {
-  if (typeof next === 'number' && Number.isFinite(next)) {
-    return next
-  }
-  return prev
-}
-
-function mergeApiMetricsHistoryPointIntoMap(
-  store: Map<number, ApiMetricsHistoryPoint>,
-  k: number,
-  patch: ApiMetricsHistoryPoint,
-): void {
-  const tMs = k * 1000
-  const existing = store.get(k)
-  if (existing == null) {
-    store.set(k, { ...patch, t: tMs })
-    return
-  }
-  store.set(k, {
-    t: tMs,
-    allRps: finiteMetricOrKeep(existing.allRps, patch.allRps),
-    allMs: finiteMetricOrKeep(existing.allMs, patch.allMs),
-    searchRps: finiteMetricOrKeep(existing.searchRps, patch.searchRps),
-    searchMs: finiteMetricOrKeep(existing.searchMs, patch.searchMs),
-    ingestRps: finiteMetricOrKeep(existing.ingestRps, patch.ingestRps),
-    ingestMs: finiteMetricOrKeep(existing.ingestMs, patch.ingestMs),
-    errRps: finiteMetricOrKeep(existing.errRps, patch.errRps),
-  })
-}
-
-function trimChartBucketMap(store: Map<number, unknown>, cutoffBucketStartSec: number): void {
-  for (const k of [...store.keys()]) {
-    if (k < cutoffBucketStartSec) {
-      store.delete(k)
-    }
-  }
-}
-
-function bucketStartCutoffSec(historyMs: number, nowMs: number, bucketSec: number): number {
-  const rawSec = Math.floor((nowMs - historyMs) / 1000)
-  return Math.floor(rawSec / bucketSec) * bucketSec
-}
-
 function trendQueryBounds(resolutionSec: number, historyMs: number): { since: Date; until: Date } {
   const resMs = resolutionSec * 1000
   const nudgedNowMs = Date.now() + 30_000
@@ -1648,117 +1704,7 @@ function trendQueryBounds(resolutionSec: number, historyMs: number): { since: Da
   return { since, until }
 }
 
-function denseBucketStartsSecInclusive(cutoffMs: number, nowMs: number, bucketSec: number): number[] {
-  if (bucketSec <= 0 || !Number.isFinite(cutoffMs) || !Number.isFinite(nowMs)) {
-    return []
-  }
-  const cutoffSec = cutoffMs / 1000
-  const nowSec = nowMs / 1000
-  let s = Math.ceil(cutoffSec / bucketSec) * bucketSec
-  const maxStart = Math.floor(nowSec / bucketSec) * bucketSec
-  const out: number[] = []
-  for (; s <= maxStart; s += bucketSec) {
-    out.push(s)
-  }
-  return out
-}
 
-function mergedBucketStartsSec(
-  cutoffMs: number,
-  nowMs: number,
-  bucketSec: number,
-  storeKeys: Iterable<number>,
-): number[] {
-  const set = new Set(denseBucketStartsSecInclusive(cutoffMs, nowMs, bucketSec))
-  for (const k of storeKeys) {
-    const tMs = k * 1000
-    if (tMs >= cutoffMs && tMs <= nowMs) {
-      set.add(k)
-    }
-  }
-  return Array.from(set).sort((a, b) => a - b)
-}
-
-function emptyApiMetricsHistoryPoint(tMs: number): ApiMetricsHistoryPoint {
-  return {
-    t: tMs,
-    allRps: null,
-    allMs: null,
-    searchRps: null,
-    searchMs: null,
-    ingestRps: null,
-    ingestMs: null,
-    errRps: null,
-  }
-}
-
-function emptyClusterThroughputHistoryPoint(tMs: number): ClusterThroughputHistoryPoint {
-  return {
-    t: tMs,
-    byKey: new Map(),
-    avgMs: null,
-    e2eMs: null,
-  }
-}
-
-function midOrFallback(a: number | null, b: number | null): number | null {
-  if (a != null && Number.isFinite(a) && b != null && Number.isFinite(b)) {
-    return (a + b) / 2
-  }
-  return a ?? b
-}
-
-function midpointApiMetricsHistoryPoint(
-  tMs: number,
-  a: ApiMetricsHistoryPoint,
-  b: ApiMetricsHistoryPoint,
-): ApiMetricsHistoryPoint {
-  return {
-    t: tMs,
-    allRps: midOrFallback(a.allRps, b.allRps),
-    allMs: midOrFallback(a.allMs, b.allMs),
-    searchRps: midOrFallback(a.searchRps, b.searchRps),
-    searchMs: midOrFallback(a.searchMs, b.searchMs),
-    ingestRps: midOrFallback(a.ingestRps, b.ingestRps),
-    ingestMs: midOrFallback(a.ingestMs, b.ingestMs),
-    errRps: midOrFallback(a.errRps, b.errRps),
-  }
-}
-
-function midpointIndexingLatencyHistoryPoint(
-  tMs: number,
-  a: IndexingLatencyHistoryPoint,
-  b: IndexingLatencyHistoryPoint,
-): IndexingLatencyHistoryPoint {
-  return {
-    t: tMs,
-    queueJobMs: midOrFallback(a.queueJobMs, b.queueJobMs),
-    bulkJobMs: midOrFallback(a.bulkJobMs, b.bulkJobMs),
-  }
-}
-
-function midpointClusterThroughputHistoryPoint(
-  tMs: number,
-  a: ClusterThroughputHistoryPoint,
-  b: ClusterThroughputHistoryPoint,
-): ClusterThroughputHistoryPoint {
-  const byKey = new Map<string, number>()
-  for (const [k, av] of a.byKey) {
-    const bv = b.byKey.get(k)
-    byKey.set(k, bv != null && Number.isFinite(bv) ? (av + bv) / 2 : av)
-  }
-  for (const [k, bv] of b.byKey) {
-    if (!byKey.has(k)) {
-      byKey.set(k, bv)
-    }
-  }
-  return {
-    t: tMs,
-    byKey,
-    avgMs: midOrFallback(a.avgMs, b.avgMs),
-    e2eMs: midOrFallback(a.e2eMs, b.e2eMs),
-  }
-}
 
 function bucketStartSecForTimestampMs(ms: number, bucketSec: number): number {
   if (bucketSec <= 0 || !Number.isFinite(ms)) {
@@ -1790,6 +1736,24 @@ function appendLivePointReplacingSameTime<T extends { t: number }>(
   }
 }
 
+function avg2(a: number | null, b: number | null): number | null {
+  if (a != null && Number.isFinite(a) && b != null && Number.isFinite(b)) {
+    return (a + b) / 2
+  }
+  return null
+}
+
+function fullTimeGridSecInclusive(fromMs: number, toMs: number, bucketSec: number): number[] {
+  if (bucketSec <= 0) return []
+  const first = Math.ceil(fromMs / 1000 / bucketSec) * bucketSec
+  const last = Math.floor(toMs / 1000 / bucketSec) * bucketSec
+  const out: number[] = []
+  for (let s = first; s <= last; s += bucketSec) {
+    out.push(s)
+  }
+  return out
+}
+
 function sortedApiChartPoints(
   store: Map<number, ApiMetricsHistoryPoint>,
   live: ApiMetricsHistoryPoint | null,
@@ -1797,15 +1761,34 @@ function sortedApiChartPoints(
   nowMs: number,
   bucketSec: number,
 ): ApiMetricsHistoryPoint[] {
-  const merged = mergedBucketStartsSec(cutoffMs, nowMs, bucketSec, store.keys())
-  const rows: ApiMetricsHistoryPoint[] = []
-  for (const k of merged) {
+  const fetchCutoffMs = cutoffMs - bucketSec * 1000
+  const grid = fullTimeGridSecInclusive(fetchCutoffMs, nowMs, bucketSec)
+  const rows: ApiMetricsHistoryPoint[] = grid.map((k) => {
+    const v = store.get(k)
     const t = k * 1000
-    const row = store.get(k)
-    if (row != null) {
-      rows.push({ ...row, t })
-    } else {
-      rows.push(emptyApiMetricsHistoryPoint(t))
+    return v != null
+      ? { ...v, t }
+      : { t, allRps: null, allMs: null, searchRps: null, searchMs: null, ingestRps: null, ingestMs: null, errRps: null }
+  })
+  if (live != null) {
+    const liveBucketSec = bucketStartSecForTimestampMs(live.t, bucketSec)
+    const prev2 = store.get(liveBucketSec - 2 * bucketSec)
+    if (!store.has(liveBucketSec - bucketSec) && prev2 != null) {
+      const bridgedT = (liveBucketSec - bucketSec) * 1000
+      const bridged: ApiMetricsHistoryPoint = {
+        t: bridgedT,
+        allRps: avg2(prev2.allRps, live.allRps),
+        allMs: avg2(prev2.allMs, live.allMs),
+        searchRps: avg2(prev2.searchRps, live.searchRps),
+        searchMs: avg2(prev2.searchMs, live.searchMs),
+        ingestRps: avg2(prev2.ingestRps, live.ingestRps),
+        ingestMs: avg2(prev2.ingestMs, live.ingestMs),
+        errRps: avg2(prev2.errRps, live.errRps),
+      }
+      const replaceAt = rows.findIndex((r) => r.t === bridgedT)
+      if (replaceAt !== -1) {
+        rows[replaceAt] = bridged
+      }
     }
   }
   appendLivePointReplacingSameTime(rows, live, nowMs, bucketSec)
@@ -1906,6 +1889,14 @@ type IndexingLatencyHistoryPoint = {
   bulkJobMs: number | null
 }
 
+type BrokerMetricsHistoryPoint = {
+  t: number
+  collectionStats: number | null
+  documentsUpsert: number | null
+  documentsBulk: number | null
+  search: number | null
+}
+
 function indexingLatencyPointFromBuckets(
   buckets: MetricsBucket[],
   bucketStartSec: number,
@@ -1976,6 +1967,75 @@ function indexMetricTrendsToPointsByBucketStart(
   return out
 }
 
+function brokerMetricCurrentValue(view: Metrics | null, key: (typeof BROKER_CHART_TREND_KEYS)[number]): number | null {
+  if (view?.nodes == null) {
+    return null
+  }
+  let maxValue: number | null = null
+  for (const node of Object.values(view.nodes)) {
+    const ws = getMetricWindowSampleByFirstKey(node.metrics ?? [], key)
+    if (ws == null) {
+      continue
+    }
+    const v = Number(ws.value)
+    const n = Number(ws.n)
+    const avg = Number.isFinite(v) && Number.isFinite(n) && n > 0 ? v / n : null
+    if (avg == null || !Number.isFinite(avg)) {
+      continue
+    }
+    maxValue = maxValue == null ? avg : Math.max(maxValue, avg)
+  }
+  return maxValue
+}
+
+function brokerMetricLivePoint(view: Metrics | null, nowMs: number): BrokerMetricsHistoryPoint | null {
+  const collectionStats = brokerMetricCurrentValue(view, 'broker_collection_stats')
+  const documentsUpsert = brokerMetricCurrentValue(view, 'broker_documents_upsert')
+  const documentsBulk = brokerMetricCurrentValue(view, 'broker_documents_bulk')
+  const search = brokerMetricCurrentValue(view, 'broker_search')
+  if (collectionStats == null && documentsUpsert == null && documentsBulk == null && search == null) {
+    return null
+  }
+  return { t: nowMs, collectionStats, documentsUpsert, documentsBulk, search }
+}
+
+function brokerMetricTrendsToPointsByBucketStart(
+  trends: MetricTrend[],
+  expectedBucketSec: number,
+): Map<number, BrokerMetricsHistoryPoint> {
+  const acc = new Map<number, BrokerMetricsHistoryPoint>()
+  for (const tr of trends) {
+    for (const b of tr.buckets ?? []) {
+      if (b.bucket_seconds !== expectedBucketSec) {
+        continue
+      }
+      const current = acc.get(b.bucket_start) ?? {
+        t: b.bucket_start * 1000,
+        collectionStats: null,
+        documentsUpsert: null,
+        documentsBulk: null,
+        search: null,
+      }
+      const v = Number(b.value)
+      const n = Number(b.n)
+      const value = Number.isFinite(v) && Number.isFinite(n) && n > 0 ? v / n : null
+      if (b.key === 'broker_collection_stats') {
+        current.collectionStats = value
+      } else if (b.key === 'broker_documents_upsert') {
+        current.documentsUpsert = value
+      } else if (b.key === 'broker_documents_bulk') {
+        current.documentsBulk = value
+      } else if (b.key === 'broker_search') {
+        current.search = value
+      } else {
+        continue
+      }
+      acc.set(b.bucket_start, current)
+    }
+  }
+  return acc
+}
+
 function sortedClusterThroughputPoints(
   store: Map<number, ClusterThroughputHistoryPoint>,
   live: ClusterThroughputHistoryPoint | null,
@@ -1983,15 +2043,35 @@ function sortedClusterThroughputPoints(
   nowMs: number,
   bucketSec: number,
 ): ClusterThroughputHistoryPoint[] {
-  const merged = mergedBucketStartsSec(cutoffMs, nowMs, bucketSec, store.keys())
-  const rows: ClusterThroughputHistoryPoint[] = []
-  for (const k of merged) {
+  const fetchCutoffMs = cutoffMs - bucketSec * 1000
+  const grid = fullTimeGridSecInclusive(fetchCutoffMs, nowMs, bucketSec)
+  const rows: ClusterThroughputHistoryPoint[] = grid.map((k) => {
+    const v = store.get(k)
     const t = k * 1000
-    const row = store.get(k)
-    if (row != null) {
-      rows.push({ ...row, t })
-    } else {
-      rows.push(emptyClusterThroughputHistoryPoint(t))
+    return v != null ? { ...v, t } : { t, byKey: new Map(), avgMs: null, e2eMs: null }
+  })
+  if (live != null) {
+    const liveBucketSec = bucketStartSecForTimestampMs(live.t, bucketSec)
+    const prev2 = store.get(liveBucketSec - 2 * bucketSec)
+    if (!store.has(liveBucketSec - bucketSec) && prev2 != null) {
+      const bridgedT = (liveBucketSec - bucketSec) * 1000
+      const byKey = new Map<string, number>()
+      for (const [k, av] of prev2.byKey) {
+        const bv = live.byKey.get(k)
+        if (bv != null && Number.isFinite(bv)) {
+          byKey.set(k, (av + bv) / 2)
+        }
+      }
+      const bridged: ClusterThroughputHistoryPoint = {
+        t: bridgedT,
+        byKey,
+        avgMs: avg2(prev2.avgMs, live.avgMs),
+        e2eMs: avg2(prev2.e2eMs, live.e2eMs),
+      }
+      const replaceAt = rows.findIndex((r) => r.t === bridgedT)
+      if (replaceAt !== -1) {
+        rows[replaceAt] = bridged
+      }
     }
   }
   appendLivePointReplacingSameTime(rows, live, nowMs, bucketSec)
@@ -2036,13 +2116,6 @@ function weightedIndexingJobMsFromNodes(view: Metrics | null): {
   }
 }
 
-function emptyIndexingLatencyHistoryPoint(tMs: number): IndexingLatencyHistoryPoint {
-  return {
-    t: tMs,
-    queueJobMs: null,
-    bulkJobMs: null,
-  }
-}
 
 function sortedIndexingLatencyPoints(
   store: Map<number, IndexingLatencyHistoryPoint>,
@@ -2051,15 +2124,65 @@ function sortedIndexingLatencyPoints(
   nowMs: number,
   bucketSec: number,
 ): IndexingLatencyHistoryPoint[] {
-  const merged = mergedBucketStartsSec(cutoffMs, nowMs, bucketSec, store.keys())
-  const rows: IndexingLatencyHistoryPoint[] = []
-  for (const k of merged) {
+  const fetchCutoffMs = cutoffMs - bucketSec * 1000
+  const grid = fullTimeGridSecInclusive(fetchCutoffMs, nowMs, bucketSec)
+  const rows: IndexingLatencyHistoryPoint[] = grid.map((k) => {
+    const v = store.get(k)
     const t = k * 1000
-    const row = store.get(k)
-    if (row != null) {
-      rows.push({ ...row, t })
-    } else {
-      rows.push(emptyIndexingLatencyHistoryPoint(t))
+    return v != null ? { ...v, t } : { t, queueJobMs: null, bulkJobMs: null }
+  })
+  if (live != null) {
+    const liveBucketSec = bucketStartSecForTimestampMs(live.t, bucketSec)
+    const prev2 = store.get(liveBucketSec - 2 * bucketSec)
+    if (!store.has(liveBucketSec - bucketSec) && prev2 != null) {
+      const bridgedT = (liveBucketSec - bucketSec) * 1000
+      const bridged: IndexingLatencyHistoryPoint = {
+        t: bridgedT,
+        queueJobMs: avg2(prev2.queueJobMs, live.queueJobMs),
+        bulkJobMs: avg2(prev2.bulkJobMs, live.bulkJobMs),
+      }
+      const replaceAt = rows.findIndex((r) => r.t === bridgedT)
+      if (replaceAt !== -1) {
+        rows[replaceAt] = bridged
+      }
+    }
+  }
+  appendLivePointReplacingSameTime(rows, live, nowMs, bucketSec)
+  return rows
+}
+
+function sortedBrokerMetricsPoints(
+  store: Map<number, BrokerMetricsHistoryPoint>,
+  live: BrokerMetricsHistoryPoint | null,
+  cutoffMs: number,
+  nowMs: number,
+  bucketSec: number,
+): BrokerMetricsHistoryPoint[] {
+  const fetchCutoffMs = cutoffMs - bucketSec * 1000
+  const grid = fullTimeGridSecInclusive(fetchCutoffMs, nowMs, bucketSec)
+  const rows: BrokerMetricsHistoryPoint[] = grid.map((k) => {
+    const v = store.get(k)
+    const t = k * 1000
+    return v != null
+      ? { ...v, t }
+      : { t, collectionStats: null, documentsUpsert: null, documentsBulk: null, search: null }
+  })
+  if (live != null) {
+    const liveBucketSec = bucketStartSecForTimestampMs(live.t, bucketSec)
+    const prev2 = store.get(liveBucketSec - 2 * bucketSec)
+    if (!store.has(liveBucketSec - bucketSec) && prev2 != null) {
+      const bridgedT = (liveBucketSec - bucketSec) * 1000
+      const bridged: BrokerMetricsHistoryPoint = {
+        t: bridgedT,
+        collectionStats: avg2(prev2.collectionStats, live.collectionStats),
+        documentsUpsert: avg2(prev2.documentsUpsert, live.documentsUpsert),
+        documentsBulk: avg2(prev2.documentsBulk, live.documentsBulk),
+        search: avg2(prev2.search, live.search),
+      }
+      const replaceAt = rows.findIndex((r) => r.t === bridgedT)
+      if (replaceAt !== -1) {
+        rows[replaceAt] = bridged
+      }
     }
   }
   appendLivePointReplacingSameTime(rows, live, nowMs, bucketSec)
@@ -2072,6 +2195,9 @@ function readHomeMetricsTabFromDom($root: JQuery<HTMLElement>): HomeMetricsTabId
   }
   if ($root.find('[data-home-metrics-tab="indexing"]').attr('aria-selected') === 'true') {
     return 'indexing'
+  }
+  if ($root.find('[data-home-metrics-tab="broker"]').attr('aria-selected') === 'true') {
+    return 'broker'
   }
   return 'encoder'
 }
@@ -2269,6 +2395,63 @@ function buildApiMetricsChartOptions(
   }
 }
 
+function buildBrokerMetricsChartOptions(
+  cutoff: number,
+  now: number,
+  gridColor: string,
+  tickColor: string,
+  tooltipBg: string,
+  tooltipBorder: string,
+  chartFont: ReturnType<typeof readClusterChartFont>,
+): ChartOptions<'line'> {
+  const opts = buildApiMetricsChartOptions(
+    cutoff,
+    now,
+    gridColor,
+    tickColor,
+    tooltipBg,
+    tooltipBorder,
+    chartFont,
+    'Search/Stats (msgs)',
+    true,
+  )
+  const scales = opts.scales as Record<string, unknown>
+  scales.y1 = {
+    type: 'linear',
+    position: 'right',
+    beginAtZero: true,
+    title: {
+      display: true,
+      text: 'Docs (msgs)',
+      color: tickColor,
+      font: { family: chartFont.family, size: chartFont.titlePx, weight: 600 },
+    },
+    ticks: {
+      color: tickColor,
+      font: { family: chartFont.family, size: chartFont.tickPx },
+    },
+    grid: {
+      drawOnChartArea: false,
+      color: gridColor,
+    },
+  }
+  const tip = opts.plugins?.tooltip
+  if (tip && typeof tip === 'object') {
+    ;(tip as { callbacks?: { label?: (ctx: { parsed: { y: number }; dataset: { label?: string } }) => string } }).callbacks = {
+      ...(tip as { callbacks?: object }).callbacks,
+      label(ctx: { parsed: { y: number }; dataset: { label?: string } }) {
+        const v = ctx.parsed.y
+        const lab = ctx.dataset.label ?? ''
+        if (typeof v !== 'number' || !Number.isFinite(v)) {
+          return lab
+        }
+        return `${lab}: ${formatBrokerMsgCell(v)} msg`
+      },
+    }
+  }
+  return opts
+}
+
 function clusterLineColors(count: number): string[] {
   const base = ['#16a34a', '#2563eb', '#ca8a04', '#9333ea', '#db2777', '#0891b2', '#ea580c']
   const out: string[] = []
@@ -2330,20 +2513,19 @@ export class HomePanel extends DashboardPanel {
   }
   private homeApi: AmgixApi | null = null
   private clusterThroughputChart: Chart<'line'> | null = null
-  private encoderChartBuckets = new Map<number, ClusterThroughputHistoryPoint>()
-  private prevClusterThroughputLivePoint: ClusterThroughputHistoryPoint | null = null
   private indexingLatencyChart: Chart<'line'> | null = null
-  private indexingChartBuckets = new Map<number, IndexingLatencyHistoryPoint>()
-  private prevIndexingLatencyLivePoint: IndexingLatencyHistoryPoint | null = null
   private clusterSeriesLabels = new Map<string, string>()
   private apiMetricsRequestsChart: Chart<'line'> | null = null
   private apiMetricsLatenciesChart: Chart<'line'> | null = null
-  private apiChartBuckets = new Map<number, ApiMetricsHistoryPoint>()
-  private prevApiMetricsLivePoint: ApiMetricsHistoryPoint | null = null
+  private brokerMetricsChart: Chart<'line'> | null = null
   private metricsChartLiveView: Metrics | null = null
+  private apiChartTrends: Map<number, ApiMetricsHistoryPoint> = new Map()
+  private encoderChartTrends: Map<number, ClusterThroughputHistoryPoint> = new Map()
+  private indexingChartTrends: Map<number, IndexingLatencyHistoryPoint> = new Map()
+  private brokerChartTrends: Map<number, BrokerMetricsHistoryPoint> = new Map()
   private homeChartHistoryMs = DEFAULT_HOME_CHART_HISTORY_MS
   private homeChartRangeListenerAttached = false
-  private trendsFailed = false
+  private trendsGeneration = 0
 
   override deactivate(): void {
     this.clearHomeLoadRetry()
@@ -2431,13 +2613,13 @@ export class HomePanel extends DashboardPanel {
     this.destroyApiMetricsChart()
     this.destroyClusterThroughputChart()
     this.destroyIndexingLatencyChart()
-    this.encoderChartBuckets.clear()
-    this.prevClusterThroughputLivePoint = null
-    this.indexingChartBuckets.clear()
-    this.prevIndexingLatencyLivePoint = null
+    this.destroyBrokerMetricsChart()
+    this.trendsGeneration += 1
+    this.apiChartTrends.clear()
+    this.encoderChartTrends.clear()
+    this.indexingChartTrends.clear()
+    this.brokerChartTrends.clear()
     this.clusterSeriesLabels.clear()
-    this.apiChartBuckets.clear()
-    this.prevApiMetricsLivePoint = null
     this.metricsChartLiveView = null
     this.homePollRefreshFailures.reset()
   }
@@ -2577,6 +2759,11 @@ export class HomePanel extends DashboardPanel {
     this.indexingLatencyChart = null
   }
 
+  private destroyBrokerMetricsChart(): void {
+    this.brokerMetricsChart?.destroy()
+    this.brokerMetricsChart = null
+  }
+
   private refreshClusterThroughputChart($root: JQuery<HTMLElement>): void {
     const $canvas = $root.find('[data-home-cluster-throughput-chart]')
     const canvas = $canvas.get(0) as HTMLCanvasElement | undefined
@@ -2610,21 +2797,8 @@ export class HomePanel extends DashboardPanel {
           }
         : null
 
-    if (livePoint != null && this.prevClusterThroughputLivePoint != null) {
-      const prevBucketSec = bucketStartSecForTimestampMs(this.prevClusterThroughputLivePoint.t, resolution)
-      if (!this.encoderChartBuckets.has(prevBucketSec)) {
-        const tMs = prevBucketSec * 1000
-        const t2 = this.encoderChartBuckets.get(prevBucketSec - resolution)
-        const fill = t2 != null
-          ? midpointClusterThroughputHistoryPoint(tMs, t2, this.prevClusterThroughputLivePoint)
-          : { ...this.prevClusterThroughputLivePoint, t: tMs }
-        this.encoderChartBuckets.set(prevBucketSec, fill)
-      }
-    }
-    this.prevClusterThroughputLivePoint = livePoint
-
     const clusterThroughputHistory = sortedClusterThroughputPoints(
-      this.encoderChartBuckets,
+      this.encoderChartTrends,
       livePoint,
       cutoff,
       now,
@@ -2939,21 +3113,8 @@ export class HomePanel extends DashboardPanel {
           }
         : null
 
-    if (livePoint != null && this.prevIndexingLatencyLivePoint != null) {
-      const prevBucketSec = bucketStartSecForTimestampMs(this.prevIndexingLatencyLivePoint.t, resolution)
-      if (!this.indexingChartBuckets.has(prevBucketSec)) {
-        const tMs = prevBucketSec * 1000
-        const t2 = this.indexingChartBuckets.get(prevBucketSec - resolution)
-        const fill = t2 != null
-          ? midpointIndexingLatencyHistoryPoint(tMs, t2, this.prevIndexingLatencyLivePoint)
-          : { ...this.prevIndexingLatencyLivePoint, t: tMs }
-        this.indexingChartBuckets.set(prevBucketSec, fill)
-      }
-    }
-    this.prevIndexingLatencyLivePoint = livePoint
-
     const indexingHistory = sortedIndexingLatencyPoints(
-      this.indexingChartBuckets,
+      this.indexingChartTrends,
       livePoint,
       cutoff,
       now,
@@ -3098,21 +3259,8 @@ export class HomePanel extends DashboardPanel {
           }
         : null
 
-    if (livePoint != null && this.prevApiMetricsLivePoint != null) {
-      const prevBucketSec = bucketStartSecForTimestampMs(this.prevApiMetricsLivePoint.t, resolution)
-      if (!this.apiChartBuckets.has(prevBucketSec)) {
-        const tMs = prevBucketSec * 1000
-        const t2 = this.apiChartBuckets.get(prevBucketSec - resolution)
-        const fill = t2 != null
-          ? midpointApiMetricsHistoryPoint(tMs, t2, this.prevApiMetricsLivePoint)
-          : { ...this.prevApiMetricsLivePoint, t: tMs }
-        this.apiChartBuckets.set(prevBucketSec, fill)
-      }
-    }
-    this.prevApiMetricsLivePoint = livePoint
-
     const apiMetricsHistory = sortedApiChartPoints(
-      this.apiChartBuckets,
+      this.apiChartTrends,
       livePoint,
       cutoff,
       now,
@@ -3244,35 +3392,167 @@ export class HomePanel extends DashboardPanel {
     }
   }
 
+  private refreshBrokerMetricsChart($root: JQuery<HTMLElement>): void {
+    const $canvas = $root.find('[data-home-broker-metrics-chart]')
+    const canvas = $canvas.get(0) as HTMLCanvasElement | undefined
+    const $wrap = $root.find('[data-home-broker-chart-wrap]')
+    const $canvasWrap = $root.find('[data-home-broker-chart-canvas-wrap]')
+    const $legendUl = $root.find('[data-home-broker-chart-legend]')
+    if (!canvas || !$wrap.length || !$canvasWrap.length || !$legendUl.length) {
+      return
+    }
+    const now = Date.now()
+    const resolution = this.trendResolutionSec()
+    const cutoff = Math.floor((now - this.homeChartHistoryMs) / (resolution * 1000)) * (resolution * 1000)
+    const spanMs = now - cutoff
+    const livePoint = brokerMetricLivePoint(this.metricsChartLiveView, now)
+    const history = sortedBrokerMetricsPoints(this.brokerChartTrends, livePoint, cutoff, now, resolution)
+    const yNum = (v: number | null) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+    const line = (
+      label: string,
+      color: string,
+      yAxisID: 'y' | 'y1',
+      pick: (pt: BrokerMetricsHistoryPoint) => number | null,
+    ) => ({
+      label,
+      data: history.map((pt) => ({ x: pt.t, y: pick(pt) })),
+      yAxisID,
+      borderColor: color,
+      backgroundColor: color,
+      borderWidth: 2,
+      fill: false,
+      tension: 0.4,
+      pointRadius: homeLineChartPointRadiusScriptable,
+      pointHoverRadius: 5,
+      pointHitRadius: 12,
+      spanGaps: false,
+    })
+    const datasets = [
+      line('Search', BROKER_QUEUE_ROWS[0].color, 'y', (pt) => yNum(pt.search)),
+      line('Documents', BROKER_QUEUE_ROWS[1].color, 'y1', (pt) => yNum(pt.documentsUpsert)),
+      line('Documents Bulk', BROKER_QUEUE_ROWS[2].color, 'y1', (pt) => yNum(pt.documentsBulk)),
+      line('Collection Stats', BROKER_QUEUE_ROWS[3].color, 'y', (pt) => yNum(pt.collectionStats)),
+    ]
+    $canvasWrap.css('height', '150px')
+    const { grid: gridColor, tick: tickColor, tooltipBg, tooltipBorder } = readClusterChartThemeColors()
+    const chartFont = readClusterChartFont()
+    const legendItems = [
+      { color: BROKER_QUEUE_ROWS[0].color, ...clusterChartLegendMsgValue('Search', livePoint?.search ?? null) },
+      { color: BROKER_QUEUE_ROWS[1].color, ...clusterChartLegendMsgValue('Documents', livePoint?.documentsUpsert ?? null) },
+      { color: BROKER_QUEUE_ROWS[2].color, ...clusterChartLegendMsgValue('Documents Bulk', livePoint?.documentsBulk ?? null) },
+      { color: BROKER_QUEUE_ROWS[3].color, ...clusterChartLegendMsgValue('Collection Stats', livePoint?.collectionStats ?? null) },
+    ]
+    renderClusterChartHtmlLegend($legendUl, legendItems, tickColor)
+    if (this.brokerMetricsChart == null) {
+      const ctx = canvas.getContext('2d')
+      if (!ctx) {
+        return
+      }
+      this.brokerMetricsChart = new Chart(ctx, {
+        type: 'line',
+        data: { datasets },
+        options: buildBrokerMetricsChartOptions(
+          cutoff,
+          now,
+          gridColor,
+          tickColor,
+          tooltipBg,
+          tooltipBorder,
+          chartFont,
+        ),
+      })
+    } else {
+      const ch = this.brokerMetricsChart
+      ch.data.datasets = datasets as typeof ch.data.datasets
+      const xScale = ch.options.scales?.x
+      if (xScale && typeof xScale === 'object' && 'min' in xScale && 'max' in xScale && !ch.isZoomedOrPanned()) {
+        ;(xScale as { min?: number; max?: number }).min = cutoff
+        ;(xScale as { min?: number; max?: number }).max = now
+      }
+      const xs = ch.options.scales?.x
+      if (xs && typeof xs === 'object') {
+        const tx = (xs as { ticks?: { callback?: (tickValue: string | number) => string | string[] } }).ticks
+        if (tx) {
+          tx.callback = (tickValue: string | number) => {
+            const n = typeof tickValue === 'number' ? tickValue : Number(tickValue)
+            if (!Number.isFinite(n)) {
+              return ''
+            }
+            return formatClusterChartXAxisTickLabel(n, spanMs)
+          }
+        }
+      }
+      ch.options = buildBrokerMetricsChartOptions(
+        cutoff,
+        now,
+        gridColor,
+        tickColor,
+        tooltipBg,
+        tooltipBorder,
+        chartFont,
+      )
+      ch.update('none')
+    }
+  }
+
+  private applyBrokerQueuesTableToDom($root: JQuery<HTMLElement>, view: Metrics | null): void {
+    const $tbody = $root.find('[data-home-broker-queues-tbody]')
+    if (!$tbody.length) {
+      return
+    }
+    $tbody.empty()
+    for (const row of BROKER_QUEUE_ROWS) {
+      const value = brokerMetricCurrentValue(view, row.key)
+      $tbody.append(
+        $('<tr>').append(
+          $('<td>', { text: row.queue }),
+          $('<td>', {
+            class: 'dashboard-home-broker-msg-count',
+            text: value != null && Number.isFinite(value) ? formatBrokerMsgCell(value) : '\u2014',
+          }),
+          $('<td>', { text: row.description }),
+        ),
+      )
+    }
+  }
+
   private activateHomeMetricsTab($root: JQuery<HTMLElement>, panel: HomeMetricsTabId): void {
     const $apiPanel = $root.find('[data-home-metrics-tab-panel="api"]')
     const $indexingPanel = $root.find('[data-home-metrics-tab-panel="indexing"]')
     const $encPanel = $root.find('[data-home-metrics-tab-panel="encoder"]')
+    const $brokerPanel = $root.find('[data-home-metrics-tab-panel="broker"]')
     const $btnApi = $root.find('[data-home-metrics-tab="api"]')
     const $btnIndexing = $root.find('[data-home-metrics-tab="indexing"]')
     const $btnEnc = $root.find('[data-home-metrics-tab="encoder"]')
+    const $btnBroker = $root.find('[data-home-metrics-tab="broker"]')
     if (
       !$apiPanel.length ||
       !$indexingPanel.length ||
       !$encPanel.length ||
+      !$brokerPanel.length ||
       !$btnApi.length ||
       !$btnIndexing.length ||
-      !$btnEnc.length
+      !$btnEnc.length ||
+      !$btnBroker.length
     ) {
       return
     }
     const showApi = panel === 'api'
     const showIndexing = panel === 'indexing'
     const showEncoder = panel === 'encoder'
+    const showBroker = panel === 'broker'
     $btnApi.attr('aria-selected', showApi ? 'true' : 'false')
     $btnIndexing.attr('aria-selected', showIndexing ? 'true' : 'false')
     $btnEnc.attr('aria-selected', showEncoder ? 'true' : 'false')
+    $btnBroker.attr('aria-selected', showBroker ? 'true' : 'false')
     $btnApi.attr('tabindex', showApi ? '0' : '-1')
     $btnIndexing.attr('tabindex', showIndexing ? '0' : '-1')
     $btnEnc.attr('tabindex', showEncoder ? '0' : '-1')
+    $btnBroker.attr('tabindex', showBroker ? '0' : '-1')
     $apiPanel.prop('hidden', !showApi)
     $indexingPanel.prop('hidden', !showIndexing)
     $encPanel.prop('hidden', !showEncoder)
+    $brokerPanel.prop('hidden', !showBroker)
     window.requestAnimationFrame(() => {
       this.refreshVisibleHomeCharts($root)
       if (showApi) {
@@ -3282,6 +3562,8 @@ export class HomePanel extends DashboardPanel {
         this.indexingLatencyChart?.resize()
       } else if (showEncoder) {
         this.clusterThroughputChart?.resize()
+      } else if (showBroker) {
+        this.brokerMetricsChart?.resize()
       }
     })
   }
@@ -3299,6 +3581,7 @@ export class HomePanel extends DashboardPanel {
       $root.find('[data-home-cluster-info="api-ms"]').text(dash)
       $root.find('[data-home-cluster-info="search-ms"]').text(dash)
       $root.find('[data-home-cluster-info="index-docs-s"]').text(dash)
+      $root.find('[data-home-cluster-info="queue-depth-srch-docs"]').text(dash)
       $root.find('[data-home-cluster-info="infer-ms"]').text(dash)
       $root.find('[data-home-cluster-info="api-err-4xx"]').text(dash)
       $root.find('[data-home-cluster-info="api-err-5xx"]').text(dash)
@@ -3317,14 +3600,18 @@ export class HomePanel extends DashboardPanel {
     const $apiMs = $root.find('[data-home-cluster-info="api-ms"]')
     if (apiAgg.allMs != null && Number.isFinite(apiAgg.allMs)) {
       $apiMs.text(`${formatClusterAvgMsCell(apiAgg.allMs)} ms`)
+      $apiMs.css('color', apiAgg.allMs === 0 ? '' : latencyColorRgb(apiAgg.allMs))
     } else {
       $apiMs.text(dash)
+      $apiMs.css('color', '')
     }
     const $searchMs = $root.find('[data-home-cluster-info="search-ms"]')
     if (apiAgg.searchMs != null && Number.isFinite(apiAgg.searchMs)) {
       $searchMs.text(`${formatClusterAvgMsCell(apiAgg.searchMs)} ms`)
+      $searchMs.css('color', apiAgg.searchMs === 0 ? '' : latencyColorRgb(apiAgg.searchMs))
     } else {
       $searchMs.text(dash)
+      $searchMs.css('color', '')
     }
     const indexDocsS = aggregateClusterIndexingDocsPerSec(view)
     const $indexDocsS = $root.find('[data-home-cluster-info="index-docs-s"]')
@@ -3332,6 +3619,24 @@ export class HomePanel extends DashboardPanel {
       $indexDocsS.text(`${formatClusterRpsCell(indexDocsS)} docs/s`)
     } else {
       $indexDocsS.text(dash)
+    }
+    const $queueDepth = $root.find('[data-home-cluster-info="queue-depth-srch-docs"]')
+    const searchDepth = brokerMetricCurrentValue(view, 'broker_search')
+    const docsDepth = brokerMetricCurrentValue(view, 'broker_documents_upsert')
+    const bulkDepth = brokerMetricCurrentValue(view, 'broker_documents_bulk')
+    if (searchDepth != null && Number.isFinite(searchDepth) && docsDepth != null && Number.isFinite(docsDepth) && bulkDepth != null && Number.isFinite(bulkDepth)) {
+      const combined = docsDepth + bulkDepth
+      const searchText = formatBrokerMsgCell(searchDepth)
+      const docsText = formatBrokerMsgCell(combined)
+      const $searchSpan = $('<span>', { text: searchText })
+      const $docsSpan = $('<span>', { text: docsText })
+      const searchColor = brokerSearchDepthColor(searchDepth)
+      const docsColor = brokerDocsDepthColor(combined)
+      $searchSpan.css('color', searchColor)
+      $docsSpan.css('color', docsColor)
+      $queueDepth.empty().append($searchSpan, document.createTextNode(' | '), $docsSpan)
+    } else {
+      $queueDepth.text(dash)
     }
     const thr = aggregateClusterThroughput(view)
     const $inferMs = $root.find('[data-home-cluster-info="infer-ms"]')
@@ -3359,6 +3664,7 @@ export class HomePanel extends DashboardPanel {
       this.applyClusterTablesAndChartsToDom($root, view)
     } finally {
       this.applyClusterInfoToDom($root, view)
+      this.applyBrokerQueuesTableToDom($root, view)
     }
   }
 
@@ -3366,6 +3672,7 @@ export class HomePanel extends DashboardPanel {
     const $apiPanel = $root.find('[data-home-metrics-tab-panel="api"]')
     const $indexingPanel = $root.find('[data-home-metrics-tab-panel="indexing"]')
     const $encPanel = $root.find('[data-home-metrics-tab-panel="encoder"]')
+    const $brokerPanel = $root.find('[data-home-metrics-tab-panel="broker"]')
     if ($apiPanel.length && !$apiPanel.prop('hidden')) {
       this.refreshApiMetricsChart($root)
     }
@@ -3375,14 +3682,13 @@ export class HomePanel extends DashboardPanel {
     if ($encPanel.length && !$encPanel.prop('hidden')) {
       this.refreshClusterThroughputChart($root)
     }
+    if ($brokerPanel.length && !$brokerPanel.prop('hidden')) {
+      this.refreshBrokerMetricsChart($root)
+    }
   }
 
   private trendResolutionSec(): 60 | 300 {
     return homeChartTrendResolutionSec(this.homeChartHistoryMs)
-  }
-
-  private chartTrendPatchMs(): number {
-    return homeChartTrendPatchMs(this.homeChartHistoryMs, this.trendResolutionSec())
   }
 
   private buildHomeChartHistorySelect(): JQuery<HTMLElement> {
@@ -3408,6 +3714,7 @@ export class HomePanel extends DashboardPanel {
     this.indexingLatencyChart?.resetZoom(mode)
     this.apiMetricsRequestsChart?.resetZoom(mode)
     this.apiMetricsLatenciesChart?.resetZoom(mode)
+    this.brokerMetricsChart?.resetZoom(mode)
   }
 
   private resetHomeChartZoomFor(target: HomeChartZoomResetTarget): void {
@@ -3418,6 +3725,8 @@ export class HomePanel extends DashboardPanel {
       this.indexingLatencyChart?.resetZoom(mode)
     } else if (target === 'api-requests') {
       this.apiMetricsRequestsChart?.resetZoom(mode)
+    } else if (target === 'broker') {
+      this.brokerMetricsChart?.resetZoom(mode)
     } else {
       this.apiMetricsLatenciesChart?.resetZoom(mode)
     }
@@ -3434,14 +3743,13 @@ export class HomePanel extends DashboardPanel {
     this.homeChartHistoryMs = nextMs
     this.syncHomeChartHistorySelects($root)
     this.resetHomeChartZoom()
-    this.apiChartBuckets.clear()
-    this.prevApiMetricsLivePoint = null
-    this.encoderChartBuckets.clear()
-    this.prevClusterThroughputLivePoint = null
-    this.indexingChartBuckets.clear()
-    this.prevIndexingLatencyLivePoint = null
+    this.trendsGeneration += 1
+    this.apiChartTrends.clear()
+    this.encoderChartTrends.clear()
+    this.indexingChartTrends.clear()
+    this.brokerChartTrends.clear()
     const tab = readHomeMetricsTabFromDom($root)
-    if (tab === 'api' || tab === 'encoder' || tab === 'indexing') {
+    if (tab === 'api' || tab === 'encoder' || tab === 'indexing' || tab === 'broker') {
       await this.bootstrapHomeChartTrends(api, $root, tab, this.readyPollGeneration)
     }
     this.refreshVisibleHomeCharts($root)
@@ -3455,41 +3763,28 @@ export class HomePanel extends DashboardPanel {
   ): Promise<void> {
     const resolution = this.trendResolutionSec()
     const { since, until } = trendQueryBounds(resolution, this.homeChartHistoryMs)
+    const trendsGen = this.trendsGeneration
     const keys =
       tab === 'api'
         ? [...API_CHART_TREND_KEYS]
         : tab === 'encoder'
           ? [...ENCODER_CHART_TREND_KEYS]
-          : [...INDEXING_CHART_TREND_KEYS]
+          : tab === 'indexing'
+            ? [...INDEXING_CHART_TREND_KEYS]
+            : [...BROKER_CHART_TREND_KEYS]
     try {
-      const trends = await api.metricsTrends({
-        since,
-        until,
-        resolution,
-        keys,
-      })
-      if (generation !== this.readyPollGeneration) {
+      const trends = await api.metricsTrends({ since, until, resolution, keys })
+      if (generation !== this.readyPollGeneration || trendsGen !== this.trendsGeneration) {
         return
       }
-      const cutoffSec = bucketStartCutoffSec(this.homeChartHistoryMs, Date.now(), resolution)
       if (tab === 'api') {
-        const m = apiMetricTrendsToPointsByBucketStart(trends, resolution)
-        for (const [k, v] of m) {
-          mergeApiMetricsHistoryPointIntoMap(this.apiChartBuckets, k, v)
-        }
-        trimChartBucketMap(this.apiChartBuckets, cutoffSec)
+        this.apiChartTrends = apiMetricTrendsToPointsByBucketStart(trends, resolution)
       } else if (tab === 'encoder') {
-        const m = encoderMetricTrendsToPointsByBucketStart(trends, resolution)
-        for (const [k, v] of m) {
-          this.encoderChartBuckets.set(k, v)
-        }
-        trimChartBucketMap(this.encoderChartBuckets, cutoffSec)
+        this.encoderChartTrends = encoderMetricTrendsToPointsByBucketStart(trends, resolution)
+      } else if (tab === 'indexing') {
+        this.indexingChartTrends = indexMetricTrendsToPointsByBucketStart(trends, resolution)
       } else {
-        const m = indexMetricTrendsToPointsByBucketStart(trends, resolution)
-        for (const [k, v] of m) {
-          this.indexingChartBuckets.set(k, v)
-        }
-        trimChartBucketMap(this.indexingChartBuckets, cutoffSec)
+        this.brokerChartTrends = brokerMetricTrendsToPointsByBucketStart(trends, resolution)
       }
       this.refreshVisibleHomeCharts($root)
     } catch {
@@ -3499,12 +3794,14 @@ export class HomePanel extends DashboardPanel {
   private async ensureChartTrendsForActiveTab(api: AmgixApi, $root: JQuery<HTMLElement>): Promise<void> {
     const generation = this.readyPollGeneration
     const tab = readHomeMetricsTabFromDom($root)
-    if (tab === 'api' && this.apiChartBuckets.size === 0) {
+    if (tab === 'api' && this.apiChartTrends.size === 0) {
       await this.bootstrapHomeChartTrends(api, $root, 'api', generation)
-    } else if (tab === 'encoder' && this.encoderChartBuckets.size === 0) {
+    } else if (tab === 'encoder' && this.encoderChartTrends.size === 0) {
       await this.bootstrapHomeChartTrends(api, $root, 'encoder', generation)
-    } else if (tab === 'indexing' && this.indexingChartBuckets.size === 0) {
+    } else if (tab === 'indexing' && this.indexingChartTrends.size === 0) {
       await this.bootstrapHomeChartTrends(api, $root, 'indexing', generation)
+    } else if (tab === 'broker' && this.brokerChartTrends.size === 0) {
+      await this.bootstrapHomeChartTrends(api, $root, 'broker', generation)
     }
   }
 
@@ -3855,54 +4152,38 @@ export class HomePanel extends DashboardPanel {
     this.metricsChartLiveView = metrics
 
     let trendsOk = true
-    if (tab === 'api' || tab === 'encoder' || tab === 'indexing') {
+    if (tab === 'api' || tab === 'encoder' || tab === 'indexing' || tab === 'broker') {
       trendsOk = false
-      const windowMs = this.trendsFailed ? this.homeChartHistoryMs : this.chartTrendPatchMs()
       const resolution = this.trendResolutionSec()
-      const { since, until } = trendQueryBounds(resolution, windowMs)
+      const { since, until } = trendQueryBounds(resolution, this.homeChartHistoryMs)
+      const trendsGen = this.trendsGeneration
       const keys =
         tab === 'api'
           ? [...API_CHART_TREND_KEYS]
           : tab === 'encoder'
             ? [...ENCODER_CHART_TREND_KEYS]
-            : [...INDEXING_CHART_TREND_KEYS]
+            : tab === 'indexing'
+              ? [...INDEXING_CHART_TREND_KEYS]
+              : [...BROKER_CHART_TREND_KEYS]
       try {
-        const trends = await api.metricsTrends({
-          since,
-          until,
-          resolution,
-          keys,
-        })
-        if (generation !== this.readyPollGeneration) {
+        const trends = await api.metricsTrends({ since, until, resolution, keys })
+        if (generation !== this.readyPollGeneration || trendsGen !== this.trendsGeneration) {
           return
         }
-        this.trendsFailed = false
-        const cutoffSec = bucketStartCutoffSec(this.homeChartHistoryMs, Date.now(), resolution)
         if (tab === 'api') {
-          const patch = apiMetricTrendsToPointsByBucketStart(trends, resolution)
-          for (const [k, v] of patch) {
-            mergeApiMetricsHistoryPointIntoMap(this.apiChartBuckets, k, v)
-          }
-          trimChartBucketMap(this.apiChartBuckets, cutoffSec)
+          this.apiChartTrends = apiMetricTrendsToPointsByBucketStart(trends, resolution)
         } else if (tab === 'encoder') {
-          const patch = encoderMetricTrendsToPointsByBucketStart(trends, resolution)
-          for (const [k, v] of patch) {
-            this.encoderChartBuckets.set(k, v)
-          }
-          trimChartBucketMap(this.encoderChartBuckets, cutoffSec)
+          this.encoderChartTrends = encoderMetricTrendsToPointsByBucketStart(trends, resolution)
+        } else if (tab === 'indexing') {
+          this.indexingChartTrends = indexMetricTrendsToPointsByBucketStart(trends, resolution)
         } else {
-          const patch = indexMetricTrendsToPointsByBucketStart(trends, resolution)
-          for (const [k, v] of patch) {
-            this.indexingChartBuckets.set(k, v)
-          }
-          trimChartBucketMap(this.indexingChartBuckets, cutoffSec)
+          this.brokerChartTrends = brokerMetricTrendsToPointsByBucketStart(trends, resolution)
         }
         trendsOk = true
       } catch {
         if (generation !== this.readyPollGeneration) {
           return
         }
-        this.trendsFailed = true
       }
     }
 
@@ -4053,7 +4334,7 @@ export class HomePanel extends DashboardPanel {
         clusterOverviewPairRow('Encoder Nodes', 'encoder-nodes', { label: 'Search Latency (avg)', key: 'search-ms' }),
         clusterOverviewPairRow('Global RPS', 'api-rps', { label: 'Indexing Throughput (avg)', key: 'index-docs-s' }),
         clusterOverviewPairRow('4xx Errors', 'api-err-4xx', { label: 'Inference Latency (avg)', key: 'infer-ms' }),
-        clusterOverviewPairRow('5xx Errors', 'api-err-5xx', null),
+        clusterOverviewPairRow('5xx Errors', 'api-err-5xx', { label: 'Broker Queues (srch | docs)', key: 'queue-depth-srch-docs' }),
 
       )
       const $clusterInfoTable = $('<table>', {
@@ -4309,11 +4590,24 @@ export class HomePanel extends DashboardPanel {
           tabindex: '-1',
         },
       })
+      const $btnBrokerMetrics = $('<button>', {
+        type: 'button',
+        role: 'tab',
+        class: 'dashboard-home-metrics-tab',
+        id: HOME_METRICS_TAB_BROKER_ID,
+        text: 'Broker Metrics',
+        attr: {
+          'aria-selected': 'false',
+          'aria-controls': HOME_METRICS_PANEL_BROKER_ID,
+          'data-home-metrics-tab': 'broker',
+          tabindex: '-1',
+        },
+      })
       const $metricsTabList = $('<div>', {
         role: 'tablist',
         class: 'dashboard-home-metrics-tablist',
         'aria-label': 'Cluster metrics',
-      }).append($btnApiMetrics, $btnIndexingMetrics, $btnEncoderMetrics)
+      }).append($btnApiMetrics, $btnIndexingMetrics, $btnEncoderMetrics, $btnBrokerMetrics)
 
       const $apiMetricsPanel = $('<div>', {
         class: 'dashboard-home-cluster-tables dashboard-home-metrics-tab-panel',
@@ -4418,17 +4712,87 @@ export class HomePanel extends DashboardPanel {
         },
       }).append($clusterChartSection, $encoderClusterTable, $encoderByModelTable)
 
+      const BROKER_QUEUE_COLSPAN = 3
+      const $brokerChartSection = $('<section>', { class: 'dashboard-home-cluster-metrics' }).append(
+        $('<div>', {
+          class: 'dashboard-home-cluster-chart-inner',
+          attr: { 'data-home-broker-chart-wrap': '' },
+        }).append(
+          $('<div>', {
+            class: 'dashboard-home-cluster-chart-hint-row dashboard-home-cluster-chart-hint-row--with-title',
+          }).append(
+            $('<span>', {
+              class: 'dashboard-home-cluster-chart-hint-spacer',
+              attr: { 'aria-hidden': 'true' },
+            }),
+            $('<span>', {
+              class: 'dashboard-home-cluster-chart-title',
+              text: 'Broker Queue Depth',
+            }),
+            $('<div>', { class: 'dashboard-home-cluster-chart-hint-actions' }).append(
+              this.buildHomeChartHistorySelect(),
+              homeChartZoomResetButton('broker'),
+            ),
+          ),
+          $('<div>', {
+            class: 'dashboard-home-cluster-chart-canvas-wrap',
+            attr: { 'data-home-broker-chart-canvas-wrap': '' },
+          }).append(
+            $('<canvas>', {
+              attr: { 'data-home-broker-metrics-chart': '' },
+              'aria-label': 'Broker queue message count over the selected time range.',
+            }),
+          ),
+          $('<ul>', {
+            class: 'dashboard-home-cluster-chart-legend dashboard-home-cluster-chart-legend--inline',
+            attr: { 'data-home-broker-chart-legend': '' },
+            'aria-label': 'Broker chart series',
+          }),
+        ),
+      )
+      const $brokerQueuesThead = $('<thead>')
+        .append(
+          $('<tr>').append(
+            $('<th>', {
+              class: 'dashboard-home-table-heading',
+              colspan: BROKER_QUEUE_COLSPAN,
+              text: 'Broker Queues',
+            }),
+          ),
+        )
+        .append(
+          $('<tr>', { class: 'dashboard-home-cluster-colhead' }).append(
+            $('<th>', { text: 'Queue' }),
+            $('<th>', { text: 'Message Count' }),
+            $('<th>', { text: 'Description' }),
+          ),
+        )
+      const $brokerQueuesTable = $('<table>', {
+        class: 'dashboard-home-table dashboard-home-cluster-table',
+      }).append($brokerQueuesThead, $('<tbody>', { attr: { 'data-home-broker-queues-tbody': '' } }))
+      const $brokerMetricsPanel = $('<div>', {
+        class: 'dashboard-home-cluster-tables dashboard-home-metrics-tab-panel',
+        id: HOME_METRICS_PANEL_BROKER_ID,
+        role: 'tabpanel',
+        attr: {
+          'data-home-metrics-tab-panel': 'broker',
+          'aria-labelledby': HOME_METRICS_TAB_BROKER_ID,
+        },
+      }).append($brokerChartSection, $brokerQueuesTable)
+
       $indexingMetricsPanel.prop('hidden', true)
       $encoderMetricsPanel.prop('hidden', true)
+      $brokerMetricsPanel.prop('hidden', true)
 
       const $metricsShell = $('<div>', { class: 'dashboard-home-metrics-shell' }).append(
         $metricsTabList,
         $apiMetricsPanel,
         $indexingMetricsPanel,
         $encoderMetricsPanel,
+        $brokerMetricsPanel,
       )
 
-      const metricsTabOrder = ['api', 'indexing', 'encoder'] as const satisfies readonly HomeMetricsTabId[]
+      const metricsTabOrder = ['api', 'indexing', 'encoder', 'broker'] as const satisfies readonly HomeMetricsTabId[]
 
       $btnApiMetrics.on('click', () => {
         window.location.hash = formatDashboardRouteHash('home', 'api')
@@ -4438,6 +4802,9 @@ export class HomePanel extends DashboardPanel {
       })
       $btnEncoderMetrics.on('click', () => {
         window.location.hash = formatDashboardRouteHash('home', 'encoder')
+      })
+      $btnBrokerMetrics.on('click', () => {
+        window.location.hash = formatDashboardRouteHash('home', 'broker')
       })
       $metricsTabList.on('keydown', (e) => {
         const key = e.key
@@ -4450,6 +4817,8 @@ export class HomePanel extends DashboardPanel {
           current = 'api'
         } else if ($btnIndexingMetrics.attr('aria-selected') === 'true') {
           current = 'indexing'
+        } else if ($btnBrokerMetrics.attr('aria-selected') === 'true') {
+          current = 'broker'
         }
         const idx = metricsTabOrder.indexOf(current)
         let nextIdx: number

@@ -720,6 +720,10 @@ body {
   white-space: nowrap;
 }
 
+.dashboard-home-broker-msg-count {
+  text-align: right;
+}
+
 .dashboard-home-cluster-tables {
   margin-top: 1.25rem;
   display: flex;
