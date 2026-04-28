@@ -71,7 +71,7 @@ class EncoderService(EncoderBase):
         await self.bunny_talk.listen(
             routing_key="collection-stats",
             handler=self.update_collection_stats,
-            prefetch_count=1,
+            prefetch_count=10,
             single_active_consumer=True
         )
         await self.bunny_talk.listen(
