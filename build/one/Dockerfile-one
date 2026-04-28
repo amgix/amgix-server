@@ -122,9 +122,12 @@ RUN mkdir -p /etc/rabbitmq && \
     # echo "RABBITMQ_DATA_DIR=/data/rabbitmq" > /etc/rabbitmq/rabbitmq-env.conf && \
     # echo "RABBITMQ_NODENAME=rabbit@localhost" > /etc/rabbitmq/rabbitmq-env.conf && \
 
-# Environment variables for internal connectivity
-ENV AMGIX_DATABASE_URL=qdrant://localhost:6334 \
-    AMGIX_AMQP_URL=amqp://guest:guest@localhost:5672/ \
+# Defaults for embedded Qdrant/RabbitMQ; runtime AMGIX_* compares to these in entrypoint / wait-for-deps
+ENV AMGIX_DEFAULT_DATABASE_URL=qdrant://localhost:6334 \
+    AMGIX_DEFAULT_AMQP_URL=amqp://guest:guest@localhost:5672/
+
+ENV AMGIX_DATABASE_URL="${AMGIX_DEFAULT_DATABASE_URL}" \
+    AMGIX_AMQP_URL="${AMGIX_DEFAULT_AMQP_URL}" \
     AMGIX_LOAD_MODELS=true \
     RABBITMQ_NODENAME=rabbit@localhost \
     RABBITMQ_MNESIA_BASE=/data/rabbitmq \

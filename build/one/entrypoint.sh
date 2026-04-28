@@ -16,11 +16,20 @@ shutdown() {
 # Trap SIGTERM and SIGINT to gracefully shutdown
 trap shutdown SIGTERM SIGINT
 
+if [ "${AMGIX_DATABASE_URL}" != "${AMGIX_DEFAULT_DATABASE_URL}" ]; then
+    echo "[entrypoint] AMGIX_DATABASE_URL != AMGIX_DEFAULT_DATABASE_URL — disabling embedded Qdrant supervisord program"
+    sed -i '/^\[program:qdrant\]/,/^\[program:api\]/ s/^autostart=true$/autostart=false/' /etc/supervisor/conf.d/amgix-one.conf
+fi
+if [ "${AMGIX_AMQP_URL}" != "${AMGIX_DEFAULT_AMQP_URL}" ]; then
+    echo "[entrypoint] AMGIX_AMQP_URL != AMGIX_DEFAULT_AMQP_URL — disabling embedded RabbitMQ supervisord program"
+    sed -i '/^\[program:rabbitmq\]/,/^\[program:qdrant\]/ s/^autostart=true$/autostart=false/' /etc/supervisor/conf.d/amgix-one.conf
+fi
+
 # Fix permissions for mounted volumes (especially when /data is mounted from host)
 # Ensure directories exist and have correct ownership for RabbitMQ
 mkdir -p /data/rabbitmq /data/qdrant
-chown -R rabbitmq:rabbitmq /data/rabbitmq 
-chmod 755 /data/rabbitmq 
+chown -R rabbitmq:rabbitmq /data/rabbitmq
+chmod 755 /data/rabbitmq
 
 # Create named pipe for supervisord output (FIFO doesn't store data, just passes it through)
 mkfifo /tmp/supervisord_output
