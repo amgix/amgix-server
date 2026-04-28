@@ -75,6 +75,11 @@ class EncoderService(EncoderBase):
             single_active_consumer=True
         )
         await self.bunny_talk.listen(
+            routing_key="document-sync",
+            handler=self.document_upsert_sync,
+            prefetch_count=2
+        )
+        await self.bunny_talk.listen(
             routing_key="document-delete-sync",
             handler=self.document_delete_sync,
             prefetch_count=2
@@ -566,6 +571,69 @@ class EncoderService(EncoderBase):
         finally:
             self.index_metrics.record(MetricKey.INDEX_QUEUE_DELETE_JOB_MS, (time.perf_counter_ns() - t0) / 1_000_000.0, n=1)
 
+    async def document_upsert_sync(self, collection_name: str, document: Document) -> None:
+        """Upsert a document synchronously."""
+
+        self.bunny_talk.log_trace_context(f"EncoderService: document_id {document.id}")
+
+        # Retrieve collection config and vectorize
+        collection_config = await self.database.get_collection_info_internal(collection_name)
+        if not collection_config:
+            error_msg = f"Collection configuration not found"
+            raise AmgixNotFound(error_msg)
+        
+        # Use distributed locking to prevent race conditions in multi-encoder setup
+        lock_name = f"doc-{self.database._string_to_uuid(f"{collection_name}-{document.id}")}"
+        async with self.lock_client.acquire(lock_name, timeout=RPC_TIMEOUT_SECONDS):
+            # Check if document already exists (now safely locked)
+            existing_document = (await self.database.get_documents(collection_name, [document.id], suppress_not_found=True))[0]
+            
+            if existing_document is not None:
+                # Compare timestamps - only upsert if new document is newer
+                if document.timestamp <= existing_document.timestamp:
+                    # Skip upsert - existing document is newer or same timestamp
+                    raise ValueError(f"Document {document.id} already exists with timestamp {existing_document.timestamp} >= new timestamp {document.timestamp}")
+            
+            stats = await self.database.get_collection_stats(collection_name)
+            avgdls = stats.get("avgdls", {})
+            
+            for config in collection_config.vectors:
+                if config.type in VectorType.custom_tokenization():
+                    for field in config.index_fields:
+                        field_vector_name = f"{field}_{config.name}"
+                        if field_vector_name not in avgdls:
+                            avgdls[field_vector_name] = 50.0
+            
+            avgdl_dict = avgdls
+            
+            # Generate vectors synchronously
+            result = await Vectorizer.vectorize_documents(self.router, [document], collection_config.vectors, avgdl_dict=avgdl_dict)
+            doc_with_vectors = result[0]
+            
+            is_new = existing_document is None
+            await self.database.add_documents(collection_name, [doc_with_vectors], is_new=is_new, store_content=collection_config.store_content, collection_config=collection_config, lock_client=self.lock_client)
+            
+            updates: Dict[str, Dict[str, int]] = {}
+            for field_vector_name, token_length in doc_with_vectors.token_lengths.items():
+                if field_vector_name not in updates:
+                    updates[field_vector_name] = {
+                        "new_doc_count": 1 if is_new else 0,
+                        "new_sum_token_lengths": 0,
+                        "update_doc_count": 0 if is_new else 1,
+                        "update_sum_token_lengths": 0,
+                        "old_sum_token_lengths": 0
+                    }
+                
+                if is_new:
+                    updates[field_vector_name]["new_sum_token_lengths"] += token_length
+                else:
+                    updates[field_vector_name]["update_sum_token_lengths"] += token_length
+                    if existing_document and field_vector_name in existing_document.token_lengths:
+                        updates[field_vector_name]["old_sum_token_lengths"] += existing_document.token_lengths[field_vector_name]
+            
+            if updates:
+                await self.bunny_talk.talk("collection-stats", collection_name=collection_name, updates=updates)
+
 
 class RpcService(EncoderBase):
     """Service for handling RPC calls."""
@@ -574,16 +642,11 @@ class RpcService(EncoderBase):
         await self.bunny_talk.listen(
             routing_key="search",
             handler=self.search,
-            prefetch_count=2
+            prefetch_count=10
         )
         await self.bunny_talk.listen(
             routing_key="validate-models",
             handler=self.validate_models
-        )
-        await self.bunny_talk.listen(
-            routing_key="document-sync",
-            handler=self.document_upsert_sync,
-            prefetch_count=2
         )
         await self.bunny_talk.listen(
             routing_key="ping-rpc",
@@ -690,69 +753,6 @@ class RpcService(EncoderBase):
         except Exception as e:
             # Return error information for debugging
             return ModelValidationResponse(error=str(e))
-
-    async def document_upsert_sync(self, collection_name: str, document: Document) -> None:
-        """Upsert a document synchronously."""
-
-        self.bunny_talk.log_trace_context(f"RpcService: document_id {document.id}")
-
-        # Retrieve collection config and vectorize
-        collection_config = await self.database.get_collection_info_internal(collection_name)
-        if not collection_config:
-            error_msg = f"Collection configuration not found"
-            raise AmgixNotFound(error_msg)
-        
-        # Use distributed locking to prevent race conditions in multi-encoder setup
-        lock_name = f"doc-{self.database._string_to_uuid(f"{collection_name}-{document.id}")}"
-        async with self.lock_client.acquire(lock_name, timeout=RPC_TIMEOUT_SECONDS):
-            # Check if document already exists (now safely locked)
-            existing_document = (await self.database.get_documents(collection_name, [document.id], suppress_not_found=True))[0]
-            
-            if existing_document is not None:
-                # Compare timestamps - only upsert if new document is newer
-                if document.timestamp <= existing_document.timestamp:
-                    # Skip upsert - existing document is newer or same timestamp
-                    raise ValueError(f"Document {document.id} already exists with timestamp {existing_document.timestamp} >= new timestamp {document.timestamp}")
-            
-            stats = await self.database.get_collection_stats(collection_name)
-            avgdls = stats.get("avgdls", {})
-            
-            for config in collection_config.vectors:
-                if config.type in VectorType.custom_tokenization():
-                    for field in config.index_fields:
-                        field_vector_name = f"{field}_{config.name}"
-                        if field_vector_name not in avgdls:
-                            avgdls[field_vector_name] = 50.0
-            
-            avgdl_dict = avgdls
-            
-            # Generate vectors synchronously
-            result = await Vectorizer.vectorize_documents(self.router, [document], collection_config.vectors, avgdl_dict=avgdl_dict)
-            doc_with_vectors = result[0]
-            
-            is_new = existing_document is None
-            await self.database.add_documents(collection_name, [doc_with_vectors], is_new=is_new, store_content=collection_config.store_content, collection_config=collection_config, lock_client=self.lock_client)
-            
-            updates: Dict[str, Dict[str, int]] = {}
-            for field_vector_name, token_length in doc_with_vectors.token_lengths.items():
-                if field_vector_name not in updates:
-                    updates[field_vector_name] = {
-                        "new_doc_count": 1 if is_new else 0,
-                        "new_sum_token_lengths": 0,
-                        "update_doc_count": 0 if is_new else 1,
-                        "update_sum_token_lengths": 0,
-                        "old_sum_token_lengths": 0
-                    }
-                
-                if is_new:
-                    updates[field_vector_name]["new_sum_token_lengths"] += token_length
-                else:
-                    updates[field_vector_name]["update_sum_token_lengths"] += token_length
-                    if existing_document and field_vector_name in existing_document.token_lengths:
-                        updates[field_vector_name]["old_sum_token_lengths"] += existing_document.token_lengths[field_vector_name]
-            
-            if updates:
-                await self.bunny_talk.talk("collection-stats", collection_name=collection_name, updates=updates)
 
 
 async def main():
