@@ -414,15 +414,18 @@ class BunnyTalk:
 
         return queue, consumer_tag
 
-    async def get_queue_consumers(self, queue_name: str) -> int:
+    async def get_queue_info(self, queue_name: str, timeout: float = 2.0) -> tuple[int | None, int | None]:
         """
-        Check how many consumers a queue has using passive declaration.
+        Get queue consumer and message counts using passive declaration.
         
         Args:
             queue_name: Name of the queue to check
+            timeout: Passive declare timeout in seconds
             
         Returns:
-            Number of consumers, or 0 if queue doesn't exist
+            Tuple of (consumer_count, message_count).
+            Returns (None, None) when queue doesn't exist.
+            Returns (None, None) when queue state could not be determined due to transient channel/RPC failures.
         """
         try:
             # Use dedicated passive_check_channel (passive=True closes channel on error)
@@ -431,20 +434,20 @@ class BunnyTalk:
             queue = await self.passive_check_channel.channel.queue_declare(
                 f"{APP_PREFIX}-{queue_name}",
                 passive=True,
-                timeout=2
+                timeout=timeout
             )
-            # Get queue declaration result which contains consumer_count
-            return queue.consumer_count
+            # Queue declaration result contains both consumer_count and message_count
+            return queue.consumer_count, queue.message_count
         except ChannelNotFoundEntity:
             # Queue doesn't exist (404 NOT_FOUND)
-            return 0
+            return None, None
         except Exception as e:
             # aio_pika/aiormq sometimes raises "Channel closed by RPC timeout" or other state errors
             # instead of ChannelNotFoundEntity due to race conditions when the broker closes the channel on 404.
             error_str = str(e).casefold()
             if "channel closed" in error_str or "not_found" in error_str or "rpc timeout" in error_str:
-                self.logger.debug(f"Queue check failed for {queue_name} (likely missing): {e}")
-                return 0
+                self.logger.debug(f"Queue check failed for {queue_name}: {e}")
+                return None, None
             raise
 
     async def _on_rpc_reply(self, message: Message):

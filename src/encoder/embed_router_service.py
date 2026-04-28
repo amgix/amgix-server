@@ -62,6 +62,12 @@ NODE_META_LAST_USED_AT = "last_used_at"
 METRICS_LOOP_INTERVAL_SECONDS = 5
 METRICS_NODE_EXPIRY_SECONDS = 30
 TARGET_AVAILABLITY_PCT = 5 # percentage of total capacity
+BROKER_QUEUE_BY_METRIC = {
+    MetricKey.BROKER_COLLECTION_STATS: "collection-stats",
+    MetricKey.BROKER_DOCUMENTS_UPSERT: "documents",
+    MetricKey.BROKER_DOCUMENTS_BULK: "documents-bulk",
+    MetricKey.BROKER_SEARCH: "search",
+}
 
 def _parse_load_models(value: str) -> bool:
     return value.lower() in ("true", "1", "yes")
@@ -212,6 +218,7 @@ class EmbedRouterService(EncoderBase):
         )
         self._rebalance_task: Optional[asyncio.Task] = None
         self._metrics_meta_task: Optional[asyncio.Task] = None
+        self._broker_metrics_task: Optional[asyncio.Task] = None
 
         self.model_locks: defaultdict[str, RWLock] = defaultdict(RWLock)
         self.model_load_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -250,6 +257,7 @@ class EmbedRouterService(EncoderBase):
         self.metrics.start_leader_loop()
         self._rebalance_task = asyncio.create_task(self._rebalance_loop())
         self._metrics_meta_task = asyncio.create_task(self._metrics_meta_loop())
+        self._broker_metrics_task = asyncio.create_task(self._broker_metrics_loop())
 
     async def route(
         self,
@@ -290,7 +298,8 @@ class EmbedRouterService(EncoderBase):
                                 # Check if queue is known (has active consumers)
                                 if not self.known_queues.get(queue_name):
                                     # Not in cache, check if queue has consumers before sending RPC
-                                    consumer_count = await self.bunny_talk.get_queue_consumers(queue_name)
+                                    consumer_count, _ = await self.bunny_talk.get_queue_info(queue_name)
+                                    consumer_count = consumer_count or 0
                                     self.logger.debug(f"Router: Queue {queue_name} has {consumer_count} consumers")
                                     if consumer_count == 0:
                                         # Queue exists but has no consumers (stale queue or doesn't exist)
@@ -515,7 +524,8 @@ class EmbedRouterService(EncoderBase):
                     # Check if queue is known (has active consumers)
                     if not self.known_queues.get(queue_name):
                         # Not in cache, check if queue has consumers before sending RPC
-                        consumer_count = await self.bunny_talk.get_queue_consumers(queue_name)
+                        consumer_count, _ = await self.bunny_talk.get_queue_info(queue_name)
+                        consumer_count = consumer_count or 0
                         self.logger.debug(f"Router: Queue {queue_name} has {consumer_count} consumers")
                         if consumer_count == 0:
                             # Queue exists but has no consumers (stale queue or doesn't exist)
@@ -663,6 +673,21 @@ class EmbedRouterService(EncoderBase):
     async def _metrics_meta_loop(self) -> None:
         while True:
             self.metrics.publish_meta(await self._metrics_meta())
+            await asyncio.sleep(METRICS_LOOP_INTERVAL_SECONDS)
+
+    async def _broker_metrics_loop(self) -> None:
+        while True:
+            if self.metrics.is_leader():
+                for metric_key, queue_name in BROKER_QUEUE_BY_METRIC.items():
+                    try:
+                        _, message_count = await self.bunny_talk.get_queue_info(queue_name, timeout=1.0)
+                        if message_count is None:
+                            continue
+                        self.metrics.record(metric_key, float(message_count), n=1)
+                    except Exception as e:
+                        self.logger.debug(
+                            f"Router: Failed to collect broker queue metric {metric_key} for {queue_name}: {e}"
+                        )
             await asyncio.sleep(METRICS_LOOP_INTERVAL_SECONDS)
 
     async def _metrics_meta(self) -> Dict[str, Any]:

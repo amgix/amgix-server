@@ -42,6 +42,10 @@ class MetricKey(StrEnum):
     INDEX_BULK_FAILED = "index_bulk_failed"
     INDEX_BULK_REQUEUED = "index_bulk_requeued"
     INDEX_BULK_JOB_MS = "index_bulk_job_ms"
+    BROKER_COLLECTION_STATS = "broker_collection_stats"
+    BROKER_DOCUMENTS_UPSERT = "broker_documents_upsert"
+    BROKER_DOCUMENTS_BULK = "broker_documents_bulk"
+    BROKER_SEARCH = "broker_search"
 
 
 @dataclass(frozen=True)
@@ -198,5 +202,21 @@ METRIC_DEFINITIONS: dict[MetricKey, MetricDefinition] = {
     MetricKey.INDEX_BULK_JOB_MS: MetricDefinition(
         unit="ms",
         description="Sum of batch durations in milliseconds for bulk indexing.",
+    ),
+    MetricKey.BROKER_COLLECTION_STATS: MetricDefinition(
+        unit="msg",
+        description="Messages waiting in the collection stats queue.",
+    ),
+    MetricKey.BROKER_DOCUMENTS_UPSERT: MetricDefinition(
+        unit="msg",
+        description="Messages waiting in the documents upsert queue.",
+    ),
+    MetricKey.BROKER_DOCUMENTS_BULK: MetricDefinition(
+        unit="msg",
+        description="Messages waiting in the documents bulk queue.",
+    ),
+    MetricKey.BROKER_SEARCH: MetricDefinition(
+        unit="msg",
+        description="Messages waiting in the search queue.",
     ),
 }
