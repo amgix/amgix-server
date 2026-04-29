@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uvloop
 import asyncio
 import argparse
 import logging
@@ -61,12 +62,12 @@ class EncoderService(EncoderBase):
         await self.bunny_talk.listen(
             routing_key="documents",
             handler=self.document_upsert,
-            prefetch_count=4
+            prefetch_count=5
         )
         await self.bunny_talk.listen(
             routing_key="documents-bulk",
             handler=self.document_upsert_bulk,
-            prefetch_count=1
+            prefetch_count=2
         )
         await self.bunny_talk.listen(
             routing_key="collection-stats",
@@ -798,6 +799,6 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    uvloop.run(main())
 
 
