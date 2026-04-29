@@ -98,8 +98,8 @@ RUN ARCH=$(dpkg --print-architecture) && \
 # Copy application files
 COPY src /app/src
 COPY --from=dashboard-builder /workspace/dashboard/dist/ /app/src/api/dashboard/
-COPY build/run-api.sh build/run-encoder.sh build/one/wait-for-deps.sh build/one/log-wrapper.sh build/one/entrypoint.sh /app/
-RUN chmod +x /app/run-api.sh /app/run-encoder.sh /app/wait-for-deps.sh /app/log-wrapper.sh /app/entrypoint.sh
+COPY build/run-api.sh build/run-encoder.sh build/one/wait-for-deps.sh build/one/prefix-log-exec.sh build/one/entrypoint.sh /app/
+RUN chmod +x /app/run-api.sh /app/run-encoder.sh /app/wait-for-deps.sh /app/prefix-log-exec.sh /app/entrypoint.sh
 
 # Copy supervisord configuration and Qdrant config
 COPY build/one/supervisord-one.conf /etc/supervisor/conf.d/amgix-one.conf

@@ -7,7 +7,7 @@ LOG_LEVEL=$(echo "${AMGIX_LOG_LEVEL:-info}" | tr '[:upper:]' '[:lower:]')
 #   --timeout 120 --graceful-timeout 30 --keep-alive 5 \
 #   --log-level "${LOG_LEVEL}"
 
-uvicorn src.api.main:app \
+exec uvicorn src.api.main:app \
     --host 0.0.0.0 \
     --port 8234 \
     --loop uvloop \
