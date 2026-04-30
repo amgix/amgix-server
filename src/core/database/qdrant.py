@@ -1247,7 +1247,7 @@ class QdrantDatabase(DatabaseBase):
         until: float,
         keys: Optional[List[str]] = None,
     ) -> List[MetricsBucket]:
-        must = [
+        base_must = [
             rest.FieldCondition(
                 key="bucket_seconds",
                 match=rest.MatchValue(value=bucket_seconds),
@@ -1258,26 +1258,42 @@ class QdrantDatabase(DatabaseBase):
             ),
         ]
         if keys:
-            must.append(rest.FieldCondition(
+            base_must.append(rest.FieldCondition(
                 key="key",
                 match=rest.MatchAny(any=keys),
             ))
 
-        scroll_filter = rest.Filter(must=must)
-        order_by = rest.OrderBy(key="bucket_start", direction=rest.Direction.ASC)
-
+        # When order_by is used, Qdrant never returns next_page_offset.
+        # Pagination must use start_from on the order_by field combined with
+        # a must_not: has_id filter to skip already-seen points at the boundary.
         results: List[MetricsBucket] = []
-        offset = None
+        start_from: Optional[float] = None
+        seen_ids_at_boundary: List[rest.ExtendedPointId] = []
+
         while True:
-            points, next_offset = await self.client.scroll(
+            must_not = []
+            if seen_ids_at_boundary:
+                must_not.append(rest.HasIdCondition(has_id=seen_ids_at_boundary))
+
+            scroll_filter = rest.Filter(must=base_must, must_not=must_not or None)
+            order_by = rest.OrderBy(
+                key="bucket_start",
+                direction=rest.Direction.ASC,
+                start_from=start_from,
+            )
+
+            points, _ = await self.client.scroll(
                 collection_name=self.metrics_collection,
                 scroll_filter=scroll_filter,
                 order_by=order_by,
-                offset=offset,
                 limit=1000,
                 with_payload=True,
                 with_vectors=False,
             )
+
+            if not points:
+                break
+
             for point in points:
                 p = point.payload
                 results.append(MetricsBucket(
@@ -1288,9 +1304,13 @@ class QdrantDatabase(DatabaseBase):
                     value=p["value"],
                     n=p.get("n"),
                 ))
-            if next_offset is None:
+
+            if len(points) < 1000:
                 break
-            offset = next_offset
+
+            last_bucket_start = points[-1].payload["bucket_start"]
+            seen_ids_at_boundary = [p.id for p in points if p.payload["bucket_start"] == last_bucket_start]
+            start_from = last_bucket_start
 
         return results
 
