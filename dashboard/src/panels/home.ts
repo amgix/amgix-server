@@ -1034,11 +1034,11 @@ function latencyColorRgb(ms: number): string {
 }
 
 function brokerSearchDepthColor(depth: number): string {
-  if (!Number.isFinite(depth) || depth <= 10) {
+  if (!Number.isFinite(depth) || depth <= 20) {
     return ''
   }
-  if (depth <= 50) {
-    const t = (depth - 10) / 40
+  if (depth <= 100) {
+    const t = (depth - 20) / 80
     const g = Math.round(170 * (1 - t))
     return `rgb(220, ${g}, 0)`
   }
@@ -1046,11 +1046,11 @@ function brokerSearchDepthColor(depth: number): string {
 }
 
 function brokerDocsDepthColor(depth: number): string {
-  if (!Number.isFinite(depth) || depth <= 100) {
+  if (!Number.isFinite(depth) || depth <= 500) {
     return ''
   }
-  if (depth <= 500) {
-    const t = (depth - 100) / 400
+  if (depth <= 1500) {
+    const t = (depth - 500) / 1000
     const g = Math.round(170 * (1 - t))
     return `rgb(220, ${g}, 0)`
   }
