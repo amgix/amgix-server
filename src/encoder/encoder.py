@@ -8,7 +8,8 @@ import os
 import signal
 import time
 import random
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
+from collections import deque
 
 from src.core.vector.vectorizer import Vectorizer
 from src.core.common.constants import APP_NAME, APP_PREFIX, RPC_TIMEOUT_SECONDS
@@ -22,7 +23,7 @@ from src.core.common.metrics_definitions import MetricKey
 from src.core.common.metrics_service import MetricsService
 from src.core.common import VectorType, QueuedDocumentStatus, QueueOperationType, MAX_QUEUE_DELIVERY_ATTEMPTS, MAX_DB_RETRIES
 from src.core.models.document import Document, SearchResult, QueueDocument
-from src.core.common.bunny_talk import BunnyTalk
+from src.core.common.bunny_talk import BunnyTalk, trace_chain_var, trace_id_var
 from src.core.common.lock_manager import LockService, LockClient
 from src.core.database.base import AmgixNotFound
 from src.core.database.common import validate_metadata_filter
@@ -41,9 +42,15 @@ AMGIX_ENCODER_ROLE = os.getenv("AMGIX_ENCODER_ROLE", "all")
 # Cap the backoff sleep to avoid excessively long sleeps
 _MAX_RETRY_SLEEP_SECONDS = 20.0
 
+_MICRO_BATCH_MAX_SIZE = 10
+_MICRO_BATCH_FLUSH_INTERVAL = 0.25  # seconds
+
 class VectorizationException(Exception):
     """Exception raised when vectorization fails."""
     pass
+
+
+
 
 class EncoderService(EncoderBase):
     def __init__(self, logger, database, bunny_talk, router=None, lock_client=None):
@@ -57,12 +64,16 @@ class EncoderService(EncoderBase):
             windows=[30, 60],
             database=database,
         )
+        # collection_name -> deque of (queue_id, try_count, Future)
+        self._pending: Dict[str, deque] = {}
+        self._flush_task: asyncio.Task = None
     
     async def startup(self):
+        self._flush_task = asyncio.create_task(self._flush_loop())
         await self.bunny_talk.listen(
             routing_key="documents",
             handler=self.document_upsert,
-            prefetch_count=5
+            prefetch_count=30
         )
         await self.bunny_talk.listen(
             routing_key="documents-bulk",
@@ -95,210 +106,134 @@ class EncoderService(EncoderBase):
     async def ping(self) -> bool:
         return True
 
-    async def document_upsert(self, queue_id: str) -> None:
-        try_count = 0  # Initialize try_count outside try/except
-        t0 = time.perf_counter_ns()
-
+    async def document_upsert(self, queue_id: str, collection_name: str) -> None:
+        try_count = 0
         self.bunny_talk.log_trace_context(f"EncoderService: queue_id {queue_id}")
 
         try:
-            # Get the document from the queue
             try:
                 queue_docs = await self.database.get_from_queue([queue_id])
             except AmgixNotFound as e:
                 self.logger.error(str(e))
                 return
             queue_doc = queue_docs[0]
-            document = queue_doc.document
-            collection_name = queue_doc.collection_name
-            doc_id = queue_doc.doc_id
-            try_count = queue_doc.try_count  # Set try_count from queue document
+            try_count = queue_doc.try_count
 
             if queue_doc.op_type == QueueOperationType.DELETE:
-                await self.document_delete_sync(collection_name, doc_id, queue_doc.doc_timestamp)
+                await self.document_delete_sync(collection_name, queue_doc.doc_id, queue_doc.doc_timestamp)
                 try:
                     await self.database.delete_from_queue([queue_id])
                 except Exception as queue_error:
                     self.logger.error(f"Failed to delete queue entry {queue_id} after delete: {str(queue_error)}")
                 return
 
-            # Retrieve collection config (cached) and vectorize
-            collection_config, from_cache = await EncoderBase.get_collection_info_cached(self.database, collection_name)
-            if not collection_config:
-                error_msg = f"Collection configuration not found for {get_user_collection_name(collection_name)}"
-                self.logger.error(error_msg)
-                new_try_count = try_count + 1
-                try:
-                    await self.database.update_queue_status([queue_id], QueuedDocumentStatus.FAILED, new_try_count, error_msg)
-                except Exception as queue_error:
-                    self.logger.error(f"Failed to update queue status for queue entry {queue_id}: {str(queue_error)}")
-                return
-            
-            # CRITICAL: Verify collection_id matches to prevent processing against changed collection config
-            if collection_config.collection_id != queue_doc.collection_id:
-                # If config came from cache, invalidate and retry once
-                if from_cache:
-                    self.logger.warning(
-                        f"Collection id mismatch for {collection_name} (queued {queue_doc.collection_id} vs cached {collection_config.collection_id}); invalidating cache and refetching."
-                    )
-                    EncoderBase.invalidate_collection_cache(collection_name)
-                    collection_config, _ = await EncoderBase.get_collection_info_cached(self.database, collection_name)
-                
-                # Re-check after potential refresh
-                error_msg = None
-                if not collection_config:
-                    error_msg = f"Collection configuration not found for {collection_name}"
-                elif collection_config.collection_id != queue_doc.collection_id:
-                    error_msg = (
-                        f"Collection configuration changed during processing. Document was queued for collection_id {queue_doc.collection_id}, "
-                        f"but current collection has collection_id {collection_config.collection_id}. Please re-upload the document."
-                    )
-                
-                if error_msg:
-                    self.logger.error(error_msg)
-                    new_try_count = try_count + 1
-                    try:
-                        await self.database.update_queue_status([queue_id], QueuedDocumentStatus.FAILED, new_try_count, error_msg)
-                    except Exception as queue_error:
-                        self.logger.error(f"Failed to update queue status for queue entry {queue_id}: {str(queue_error)}")
-                    return
+            future: asyncio.Future = asyncio.get_event_loop().create_future()
+            if collection_name not in self._pending:
+                self._pending[collection_name] = deque()
+            self._pending[collection_name].append((queue_doc, future))
 
-            # Use distributed locking to prevent race conditions in multi-encoder setup
-            lock_name = f"doc-{self.database._string_to_uuid(f"{collection_name}-{doc_id}")}"
-            async with self.lock_client.acquire(lock_name, timeout=5.0):
-                # Verify queue entry still exists — a concurrent delete may have drained it
-                if not await self.database.get_from_queue([queue_id], suppress_not_found=True):
-                    self.logger.info(f"Queue entry {queue_id} already removed (concurrent delete), skipping upsert")
-                    return
+            if len(self._pending[collection_name]) >= _MICRO_BATCH_MAX_SIZE:
+                await self._flush_collection(collection_name)
 
-                # Check if document already exists (now safely locked)
-                existing_document = (await self.database.get_documents(collection_name, [doc_id], suppress_not_found=True))[0]
-                
-                if existing_document is not None:
-                    # Compare timestamps - only upsert if new document is newer
-                    if document.timestamp <= existing_document.timestamp:
-                        # Skip upsert - existing document is newer or same timestamp
-                        self.logger.info(f"Skipping upsert for document {doc_id}: existing timestamp {existing_document.timestamp} >= new timestamp {document.timestamp}")
-                        # Delete from queue since processing is complete
-                        try:
-                            await self.database.delete_from_queue([queue_id])
-                        except Exception as queue_error:
-                            self.logger.error(f"Failed to delete queue entry {queue_id} after successful processing: {str(queue_error)}")
-                        self.index_metrics.record(MetricKey.INDEX_QUEUE_DOCS_SKIPPED_STALE)
-                        return
-                
-                try:
-                    stats = await self.database.get_collection_stats(collection_name)
-                    avgdls = stats.get("avgdls", {})
-                    
-                    for config in collection_config.vectors:
-                        if config.type in VectorType.custom_tokenization():
-                            for field in config.index_fields:
-                                field_vector_name = f"{field}_{config.name}"
-                                if field_vector_name not in avgdls:
-                                    avgdls[field_vector_name] = 50.0
-                    
-                    avgdl_dict = avgdls
-                    
-                    # Generate vectors synchronously
-                    result = await Vectorizer.vectorize_documents(self.router, [document], collection_config.vectors, avgdl_dict=avgdl_dict)
-                    doc_with_vectors = result[0]
-                except Exception as e:
-                    # Re-raise as VectorizationException to distinguish from database errors
-                    raise VectorizationException(f"Vectorization failed: {str(e)}") from e
-                
-                is_new = existing_document is None
-                await self.database.add_documents(collection_name, [doc_with_vectors], is_new=is_new, store_content=collection_config.store_content, collection_config=collection_config, lock_client=self.lock_client)
-                
-                updates: Dict[str, Dict[str, int]] = {}
-                for field_vector_name, token_length in doc_with_vectors.token_lengths.items():
-                    if field_vector_name not in updates:
-                        updates[field_vector_name] = {
-                            "new_doc_count": 1 if is_new else 0,
-                            "new_sum_token_lengths": 0,
-                            "update_doc_count": 0 if is_new else 1,
-                            "update_sum_token_lengths": 0,
-                            "old_sum_token_lengths": 0
-                        }
-                    
-                    if is_new:
-                        updates[field_vector_name]["new_sum_token_lengths"] += token_length
-                    else:
-                        updates[field_vector_name]["update_sum_token_lengths"] += token_length
-                        if existing_document and field_vector_name in existing_document.token_lengths:
-                            updates[field_vector_name]["old_sum_token_lengths"] += existing_document.token_lengths[field_vector_name]
-                
-                if is_new:
-                    self.index_metrics.record(MetricKey.INDEX_QUEUE_DOCS_NEW)
-                else:
-                    self.index_metrics.record(MetricKey.INDEX_QUEUE_DOCS_UPDATED)
+            await future
 
-                if updates:
-                    await self.bunny_talk.talk("collection-stats", collection_name=collection_name, updates=updates)
-            
-            # Processing successful - delete from queue
-            try:
-                await self.database.delete_from_queue([queue_id])
-            except Exception as queue_error:
-                self.logger.error(f"Failed to delete queue entry {queue_id} after successful processing: {str(queue_error)}")
-            # self.logger.info(f"Successfully processed document {doc_id} for collection {collection_name}")
-            
         except Exception as e:
-            # Log the full error for debugging
             self.logger.error(f"Failed to process queue entry {queue_id}: {str(e)}")
-            
-            # Update queue status with error message (no stack trace)
-            error_msg = str(e)
             new_try_count = try_count + 1
-            
-            # Validation errors (ValueError) should fail immediately - no retries
             if isinstance(e, ValueError):
                 status = QueuedDocumentStatus.FAILED
             elif isinstance(e, VectorizationException):
-                # Vectorization error: cap by MAX_QUEUE_DELIVERY_ATTEMPTS
                 status = (
                     QueuedDocumentStatus.REQUEUED
                     if new_try_count < MAX_QUEUE_DELIVERY_ATTEMPTS
                     else QueuedDocumentStatus.FAILED
                 )
             else:
-                # Non-vectorization error: retry until age cap
                 status = (
                     QueuedDocumentStatus.REQUEUED
                     if new_try_count < MAX_DB_RETRIES
                     else QueuedDocumentStatus.FAILED
                 )
-                
             try:
-                await self.database.update_queue_status([queue_id], status, new_try_count, error_msg)
+                await self.database.update_queue_status([(queue_id, new_try_count)], status, str(e))
                 if status == QueuedDocumentStatus.FAILED:
-                        self.index_metrics.record(MetricKey.INDEX_QUEUE_FAILED)
+                    self.index_metrics.record(MetricKey.INDEX_QUEUE_FAILED)
                 elif status == QueuedDocumentStatus.REQUEUED:
-                        self.index_metrics.record(MetricKey.INDEX_QUEUE_REQUEUED)
+                    self.index_metrics.record(MetricKey.INDEX_QUEUE_REQUEUED)
             except Exception as queue_error:
                 self.logger.error(f"Failed to update queue status for queue entry {queue_id}: {str(queue_error)}")
-
             if status == QueuedDocumentStatus.REQUEUED:
                 delay = min(2 * new_try_count + random.uniform(0.1, 1.5), _MAX_RETRY_SLEEP_SECONDS)
                 await asyncio.sleep(delay)
                 raise e
+
+    async def _flush_loop(self) -> None:
+        while True:
+            await asyncio.sleep(_MICRO_BATCH_FLUSH_INTERVAL)
+            trace_id_var.set(None)
+            trace_chain_var.set([])
+            for collection_name in list(self._pending.keys()):
+                if self._pending.get(collection_name):
+                    await self._flush_collection(collection_name)
+
+    async def _flush_collection(self, collection_name: str) -> None:
+        q = self._pending.get(collection_name)
+        if not q:
+            return
+        batch: List[Tuple] = []
+        while q and len(batch) < _MICRO_BATCH_MAX_SIZE:
+            batch.append(q.popleft())
+        if not q:
+            del self._pending[collection_name]
+
+        queue_docs = [item[0] for item in batch]
+        futures = [item[1] for item in batch]
+        t0 = time.perf_counter_ns()
+
+        try:
+            await self._document_upsert_bulk_internal(queue_docs, is_micro_batch=True)
+            for f in futures:
+                if not f.done():
+                    f.set_result(None)
+        except Exception as e:
+            for f in futures:
+                if not f.done():
+                    f.set_exception(e)
         finally:
-            self.index_metrics.record(MetricKey.INDEX_QUEUE_JOB_MS, (time.perf_counter_ns() - t0) / 1_000_000.0, n=1)
+            n = len(batch)
+            elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+            self.index_metrics.record(MetricKey.INDEX_QUEUE_JOB_MS, elapsed_ms / n, n=n)
+
+    async def shutdown(self) -> None:
+        if self._flush_task and not self._flush_task.done():
+            self._flush_task.cancel()
+            try:
+                await self._flush_task
+            except asyncio.CancelledError:
+                pass
+        for q in self._pending.values():
+            for _queue_doc, future in q:
+                if not future.done():
+                    future.cancel()
+        self._pending.clear()
 
     async def document_upsert_bulk(self, queue_ids: List[str]) -> None:
-        if not queue_ids:
+        try:
+            queue_docs = await self.database.get_from_queue(queue_ids)
+        except AmgixNotFound as e:
+            self.logger.error(str(e))
+            return
+        await self._document_upsert_bulk_internal(queue_docs)
+
+    async def _document_upsert_bulk_internal(self, queue_docs: List[QueueDocument], is_micro_batch: bool = False) -> None:
+        if not queue_docs:
             return
 
-        self.bunny_talk.log_trace_context(f"EncoderService: bulk processing {len(queue_ids)} queue_ids")
+        queue_ids = [qd.queue_id for qd in queue_docs]
+        self.bunny_talk.log_trace_context(f"EncoderService: bulk processing {len(queue_docs)} queue_ids")
 
         t0 = time.perf_counter_ns()
         try:
-            try:
-                queue_docs = await self.database.get_from_queue(queue_ids)
-            except AmgixNotFound as e:
-                self.logger.error(str(e))
-                return
-
             collection_name = queue_docs[0].collection_name
 
             try:
@@ -306,9 +241,8 @@ class EncoderService(EncoderBase):
                 if not collection_config:
                     error_msg = f"Collection configuration not found for {get_user_collection_name(collection_name)}"
                     self.logger.error(error_msg)
-                    new_try_count = queue_docs[0].try_count + 1
                     try:
-                        await self.database.update_queue_status(queue_ids, QueuedDocumentStatus.FAILED, new_try_count, error_msg)
+                        await self.database.update_queue_status([(qd.queue_id, qd.try_count + 1) for qd in queue_docs], QueuedDocumentStatus.FAILED, error_msg)
                     except Exception as queue_error:
                         self.logger.error(f"Failed to update queue status: {str(queue_error)}")
                     return
@@ -323,9 +257,8 @@ class EncoderService(EncoderBase):
 
                     if not collection_config:
                         error_msg = f"Collection configuration not found for {get_user_collection_name(collection_name)}"
-                        new_try_count = queue_docs[0].try_count + 1
                         try:
-                            await self.database.update_queue_status(queue_ids, QueuedDocumentStatus.FAILED, new_try_count, error_msg)
+                            await self.database.update_queue_status([(qd.queue_id, qd.try_count + 1) for qd in queue_docs], QueuedDocumentStatus.FAILED, error_msg)
                         except Exception as queue_error:
                             self.logger.error(f"Failed to update queue status: {str(queue_error)}")
                         return
@@ -335,9 +268,8 @@ class EncoderService(EncoderBase):
                             f"Collection configuration changed during processing. Documents were queued for collection_id {queue_docs[0].collection_id}, "
                             f"but current collection has collection_id {collection_config.collection_id}. Please re-upload the documents."
                         )
-                        new_try_count = queue_docs[0].try_count + 1
                         try:
-                            await self.database.update_queue_status(queue_ids, QueuedDocumentStatus.FAILED, new_try_count, error_msg)
+                            await self.database.update_queue_status([(qd.queue_id, qd.try_count + 1) for qd in queue_docs], QueuedDocumentStatus.FAILED, error_msg)
                         except Exception as queue_error:
                             self.logger.error(f"Failed to update queue status: {str(queue_error)}")
                         return
@@ -441,7 +373,6 @@ class EncoderService(EncoderBase):
                 
                     if updates:
                         await self.bunny_talk.talk("collection-stats", collection_name=collection_name, updates=updates)
-                        # await self.update_collection_stats(collection_name=collection_name, updates=updates)
                 
                     await self.database.delete_from_queue([qd.queue_id for qd in documents_to_process])
 
@@ -449,10 +380,11 @@ class EncoderService(EncoderBase):
                         self.index_metrics.record(MetricKey.INDEX_QUEUE_DOCS_NEW, float(new_doc_count_batch))
                     if update_doc_count_batch:
                         self.index_metrics.record(MetricKey.INDEX_QUEUE_DOCS_UPDATED, float(update_doc_count_batch))
-                    nq = len(queue_ids)
-                    if nq > 0:
-                        self.index_metrics.record(MetricKey.INDEX_BULK_BATCHES)
-                        self.index_metrics.record(MetricKey.INDEX_BULK_BATCH_SIZE, float(nq), n=1)
+                    if not is_micro_batch:
+                        nq = len(queue_ids)
+                        if nq > 0:
+                            self.index_metrics.record(MetricKey.INDEX_BULK_BATCHES)
+                            self.index_metrics.record(MetricKey.INDEX_BULK_BATCH_SIZE, float(nq), n=1)
 
             except Exception as e:
                 self.logger.error(f"Failed to process bulk documents: {str(e)}")
@@ -475,11 +407,12 @@ class EncoderService(EncoderBase):
                     )
                     
                 try:
-                    await self.database.update_queue_status(queue_ids, status, new_try_count, str(e))
-                    if status == QueuedDocumentStatus.FAILED:
-                        self.index_metrics.record(MetricKey.INDEX_BULK_FAILED)
-                    elif status == QueuedDocumentStatus.REQUEUED:
-                        self.index_metrics.record(MetricKey.INDEX_BULK_REQUEUED)
+                    await self.database.update_queue_status([(qd.queue_id, qd.try_count + 1) for qd in queue_docs], status, str(e))
+                    if not is_micro_batch:
+                        if status == QueuedDocumentStatus.FAILED:
+                            self.index_metrics.record(MetricKey.INDEX_BULK_FAILED)
+                        elif status == QueuedDocumentStatus.REQUEUED:
+                            self.index_metrics.record(MetricKey.INDEX_BULK_REQUEUED)
                 except Exception as queue_error:
                     self.logger.error(f"Failed to update queue status: {str(queue_error)}")
 
@@ -488,7 +421,8 @@ class EncoderService(EncoderBase):
                     await asyncio.sleep(delay)
                     raise e
         finally:
-            self.index_metrics.record(MetricKey.INDEX_BULK_JOB_MS, (time.perf_counter_ns() - t0) / 1_000_000.0, n=1)
+            if not is_micro_batch:
+                self.index_metrics.record(MetricKey.INDEX_BULK_JOB_MS, (time.perf_counter_ns() - t0) / 1_000_000.0, n=1)
 
     async def update_collection_stats(
         self, 

@@ -697,6 +697,7 @@ async def upload_documents_to_queue(
             await _bunny_talk.talk(
                 "documents",
                 queue_id=queue_ids[0],
+                collection_name=collection_name,
                 start_trace=True,
                 trace_meta={
                     "collection": collection_name,

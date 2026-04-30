@@ -60,6 +60,9 @@ class EncoderBase:
     @abstractmethod
     async def startup(self):
         pass
+
+    async def shutdown(self):
+        pass
     
 class EncoderServiceRunner:
     """Service runner that handles the encoder service lifecycle with signal handling."""
@@ -69,6 +72,7 @@ class EncoderServiceRunner:
         self.bunny_talk = None
         self.shutdown_event = asyncio.Event()
         self.logger = logging.getLogger(self.__class__.__name__)
+        self._services = []
         self._setup_signal_handlers()
     
     def _setup_signal_handlers(self):
@@ -104,6 +108,7 @@ class EncoderServiceRunner:
         router = None
 
         # Create encoder service instances
+        self._services = []
         for service_class in service_classes:
             self.logger.info(f"Starting {service_class.__name__}...")
             
@@ -131,13 +136,17 @@ class EncoderServiceRunner:
                 )
 
             await svc.startup()
+            self._services.append(svc)
             self.logger.info(f"Started {service_class.__name__}.")
 
     
     async def stop(self):
         """Stop the encoder service gracefully."""
         self.logger.info("Stopping encoder service...")
-        
+
+        for svc in self._services:
+            await svc.shutdown()
+
         if self.bunny_talk:
             await self.bunny_talk.close()
             self.bunny_talk = None

@@ -1016,27 +1016,31 @@ class QdrantDatabase(DatabaseBase):
             )
         )
 
-    async def update_queue_status(self, queue_ids: List[str], status: str, try_count: int, info: str) -> None:
+    async def update_queue_status(self, queue_id_try_counts: List[tuple[str, int]], status: str, info: str) -> None:
         """
         Update the status of documents in the processing queue.
         
         Args:
-            queue_ids: List of unique identifiers for queue entries
+            queue_id_try_counts: List of (queue_id, try_count) pairs
             status: New status to set for the documents
-            try_count: New try count to set for the documents
             info: Additional information about the status (e.g., error details)
         """
-        # Update status, timestamp, try_count, and info in the system queue collection
-        await self.client.set_payload(
-            collection_name=self.queue_collection,
-            payload={
-                "status": status,
-                "timestamp": datetime.now(timezone.utc),
-                "try_count": try_count,
-                "info": info
-            },
-            points=queue_ids
-        )
+        # Group by try_count to batch set_payload calls
+        groups: dict[int, List[str]] = {}
+        for queue_id, try_count in queue_id_try_counts:
+            groups.setdefault(try_count, []).append(queue_id)
+        now = datetime.now(timezone.utc)
+        for try_count, ids in groups.items():
+            await self.client.set_payload(
+                collection_name=self.queue_collection,
+                payload={
+                    "status": status,
+                    "timestamp": now,
+                    "try_count": try_count,
+                    "info": info
+                },
+                points=ids
+            )
         
 
     async def get_queue_entries(self, collection_name: str, doc_id: Optional[str] = None) -> List[QueueDocument]:

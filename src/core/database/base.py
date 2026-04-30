@@ -480,14 +480,13 @@ class DatabaseBase(ABC):
         pass
     
     @abstractmethod
-    async def update_queue_status(self, queue_ids: List[str], status: str, try_count: int, info: str) -> None:
+    async def update_queue_status(self, queue_id_try_counts: List[tuple[str, int]], status: str, info: str) -> None:
         """
         Update the status of documents in the processing queue.
         
         Args:
-            queue_ids: List of unique identifiers for queue entries
+            queue_id_try_counts: List of (queue_id, try_count) pairs
             status: New status to set for the documents
-            try_count: New try count to set for the documents
             info: Additional information about the status (e.g., error details)
         """
         pass

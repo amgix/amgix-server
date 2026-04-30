@@ -2154,27 +2154,30 @@ class SQLBase(DatabaseBase):
             (collection_name, doc_id, QueueOperationType.UPSERT, before_timestamp)
         )
 
-    async def update_queue_status(self, queue_ids: List[str], status: str, try_count: int, info: str) -> None:
+    async def update_queue_status(self, queue_id_try_counts: List[tuple[str, int]], status: str, info: str) -> None:
         """
         Update the status of documents in the processing queue.
         
         Args:
-            queue_ids: List of unique identifiers for queue entries
+            queue_id_try_counts: List of (queue_id, try_count) pairs
             status: New status to set for the documents
-            try_count: New try count to set for the documents
             info: Additional information about the status (e.g., error details)
         """
-        
-        # Update status, timestamp, try_count, and info in the queue table using IN clause
-        placeholders = ', '.join(['%s'] * len(queue_ids))
-        await self.execute_sql_no_result(
-            self.format_sql("update", 
-                table=self.queue_collection,
-                set_clause=f"{self.quote_identifier('status')}=%s, {self.quote_identifier('timestamp')}=%s, {self.quote_identifier('try_count')}=%s, {self.quote_identifier('info')}=%s",
-                where_clause=f"{self.quote_identifier('queue_id')} IN ({placeholders})"
-            ),
-            (status, datetime.now(timezone.utc), try_count, info) + tuple(queue_ids)
-        )
+        # Group by try_count to batch updates with a single query per distinct try_count
+        groups: dict[int, List[str]] = {}
+        for queue_id, try_count in queue_id_try_counts:
+            groups.setdefault(try_count, []).append(queue_id)
+        now = datetime.now(timezone.utc)
+        for try_count, ids in groups.items():
+            placeholders = ', '.join(['%s'] * len(ids))
+            await self.execute_sql_no_result(
+                self.format_sql("update",
+                    table=self.queue_collection,
+                    set_clause=f"{self.quote_identifier('status')}=%s, {self.quote_identifier('timestamp')}=%s, {self.quote_identifier('try_count')}=%s, {self.quote_identifier('info')}=%s",
+                    where_clause=f"{self.quote_identifier('queue_id')} IN ({placeholders})"
+                ),
+                (status, now, try_count, info) + tuple(ids)
+            )
         
     async def get_queue_entries(self, collection_name: str, doc_id: Optional[str] = None) -> List[QueueDocument]:
         """
