@@ -2695,9 +2695,9 @@ def test_document_status_api(setup_collection):
     # Test 3: Wait for document to be processed and check status
     print("\n--- Test 3: Wait for document processing and check status ---")
     
-    # Wait for document to be available (processed)
-    wait_for_document(collection_name, doc_id, timeout_s=15.0)
-    print("✓ Document is now available in collection")
+    # Wait until the status API itself reports indexed (queue entry removed)
+    wait_for_document_status(collection_name, doc_id, QueuedDocumentStatus.INDEXED, timeout_s=15.0)
+    print("✓ Document is now indexed")
     
     # Check status again - should show only "indexed" (queue entry was removed after processing)
     response = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc_id}/status")
