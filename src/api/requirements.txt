@@ -7,3 +7,4 @@ cryptography==46.0.1
 cachetools==6.2.0
 aio_pika==9.5.7
 asyncpg==0.30.0
+orjson==3.11.8

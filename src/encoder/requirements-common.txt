@@ -14,3 +14,4 @@ asyncpg==0.30.0
 setuptools==80.9.0
 psutil==7.1.2
 uvloop==0.22.1
+orjson==3.11.8

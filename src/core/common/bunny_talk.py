@@ -1,5 +1,5 @@
 from datetime import datetime, date, timezone
-import json
+import orjson
 import asyncio
 import contextvars
 import inspect
@@ -26,14 +26,18 @@ trace_chain_var = contextvars.ContextVar(f'{APP_PREFIX}_trace_chain', default=[]
 trace_meta_var = contextvars.ContextVar(f'{APP_PREFIX}_trace_meta', default={})
 
 
-class BunnyJsonEncoder(json.JSONEncoder):
-    def default(self, o):
-        if isinstance(o, datetime):
-            return o.isoformat()
-        elif isinstance(o, BaseModel):
-            return o.model_dump()
-        return super().default(o)
+# class BunnyJsonEncoder(json.JSONEncoder):
+#     def default(self, o):
+#         if isinstance(o, datetime):
+#             return o.isoformat()
+#         elif isinstance(o, BaseModel):
+#             return o.model_dump()
+#         return super().default(o)
 
+def orjson_default(obj):
+    if isinstance(obj, BaseModel):
+        return obj.model_dump()
+    raise TypeError
 
 class RPCResponse(BaseModel):
     """Internal response class for RPC calls that can contain either a result or an error."""
@@ -304,12 +308,12 @@ class BunnyTalk:
 
         async def process_message(message: Message):
             try:
-                payload = json.loads(message.body.decode())
+                payload = orjson.loads(message.body)
                 
                 # Always extract trace info to maintain chain continuity
                 trace_id = message.headers.get(f'{APP_PREFIX}_trace_id') if message.headers else None
-                trace_chain = json.loads(message.headers.get(f'{APP_PREFIX}_trace_chain', '[]')) if message.headers else []
-                trace_meta = json.loads(message.headers.get(f'{APP_PREFIX}_trace_meta', '{}')) if message.headers else {}
+                trace_chain = orjson.loads(message.headers.get(f'{APP_PREFIX}_trace_chain', '[]')) if message.headers else []
+                trace_meta = orjson.loads(message.headers.get(f'{APP_PREFIX}_trace_meta', '{}')) if message.headers else {}
                 
                 # Add structured call information to chain
                 call_info = {
@@ -348,13 +352,19 @@ class BunnyTalk:
                     }
                     await self.publish_exchange.publish(
                         Message(
-                            json.dumps(response_payload, cls=BunnyJsonEncoder).encode(),
+                            orjson.dumps(response_payload, default=orjson_default, option=orjson.OPT_NON_STR_KEYS),
                             correlation_id=message.correlation_id,
                             delivery_mode=DeliveryMode.NOT_PERSISTENT,
                             headers={
                                 f'{APP_PREFIX}_trace_id': trace_id_var.get(),
-                                f'{APP_PREFIX}_trace_chain': json.dumps(trace_chain_var.get() or []),
-                                f'{APP_PREFIX}_trace_meta': json.dumps(trace_meta_var.get() or {})
+                                f'{APP_PREFIX}_trace_chain': orjson.dumps(
+                                    trace_chain_var.get() or [],
+                                    option=orjson.OPT_NON_STR_KEYS,
+                                ).decode(),
+                                f'{APP_PREFIX}_trace_meta': orjson.dumps(
+                                    trace_meta_var.get() or {},
+                                    option=orjson.OPT_NON_STR_KEYS,
+                                ).decode(),
                             }
                         ),
                         routing_key=message.reply_to,
@@ -466,8 +476,8 @@ class BunnyTalk:
             # Extract trace info from reply headers and update context variables
             if message.headers:
                 trace_id = message.headers.get(f'{APP_PREFIX}_trace_id')
-                trace_chain = json.loads(message.headers.get(f'{APP_PREFIX}_trace_chain', '[]'))
-                trace_meta = json.loads(message.headers.get(f'{APP_PREFIX}_trace_meta', '{}'))
+                trace_chain = orjson.loads(message.headers.get(f'{APP_PREFIX}_trace_chain', '[]'))
+                trace_meta = orjson.loads(message.headers.get(f'{APP_PREFIX}_trace_meta', '{}'))
                 # Stash for the awaiting rpc() caller task to adopt
                 self._rpc_reply_ctx[correlation_id] = (trace_id, trace_chain, trace_meta)
                 # Also set in this consumer task (harmless, but primary adoption happens in rpc())
@@ -475,7 +485,7 @@ class BunnyTalk:
                 trace_chain_var.set(trace_chain)
                 trace_meta_var.set(trace_meta)
 
-            payload = json.loads(message.body.decode())
+            payload = orjson.loads(message.body)
             response_dict = payload.get('kwargs', {}).get('response')
             response = RPCResponse.model_validate(response_dict)
             future.set_result(response)
@@ -569,12 +579,17 @@ class BunnyTalk:
         
         await self.publish_exchange.publish(
             Message(
-                json.dumps(payload, cls=BunnyJsonEncoder).encode(), 
+                orjson.dumps(payload, default=orjson_default, option=orjson.OPT_NON_STR_KEYS),
                 delivery_mode=DeliveryMode.PERSISTENT if persistent else DeliveryMode.NOT_PERSISTENT,
                 headers={
                     f'{APP_PREFIX}_trace_id': trace_id,
-                    f'{APP_PREFIX}_trace_chain': json.dumps(trace_chain),
-                    f'{APP_PREFIX}_trace_meta': json.dumps((trace_meta_var.get() or {}) if trace_meta is None else {**(trace_meta_var.get() or {}), **trace_meta})
+                    f'{APP_PREFIX}_trace_chain': orjson.dumps(trace_chain, option=orjson.OPT_NON_STR_KEYS).decode(),
+                    f'{APP_PREFIX}_trace_meta': orjson.dumps(
+                        (trace_meta_var.get() or {})
+                        if trace_meta is None
+                        else {**(trace_meta_var.get() or {}), **trace_meta},
+                        option=orjson.OPT_NON_STR_KEYS,
+                    ).decode(),
                 }
             ),
             routing_key=routing_key,
@@ -644,14 +659,19 @@ class BunnyTalk:
             # Publish the request
             await self.publish_exchange.publish(
                 Message(
-                    json.dumps(payload, cls=BunnyJsonEncoder).encode(),
+                    orjson.dumps(payload, default=orjson_default, option=orjson.OPT_NON_STR_KEYS),
                     reply_to=reply_to,
                     correlation_id=correlation_id,
                     expiration=timeout + 5,
                     headers={
                         f'{APP_PREFIX}_trace_id': trace_id,
-                        f'{APP_PREFIX}_trace_chain': json.dumps(trace_chain),
-                        f'{APP_PREFIX}_trace_meta': json.dumps((trace_meta_var.get() or {}) if trace_meta is None else {**(trace_meta_var.get() or {}), **trace_meta})
+                        f'{APP_PREFIX}_trace_chain': orjson.dumps(trace_chain, option=orjson.OPT_NON_STR_KEYS).decode(),
+                        f'{APP_PREFIX}_trace_meta': orjson.dumps(
+                            (trace_meta_var.get() or {})
+                            if trace_meta is None
+                            else {**(trace_meta_var.get() or {}), **trace_meta},
+                            option=orjson.OPT_NON_STR_KEYS,
+                        ).decode(),
                     }
                 ),
                 routing_key=routing_key,
