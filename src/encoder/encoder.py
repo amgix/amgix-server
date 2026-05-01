@@ -9,7 +9,7 @@ import signal
 import time
 import random
 from typing import List, Dict, Any, Tuple
-from collections import deque
+from collections import defaultdict, deque
 
 from src.core.vector.vectorizer import Vectorizer
 from src.core.common.constants import APP_NAME, APP_PREFIX, RPC_TIMEOUT_SECONDS
@@ -67,6 +67,7 @@ class EncoderService(EncoderBase):
         # collection_name -> deque of (queue_id, try_count, Future)
         self._pending: Dict[str, deque] = {}
         self._flush_task: asyncio.Task = None
+        self._stats_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
     
     async def startup(self):
         self._flush_task = asyncio.create_task(self._flush_loop())
@@ -443,30 +444,28 @@ class EncoderService(EncoderBase):
             }
         """
 
-        # lock_name = f"collection-stats-{self.database._string_to_uuid(collection_name)}"
-        # async with self.lock_client.acquire(lock_name, timeout=10.0):
-        
-        stats = await self.database.get_collection_stats(collection_name)
+        async with self._stats_locks[collection_name]:
+            stats = await self.database.get_collection_stats(collection_name)
 
-        old_doc_count = stats.get("doc_count", 0)
-        avgdls = stats.get("avgdls", {})
-        
-        # All fields have the same doc_count values, so take from first field
-        first_update = next(iter(updates.values()))
-        new_docs_in_batch = first_update.get("new_doc_count", 0)
-        new_doc_count = old_doc_count + new_docs_in_batch
-        
-        for field_vector_name, update_data in updates.items():
-            old_avgdl = avgdls.get(field_vector_name, 0.0)
-            
-            new_sum_token_lengths = update_data.get("new_sum_token_lengths", 0)
-            update_sum_token_lengths = update_data.get("update_sum_token_lengths", 0)
-            old_sum_token_lengths = update_data.get("old_sum_token_lengths", 0)
-            
-            new_avgdl = (old_avgdl * old_doc_count - old_sum_token_lengths + new_sum_token_lengths + update_sum_token_lengths) / new_doc_count
-            avgdls[field_vector_name] = new_avgdl
-        
-        await self.database.set_collection_stats(collection_name, {"doc_count": new_doc_count, "avgdls": avgdls})
+            old_doc_count = stats.get("doc_count", 0)
+            avgdls = stats.get("avgdls", {})
+
+            # All fields have the same doc_count values, so take from first field
+            first_update = next(iter(updates.values()))
+            new_docs_in_batch = first_update.get("new_doc_count", 0)
+            new_doc_count = old_doc_count + new_docs_in_batch
+
+            for field_vector_name, update_data in updates.items():
+                old_avgdl = avgdls.get(field_vector_name, 0.0)
+
+                new_sum_token_lengths = update_data.get("new_sum_token_lengths", 0)
+                update_sum_token_lengths = update_data.get("update_sum_token_lengths", 0)
+                old_sum_token_lengths = update_data.get("old_sum_token_lengths", 0)
+
+                new_avgdl = (old_avgdl * old_doc_count - old_sum_token_lengths + new_sum_token_lengths + update_sum_token_lengths) / new_doc_count
+                avgdls[field_vector_name] = new_avgdl
+
+            await self.database.set_collection_stats(collection_name, {"doc_count": new_doc_count, "avgdls": avgdls})
 
     async def document_delete_sync(self, collection_name: str, document_id: str, request_timestamp: datetime) -> None:
         """Delete a document synchronously."""
