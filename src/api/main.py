@@ -143,6 +143,7 @@ class BulkUploadRequest(BaseModel):
 
 
 AMGIX_VERSION = os.getenv("AMGIX_VERSION", "1.0.0-dev")
+AMGIX_VARIANT = os.getenv("AMGIX_VARIANT", "")
 HOSTNAME = os.getenv('HOSTNAME', 'unknown')
 AMGIX_DATABASE_URL = os.getenv("AMGIX_DATABASE_URL", "qdrant://localhost:6334")
 AMGIX_AMQP_URL = os.getenv("AMGIX_AMQP_URL", f"pyamqp://guest:guest@rabbitmq//")
@@ -259,12 +260,24 @@ async def version() -> VersionResponse:
     Returns:
         A `VersionResponse` object with the system version.
     """
-    return VersionResponse(version=AMGIX_VERSION)
+
+    if AMGIX_VARIANT:
+        version=f"{AMGIX_VERSION} ({AMGIX_VARIANT})"
+    else:
+        version=AMGIX_VERSION
+
+    return VersionResponse(version=version)
 
 
 @shared_router.get("/system/info", operation_id="system_info")
 async def system_info() -> SystemInfoResponse:
     """Summarize deployment and infrastructure (no connection URLs)."""
+
+    if AMGIX_VARIANT:
+        version=f"{AMGIX_VERSION} ({AMGIX_VARIANT})"
+    else:
+        version=AMGIX_VERSION
+
     cached = _database.get_cached_database_info()
     db_version = cached.version if cached else "unknown"
     db_features = dict(cached.features) if cached else {}
@@ -272,7 +285,7 @@ async def system_info() -> SystemInfoResponse:
     collection_count = len(real_names)
     rmq_version = _rabbitmq_broker_version or "unknown"
     return SystemInfoResponse(
-        amgix_version=AMGIX_VERSION,
+        amgix_version=version,
         database_kind=_database_kind_label(_database.connection_string),
         database_version=db_version,
         database_features=db_features,

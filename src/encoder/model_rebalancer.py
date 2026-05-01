@@ -1,4 +1,5 @@
 import math
+import os
 import time
 from dataclasses import dataclass
 from logging import Logger
@@ -7,6 +8,8 @@ from typing import Any, Dict, List, Tuple
 from src.core.common.bunny_talk import BunnyTalk
 from src.core.common.metrics_definitions import MetricKey
 from src.core.models.cluster import MetricsPayload
+
+AMGIX_VARIANT = os.getenv("AMGIX_VARIANT", "")
 
 NODE_META_LOAD_MODELS = "load_models"
 NODE_META_AT_CAPACITY = "at_capacity"
@@ -224,7 +227,7 @@ class ModelRebalancer:
                     await _send_signal(hostname, model_key, False)
 
         capable_hosts_count = sum(1 for _, d in self._cluster_metrics.items() if d.get("load_models", True))
-        if capable_hosts_count < 3:
+        if capable_hosts_count < (2 if AMGIX_VARIANT else 3):
             elapsed_ms = (time.monotonic_ns() - start_ns) / 1_000_000.0
             self._logger.debug(
                 f"ModelRebalancer: Skipping demand-based rebalancing: only {capable_hosts_count} capable host(s)."
