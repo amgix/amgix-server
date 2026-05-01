@@ -206,6 +206,7 @@ class EncoderService(EncoderBase):
             self.index_metrics.record(MetricKey.INDEX_QUEUE_JOB_MS, elapsed_ms / n, n=n)
 
     async def shutdown(self) -> None:
+        await self.index_metrics.stop_reporting()
         if self._flush_task and not self._flush_task.done():
             self._flush_task.cancel()
             try:

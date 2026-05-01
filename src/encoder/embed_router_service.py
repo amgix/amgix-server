@@ -690,6 +690,16 @@ class EmbedRouterService(EncoderBase):
                         )
             await asyncio.sleep(METRICS_LOOP_INTERVAL_SECONDS)
 
+    async def shutdown(self) -> None:
+        await self.metrics.stop()
+        for task in (self._rebalance_task, self._metrics_meta_task, self._broker_metrics_task):
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
     async def _metrics_meta(self) -> Dict[str, Any]:
         async with self.metrics_lock.reader:
             loaded_models = [
