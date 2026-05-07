@@ -53,6 +53,12 @@ def wait_for_search(collection_name: str, query: Dict[str, Any], expect: Callabl
     return last_results
 
 
+def _assert_http_200(resp: requests.Response, label: str) -> None:
+    """Fail with status + body visible; always print body (use pytest -s to see stdout)."""
+    print(f"{label}: HTTP {resp.status_code}\n{resp.text}", flush=True)
+    assert resp.status_code == 200, f"{label}: HTTP {resp.status_code}, body={resp.text!r}"
+
+
 def create_test_document(doc_id: str, name: str, content: str, doc_type: str = "article") -> Dict[str, Any]:
     """Helper function to create test documents with required timestamp field."""
     doc: Dict[str, Any] = {
@@ -121,18 +127,20 @@ def test_upsert_document_sync_and_search(setup_collection, test_data_factory):
 
     # Upsert via sync endpoint
     resp1 = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc1)
-    assert resp1.status_code == 200
-    assert resp1.json().get("ok") is True
+    _assert_http_200(resp1, "POST /documents/sync doc-sync-1")
+    body1 = resp1.json()
+    assert body1.get("ok") is True, f"POST /documents/sync doc1: body={body1!r}"
 
     resp2 = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc2)
-    assert resp2.status_code == 200
-    assert resp2.json().get("ok") is True
+    _assert_http_200(resp2, "POST /documents/sync doc-sync-2")
+    body2 = resp2.json()
+    assert body2.get("ok") is True, f"POST /documents/sync doc2: body={body2!r}"
 
     # Verify documents retrievable directly (sync endpoint guarantees readiness)
     r1 = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc1['id']}")
-    assert r1.status_code == 200
+    _assert_http_200(r1, f"GET /documents/{doc1['id']}")
     r2 = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc2['id']}")
-    assert r2.status_code == 200
+    _assert_http_200(r2, f"GET /documents/{doc2['id']}")
 
     # Basic search that should find both
     search_query = {
