@@ -38,6 +38,26 @@ def wait_for_document_status(collection_name: str, doc_id: str, expected_status:
     assert ok, f"Timed out waiting for document {doc_id} to reach status '{expected_status}'"
 
 
+def _response_detail_lower(response: requests.Response) -> str:
+    """Normalize `detail` from FastAPI (list of dicts) or string bodies (e.g. amgix-now sync errors)."""
+    try:
+        body = response.json()
+    except Exception:
+        return ""
+    d = body.get("detail")
+    if isinstance(d, str):
+        return d.lower()
+    if isinstance(d, list):
+        parts: List[str] = []
+        for item in d:
+            if isinstance(item, dict):
+                parts.append(str(item.get("msg", "")))
+            else:
+                parts.append(str(item))
+        return " ".join(parts).lower()
+    return ""
+
+
 def wait_for_search(collection_name: str, query: Dict[str, Any], expect: Callable[[List[Dict[str, Any]]], bool], timeout_s: float = 60.0) -> List[Dict[str, Any]]:
     url = f"{API_BASE_URL}/collections/{collection_name}/search"
     last_results: List[Dict[str, Any]] = []
@@ -3047,20 +3067,22 @@ def test_custom_vectors_validation(backend_capabilities):
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents", json=doc_wrong_dimensions)
-        assert response.status_code == 200  # Document accepted to queue
-        
-        # Wait for processing to fail due to validation error
-        wait_for_document_status(collection_name, "wrong_dim_doc", "failed")
-        
-        # Verify the failure details
-        response = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/wrong_dim_doc/status")
-        assert response.status_code == 200
-        
-        status_response = response.json()
-        failed_status = next((s for s in status_response["statuses"] if s["status"].startswith("failed")), None)
-        assert failed_status is not None, "Document with wrong dimensions should have failed validation"
-        assert "dimensions" in failed_status["info"].lower(), "Failure should mention dimensions mismatch"
-        
+        # Async queue (Python): 200 then failed status. Sync upsert (amgix-now): 400 with error body.
+        assert response.status_code in (200, 400, 422), response.text
+        if response.status_code == 200:
+            wait_for_document_status(collection_name, "wrong_dim_doc", "failed")
+
+            response = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/wrong_dim_doc/status")
+            assert response.status_code == 200
+
+            status_response = response.json()
+            failed_status = next((s for s in status_response["statuses"] if s["status"].startswith("failed")), None)
+            assert failed_status is not None, "Document with wrong dimensions should have failed validation"
+            assert "dimensions" in failed_status["info"].lower(), "Failure should mention dimensions mismatch"
+        else:
+            msg = _response_detail_lower(response)
+            assert "dimensions" in msg or "dimension" in msg, f"Expected dimension mismatch in error: {response.text}"
+
         # Test 2: Document with correct dimensions should succeed
         doc_correct_dimensions = {
             "id": "correct_dim_doc", 
@@ -3265,20 +3287,21 @@ def test_sparse_custom_vectors_only():
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents", json=doc_too_many_entries)
-        assert response.status_code == 200  # Document accepted to queue
-        
-        # Wait for processing to fail due to validation error
-        wait_for_document_status(collection_name, "too_many_entries_doc", "failed")
-        
-        # Verify the failure details
-        response = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/too_many_entries_doc/status")
-        assert response.status_code == 200
-        
-        status_response = response.json()
-        failed_status = next((s for s in status_response["statuses"] if s["status"].startswith("failed")), None)
-        assert failed_status is not None, "Document with too many sparse entries should have failed validation"
-        assert "max allowed" in failed_status["info"].lower(), "Failure should mention max allowed limit"
-        
+        assert response.status_code in (200, 400, 422), response.text
+        if response.status_code == 200:
+            wait_for_document_status(collection_name, "too_many_entries_doc", "failed")
+
+            response = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/too_many_entries_doc/status")
+            assert response.status_code == 200
+
+            status_response = response.json()
+            failed_status = next((s for s in status_response["statuses"] if s["status"].startswith("failed")), None)
+            assert failed_status is not None, "Document with too many sparse entries should have failed validation"
+            assert "max allowed" in failed_status["info"].lower(), "Failure should mention max allowed limit"
+        else:
+            msg = _response_detail_lower(response)
+            assert "max allowed" in msg, f"Expected max entries error: {response.text}"
+
     finally:
         # Clean up
         try:
