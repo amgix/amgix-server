@@ -9,6 +9,20 @@ from src.core.common import QueuedDocumentStatus
 
 # Test configuration
 API_BASE_URL = "http://localhost:8234/v1"
+
+
+def is_amgix_now_backend() -> bool:
+    """True when `/v1/version` includes Docker-set ``Amgix-Now`` variant (sync indexing, no queue)."""
+    try:
+        r = requests.get(f"{API_BASE_URL}/version", timeout=5)
+        if r.status_code != 200:
+            return False
+        ver = r.json().get("version", "")
+        return "Amgix-Now" in ver
+    except Exception:
+        return False
+
+
 def wait_until(predicate: Callable[[], bool], timeout_s: float = 10.0, interval_s: float = 0.25) -> bool:
     """Poll predicate() until True or timeout."""
     deadline = time.time() + timeout_s
@@ -2683,8 +2697,11 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
 def test_document_status_api(setup_collection):
     """Test the document status API endpoint with various scenarios."""
     collection_name = setup_collection
-    
+    is_now = is_amgix_now_backend()
+
     print(f"\n=== Testing Document Status API for collection: {collection_name} ===")
+    if is_now:
+        print("(Amgix-Now backend: synchronous upsert — no RabbitMQ queue statuses)")
     
     # Test 1: Check status for non-existent document (should return 404)
     print("\n--- Test 1: Check status for non-existent document ---")
@@ -2713,19 +2730,29 @@ def test_document_status_api(setup_collection):
     
     status_response = response.json()
     assert len(status_response["statuses"]) >= 1, "Should have at least one status"
-    
-    # Check that we have a "queued" status
-    queued_status = next((s for s in status_response["statuses"] if s["status"] == QueuedDocumentStatus.QUEUED), None)
-    assert queued_status is not None, "Should have 'queued' status"
-    assert "queue_id" in queued_status, "Queued status should have queue_id"
-    print("✓ Document status shows 'queued' with queue_id")
-    
+
+    if is_now:
+        status_types = {s["status"] for s in status_response["statuses"]}
+        assert QueuedDocumentStatus.INDEXED in status_types, "Amgix-Now: doc should already be indexed after sync upsert"
+        assert QueuedDocumentStatus.QUEUED not in status_types, "Amgix-Now: no queued lifecycle"
+        print("✓ Document status shows indexed immediately (sync)")
+    else:
+        queued_status = next(
+            (s for s in status_response["statuses"] if s["status"] == QueuedDocumentStatus.QUEUED),
+            None,
+        )
+        assert queued_status is not None, "Should have 'queued' status"
+        assert "queue_id" in queued_status, "Queued status should have queue_id"
+        print("✓ Document status shows 'queued' with queue_id")
+
     # Test 3: Wait for document to be processed and check status
     print("\n--- Test 3: Wait for document processing and check status ---")
     
-    # Wait until the status API itself reports indexed (queue entry removed)
-    wait_for_document_status(collection_name, doc_id, QueuedDocumentStatus.INDEXED, timeout_s=15.0)
-    print("✓ Document is now indexed")
+    if not is_now:
+        wait_for_document_status(collection_name, doc_id, QueuedDocumentStatus.INDEXED, timeout_s=15.0)
+        print("✓ Document is now indexed")
+    else:
+        print("✓ Document already indexed (Amgix-Now)")
     
     # Check status again - should show only "indexed" (queue entry was removed after processing)
     response = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc_id}/status")
@@ -2777,12 +2804,14 @@ def test_document_status_api(setup_collection):
     
     status_response = response.json()
     queued_statuses = [s for s in status_response["statuses"] if s["status"] == QueuedDocumentStatus.QUEUED]
-    # We might have fewer queued statuses if some updates were already processed
     print(f"Found {len(queued_statuses)} queued statuses after updates")
-    
-    # Should have at least some queued statuses (depending on processing speed)
-    assert len(queued_statuses) >= 1, f"Should have at least 1 queued status, got {len(queued_statuses)}"
-    
+
+    if is_now:
+        assert len(queued_statuses) == 0, "Amgix-Now: updates apply synchronously, no queued rows"
+        assert all(s["status"] == QueuedDocumentStatus.INDEXED for s in status_response["statuses"])
+    else:
+        assert len(queued_statuses) >= 1, f"Should have at least 1 queued status, got {len(queued_statuses)}"
+
     # Test 5: Wait for updates to be processed and check final status
     print("\n--- Test 5: Wait for updates to be processed and check final status ---")
     
