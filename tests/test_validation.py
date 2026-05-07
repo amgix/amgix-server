@@ -13,7 +13,9 @@ class TestCollectionNameValidation:
         response = requests.post(f"{API_BASE_URL}/collections/", json={
             "vectors": [{"name": "test", "type": "trigrams", "index_fields": ["name"]}]
         })
-        assert response.status_code == 405  # FastAPI returns 405 for empty path parameter
+        # FastAPI/Starlette: POST `/collections/` can resolve to GET-only list route → 405.
+        # Axum (amgix-now): no matching route → 404.
+        assert response.status_code in (404, 405)
     
     def test_collection_name_whitespace_only(self):
         """Collection name cannot be whitespace only."""
