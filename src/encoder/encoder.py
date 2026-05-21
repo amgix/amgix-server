@@ -486,6 +486,13 @@ class EncoderService(EncoderBase):
                     self.logger.warning(f"Document {document_id} not found in {collection_name}, skipping delete")
                     return
 
+                if request_timestamp <= doc_with_vectors.timestamp:
+                    self.logger.warning(
+                        f"Document {document_id} in {collection_name} has timestamp "
+                        f"{doc_with_vectors.timestamp} >= delete request_timestamp {request_timestamp}, skipping delete"
+                    )
+                    return
+
                 await self.database.delete_document(collection_name, document_id)
                 await self.database.delete_upserts_from_queue(collection_name, document_id, request_timestamp)
                 self.index_metrics.record(MetricKey.INDEX_QUEUE_DOCS_DELETED)
