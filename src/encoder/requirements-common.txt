@@ -1,17 +1,17 @@
-pydantic==2.11.9
-qdrant-client==1.15.1
+pydantic==2.13.4
+qdrant-client==1.17.1
 langid==1.1.6
 # stopwordsiso==0.6.1
 # whoosh==2.7.4
-numpy==2.3.3
-aiomysql==0.2.0
-cachetools==6.2.0
-cryptography==46.0.1
-mmh3==5.2.0
-aio_pika==9.5.7
-aiorwlock==1.5.0
-asyncpg==0.30.0
+numpy==2.4.6
+aiomysql==0.3.2
+cachetools==7.1.4
+cryptography==48.0.0
+mmh3==5.2.1
+aio_pika==9.6.2
+aiorwlock==1.5.1
+asyncpg==0.31.0
 setuptools==80.9.0
-psutil==7.1.2
+psutil==7.2.2
 uvloop==0.22.1
-orjson==3.11.8
+orjson==3.11.9

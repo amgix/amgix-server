@@ -57,7 +57,7 @@ logger = logging.getLogger(__name__)
 
 # Collection name validation type
 CollectionName = Annotated[str, Path(..., 
-    regex=r"^[a-zA-Z0-9_-]+$",
+    pattern=r"^[a-zA-Z0-9_-]+$",
     min_length=1,
     max_length=MAX_COLLECTION_NAME_LENGTH,
     description="Collection name (alphanumeric, underscores, hyphens only)"

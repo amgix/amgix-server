@@ -4,7 +4,7 @@ set -e
 
 cd "$(dirname "$0")/.."
 
-AMGIX_VERSION="v1.0.0-beta1.1"
+AMGIX_VERSION="v1.3.7-dev"
 
 # export BUILDKIT_PROGRESS=plain
 
