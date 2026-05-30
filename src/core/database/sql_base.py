@@ -18,7 +18,7 @@ from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, Co
 from ..common import (
     VectorType, DenseDistance, APP_PREFIX, DatabaseInfo, DatabaseFeatures, 
     SEARCH_PREFETCH_MULTIPLIER, IDF_THRESHOLD_MULTIPLIER, DEFAULT_SQL_BATCH_SIZE,
-    MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH, UUID_LENGTH, MAX_DOCUMENT_TAG_LENGTH,
+    MAX_METADATA_KEY_LENGTH, MAX_INDEXED_METADATA_VALUE_LENGTH, UUID_LENGTH, MAX_DOCUMENT_TAG_LENGTH,
     MAX_FIELD_VECTOR_NAME_LENGTH, MAX_INTERNAL_COLLECTION_NAME_LENGTH,
     MAX_DOCUMENT_ID_LENGTH, QueuedDocumentStatus, QueueOperationType, QueueOperationTypeLiteral, MAX_STATUS_LENGTH, MAX_SEARCH_LIMIT,
     get_user_collection_name, MetadataValueType, COLLECTION_INGEST_LOCK_TIMEOUT,
@@ -755,7 +755,7 @@ class SQLBase(DatabaseBase):
                 self.format_sql("column_timestamp", name="timestamp", default=" NOT NULL"),
                 self.format_sql("column_text", name="name", null_constraint=""),
                 self.format_sql("column_text", name="description", null_constraint=""),
-                self.format_sql("column_text", name="metadata", null_constraint=""),
+                self.format_sql("column_longtext", name="metadata", null_constraint=""),
                 self.format_sql("column_longtext", name="content", null_constraint="")
             ]
             
@@ -795,7 +795,7 @@ class SQLBase(DatabaseBase):
                     
                     if metadata_index.type == MetadataValueType.STRING:
                         metadata_index_columns.append(
-                            self.format_sql("column_varchar", name=column_name, size=MAX_METADATA_VALUE_LENGTH, null_constraint="")
+                            self.format_sql("column_varchar", name=column_name, size=MAX_INDEXED_METADATA_VALUE_LENGTH, null_constraint="")
                         )
                     elif metadata_index.type in (MetadataValueType.INTEGER, MetadataValueType.FLOAT):
                         metadata_index_columns.append(

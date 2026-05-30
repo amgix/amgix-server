@@ -8,7 +8,7 @@ from src.core.database.base_factory import DatabaseFactory
 from src.core.models.vector import CollectionConfigInternal
 from src.core.models.document import Document
 from src.core.models.vector import MetadataFilter
-from src.core.common import MetadataValueType
+from src.core.common import MetadataValueType, MAX_INDEXED_METADATA_VALUE_LENGTH
 
 
 class AmgixValidationError(Exception):
@@ -92,6 +92,14 @@ def validate_metadata_types(collection_config: CollectionConfigInternal, documen
             if actual_type != expected_type:
                 raise AmgixValidationError(
                     f"Metadata key '{key}' has type '{actual_type}' but collection config expects type '{expected_type}'"
+                )
+            if (
+                expected_type == MetadataValueType.STRING
+                and isinstance(meta_value.value, str)
+                and len(meta_value.value) > MAX_INDEXED_METADATA_VALUE_LENGTH
+            ):
+                raise AmgixValidationError(
+                    f"String metadata value for key '{key}' exceeds {MAX_INDEXED_METADATA_VALUE_LENGTH} character limit"
                 )
 
 
