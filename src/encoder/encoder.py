@@ -26,7 +26,7 @@ from src.core.models.document import Document, SearchResult, QueueDocument
 from src.core.common.bunny_talk import BunnyTalk, trace_chain_var, trace_id_var
 from src.core.common.lock_manager import LockService, LockClient
 from src.core.database.base import AmgixNotFound
-from src.core.database.common import validate_metadata_filter
+from src.core.database.common import validate_metadata_filter, needs_revectorization
 from datetime import datetime, timezone
 
 # Set HuggingFace Hub etag timeout to 2s for faster fallback to cache
@@ -300,7 +300,6 @@ class EncoderService(EncoderBase):
 
                     documents_to_process = []
                     documents_to_skip = []
-                    is_new_flags = []
                 
                     for queue_doc in queue_docs:
                         existing_doc = existing_docs_map.get(queue_doc.doc_id)
@@ -308,7 +307,6 @@ class EncoderService(EncoderBase):
                             documents_to_skip.append(queue_doc)
                         else:
                             documents_to_process.append(queue_doc)
-                            is_new_flags.append(existing_doc is None)
 
                     if documents_to_skip:
                         self.index_metrics.record(MetricKey.INDEX_QUEUE_DOCS_SKIPPED_STALE, float(len(documents_to_skip)))
@@ -317,65 +315,99 @@ class EncoderService(EncoderBase):
                     if not documents_to_process:
                         return
 
-                    documents = [qd.document for qd in documents_to_process]
-                
-                    stats = await self.database.get_collection_stats(collection_name)
-                    avgdls = stats.get("avgdls", {})
-                
-                    for config in collection_config.vectors:
-                        if config.type in VectorType.custom_tokenization():
-                            for field in config.index_fields:
-                                field_vector_name = f"{field}_{config.name}"
-                                if field_vector_name not in avgdls:
-                                    avgdls[field_vector_name] = 50.0
-                
-                    avgdl_dict = avgdls
-                
-                    docs_with_vectors = await Vectorizer.vectorize_documents(self.router, documents, collection_config.vectors, avgdl_dict=avgdl_dict)
-
-                    # Count docs once for the batch
-                    new_doc_count_batch = sum(1 for is_new in is_new_flags if is_new)
-                    update_doc_count_batch = len(is_new_flags) - new_doc_count_batch
-
-                    updates: Dict[str, Dict[str, int]] = {}
-                    for doc_idx, doc_with_vectors in enumerate(docs_with_vectors):
-                        is_new = is_new_flags[doc_idx]
-                        doc_id = documents_to_process[doc_idx].doc_id
-                        existing_doc = existing_docs_map.get(doc_id)
-                    
-                        for field_vector_name, token_length in doc_with_vectors.token_lengths.items():
-                            if field_vector_name not in updates:
-                                updates[field_vector_name] = {
-                                    "new_doc_count": new_doc_count_batch,
-                                    "new_sum_token_lengths": 0,
-                                    "update_doc_count": update_doc_count_batch,
-                                    "update_sum_token_lengths": 0,
-                                    "old_sum_token_lengths": 0
-                                }
-                        
-                            if is_new:
-                                updates[field_vector_name]["new_sum_token_lengths"] += token_length
-                            else:
-                                updates[field_vector_name]["update_sum_token_lengths"] += token_length
-                                if existing_doc and field_vector_name in existing_doc.token_lengths:
-                                    updates[field_vector_name]["old_sum_token_lengths"] += existing_doc.token_lengths[field_vector_name]
-
-                    new_docs = []
-                    existing_docs_list = []
-                    for i, is_new in enumerate(is_new_flags):
-                        if is_new:
-                            new_docs.append(docs_with_vectors[i])
+                    documents_to_vectorize = []
+                    documents_to_patch = []
+                    is_new_flags = []
+                    for queue_doc in documents_to_process:
+                        existing_doc = existing_docs_map.get(queue_doc.doc_id)
+                        if needs_revectorization(
+                            queue_doc.document, existing_doc, collection_config, collection_config.store_content
+                        ):
+                            documents_to_vectorize.append(queue_doc)
+                            is_new_flags.append(existing_doc is None)
                         else:
-                            existing_docs_list.append(docs_with_vectors[i])
+                            documents_to_patch.append(queue_doc)
 
-                    if new_docs:
-                        await self.database.add_documents(collection_name, new_docs, is_new=True, store_content=collection_config.store_content, collection_config=collection_config, lock_client=self.lock_client)
-                    if existing_docs_list:
-                        await self.database.add_documents(collection_name, existing_docs_list, is_new=False, store_content=collection_config.store_content, collection_config=collection_config, lock_client=self.lock_client)
-                
-                    if updates:
-                        await self.bunny_talk.talk("collection-stats", collection_name=collection_name, updates=updates)
-                
+                    if documents_to_patch:
+                        await self.database.patch_documents(
+                            collection_name,
+                            [qd.document for qd in documents_to_patch],
+                            store_content=collection_config.store_content,
+                            collection_config=collection_config,
+                            lock_client=self.lock_client,
+                        )
+
+                    new_doc_count_batch = 0
+                    update_doc_count_batch = 0
+                    if documents_to_vectorize:
+                        documents = [qd.document for qd in documents_to_vectorize]
+
+                        stats = await self.database.get_collection_stats(collection_name)
+                        avgdls = stats.get("avgdls", {})
+
+                        for config in collection_config.vectors:
+                            if config.type in VectorType.custom_tokenization():
+                                for field in config.index_fields:
+                                    field_vector_name = f"{field}_{config.name}"
+                                    if field_vector_name not in avgdls:
+                                        avgdls[field_vector_name] = 50.0
+
+                        avgdl_dict = avgdls
+
+                        docs_with_vectors = await Vectorizer.vectorize_documents(
+                            self.router, documents, collection_config.vectors, avgdl_dict=avgdl_dict
+                        )
+
+                        new_doc_count_batch = sum(1 for is_new in is_new_flags if is_new)
+                        update_doc_count_batch = len(is_new_flags) - new_doc_count_batch
+
+                        updates: Dict[str, Dict[str, int]] = {}
+                        for doc_idx, doc_with_vectors in enumerate(docs_with_vectors):
+                            is_new = is_new_flags[doc_idx]
+                            doc_id = documents_to_vectorize[doc_idx].doc_id
+                            existing_doc = existing_docs_map.get(doc_id)
+
+                            for field_vector_name, token_length in doc_with_vectors.token_lengths.items():
+                                if field_vector_name not in updates:
+                                    updates[field_vector_name] = {
+                                        "new_doc_count": new_doc_count_batch,
+                                        "new_sum_token_lengths": 0,
+                                        "update_doc_count": update_doc_count_batch,
+                                        "update_sum_token_lengths": 0,
+                                        "old_sum_token_lengths": 0
+                                    }
+
+                                if is_new:
+                                    updates[field_vector_name]["new_sum_token_lengths"] += token_length
+                                else:
+                                    updates[field_vector_name]["update_sum_token_lengths"] += token_length
+                                    if existing_doc and field_vector_name in existing_doc.token_lengths:
+                                        updates[field_vector_name]["old_sum_token_lengths"] += existing_doc.token_lengths[field_vector_name]
+
+                        new_docs = []
+                        existing_docs_list = []
+                        for i, is_new in enumerate(is_new_flags):
+                            if is_new:
+                                new_docs.append(docs_with_vectors[i])
+                            else:
+                                existing_docs_list.append(docs_with_vectors[i])
+
+                        if new_docs:
+                            await self.database.add_documents(
+                                collection_name, new_docs, is_new=True,
+                                store_content=collection_config.store_content,
+                                collection_config=collection_config, lock_client=self.lock_client,
+                            )
+                        if existing_docs_list:
+                            await self.database.add_documents(
+                                collection_name, existing_docs_list, is_new=False,
+                                store_content=collection_config.store_content,
+                                collection_config=collection_config, lock_client=self.lock_client,
+                            )
+
+                        if updates:
+                            await self.bunny_talk.talk("collection-stats", collection_name=collection_name, updates=updates)
+
                     await self.database.delete_from_queue([qd.queue_id for qd in documents_to_process])
 
                     if new_doc_count_batch:
@@ -535,6 +567,17 @@ class EncoderService(EncoderBase):
                 if document.timestamp <= existing_document.timestamp:
                     # Skip upsert - existing document is newer or same timestamp
                     raise ValueError(f"Document {document.id} already exists with timestamp {existing_document.timestamp} >= new timestamp {document.timestamp}")
+
+            if existing_document is not None and not needs_revectorization(
+                document, existing_document, collection_config, collection_config.store_content
+            ):
+                await self.database.patch_documents(
+                    collection_name, [document],
+                    store_content=collection_config.store_content,
+                    collection_config=collection_config,
+                    lock_client=self.lock_client,
+                )
+                return
             
             stats = await self.database.get_collection_stats(collection_name)
             avgdls = stats.get("avgdls", {})

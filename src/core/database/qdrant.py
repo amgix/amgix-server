@@ -450,6 +450,26 @@ class QdrantDatabase(DatabaseBase):
             collection_name=collection_name,
             points=points
         )
+
+    async def patch_documents(self, collection_name: str, documents: List[Document], store_content: bool, collection_config: CollectionConfigInternal, lock_client: LockClient) -> None:
+        operations = []
+        for document in documents:
+            exclude_fields = {'vectors'}
+            if not store_content:
+                exclude_fields.add('content')
+            doc_dict = document.model_dump(exclude=exclude_fields)
+            operations.append(
+                rest.OverwritePayloadOperation(
+                    overwrite_payload=rest.SetPayload(
+                        payload=doc_dict,
+                        points=[self._string_to_uuid(document.id)],
+                    )
+                )
+            )
+        await self.client.batch_update_points(
+            collection_name=collection_name,
+            update_operations=operations,
+        )
     
     async def get_documents(self, collection_name: str, document_ids: List[str], suppress_not_found: bool = False) -> List[Optional[DocumentWithVectors]]:
         """

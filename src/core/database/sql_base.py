@@ -1088,7 +1088,21 @@ class SQLBase(DatabaseBase):
         async with lock_client.acquire(lock_name, timeout=COLLECTION_INGEST_LOCK_TIMEOUT):
             await self._add_documents_impl(collection_name, documents_with_vectors, is_new, store_content, collection_config)
 
-    async def _add_documents_impl(self, collection_name: str, documents_with_vectors: List[DocumentWithVectors], is_new: bool, store_content: bool, collection_config: CollectionConfigInternal) -> None:
+    async def patch_documents(self, collection_name: str, documents: List[Document], store_content: bool, collection_config: CollectionConfigInternal, lock_client: LockClient) -> None:
+        if not documents:
+            return
+        lock_name = f"collection-ingest-{self._string_to_uuid(collection_name)}"
+        async with lock_client.acquire(lock_name, timeout=COLLECTION_INGEST_LOCK_TIMEOUT):
+            documents_with_vectors = [
+                DocumentWithVectors(**document.model_dump(), vectors=[], token_lengths={})
+                for document in documents
+            ]
+            await self._add_documents_impl(
+                collection_name, documents_with_vectors, is_new=False, store_content=store_content,
+                collection_config=collection_config, patch_only=True,
+            )
+
+    async def _add_documents_impl(self, collection_name: str, documents_with_vectors: List[DocumentWithVectors], is_new: bool, store_content: bool, collection_config: CollectionConfigInternal, patch_only: bool = False) -> None:
         metadata_indexes = collection_config.metadata_indexes or []
         field_vector_ids = self._get_field_vector_ids(collection_config)
         
@@ -1388,6 +1402,14 @@ class SQLBase(DatabaseBase):
         # Use a single transaction for all documents
         async with self.transaction() as conn:
             for document_with_vectors in documents_with_vectors:
+                if patch_only:
+                    doc_pk_id = await update_document(document_with_vectors, conn)
+                    if doc_pk_id is None:
+                        raise RuntimeError(f"Failed to get pk_id for document {document_with_vectors.id}")
+                    await delete_existing_tags(doc_pk_id, conn)
+                    await insert_tags(document_with_vectors, doc_pk_id, conn)
+                    continue
+
                 # Execute document insertion/update and get pk_id
                 if is_new:
                     doc_pk_id = await insert_document(document_with_vectors, conn)

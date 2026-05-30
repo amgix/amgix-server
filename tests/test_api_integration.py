@@ -578,6 +578,41 @@ def test_document_tags_filter_edges(setup_collection):
 
 
 @pytest.mark.all_backends
+def test_patch_path_metadata_update_sync(setup_collection, test_data_factory):
+    """Sync upsert same doc twice with only metadata changed; verify new value and search still returns it."""
+    collection_name = setup_collection
+
+    doc = {
+        "id": "patch-test-doc",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "name": "Patch test document",
+        "content": "hello world patch test",
+        "metadata": {"test": {"value": "blah", "type": "string"}},
+    }
+
+    resp = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+    _assert_http_200(resp, "POST /documents/sync initial")
+    assert resp.json().get("ok") is True
+
+    doc2 = dict(doc)
+    doc2["timestamp"] = (datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat()
+    doc2["metadata"] = {"test": {"value": "updated", "type": "string"}}
+
+    resp2 = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc2)
+    _assert_http_200(resp2, "POST /documents/sync updated")
+    assert resp2.json().get("ok") is True
+
+    r = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc['id']}")
+    _assert_http_200(r, "GET document after patch")
+    data = r.json()
+    assert data.get("metadata", {}).get("test", {}).get("value") == "updated", f"Expected updated metadata, got: {data.get('metadata')}"
+
+    search_query = test_data_factory.create_search_query("basic", "hello world")
+    results = wait_for_search(collection_name, search_query, lambda rs: len(rs) >= 1, timeout_s=20.0)
+    assert any(r["id"] == doc["id"] for r in results), f"Doc not in search results: {results}"
+
+
+@pytest.mark.all_backends
 def test_metadata_roundtrip(setup_collection):
     """Upsert with metadata and verify roundtrip on GET."""
     collection_name = setup_collection

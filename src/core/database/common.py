@@ -2,6 +2,7 @@
 Common database utilities for getting connected database instances.
 """
 
+from typing import Optional
 from urllib.parse import urlparse, urlunparse
 from datetime import datetime
 from src.core.database.base_factory import DatabaseFactory
@@ -9,6 +10,7 @@ from src.core.models.vector import CollectionConfigInternal
 from src.core.models.document import Document
 from src.core.models.vector import MetadataFilter
 from src.core.common import MetadataValueType, MAX_INDEXED_METADATA_VALUE_LENGTH
+from src.core.common.enums import DocumentField
 
 
 class AmgixValidationError(Exception):
@@ -177,3 +179,25 @@ def validate_metadata_filter(collection_config: CollectionConfigInternal, metada
             validate_filter_recursive(filter_node.not_)
 
     validate_filter_recursive(metadata_filter)
+
+
+def needs_revectorization(
+    incoming: Document,
+    existing: Optional[Document],
+    collection_config: CollectionConfigInternal,
+    store_content: bool,
+) -> bool:
+    if existing is None:
+        return True
+    if incoming.custom_vectors:
+        return True
+    indexed_fields: set[str] = set()
+    for vector_config in collection_config.vectors:
+        for field in vector_config.index_fields:
+            indexed_fields.add(field)
+    if DocumentField.CONTENT in indexed_fields and not store_content:
+        return True
+    for field in indexed_fields:
+        if getattr(incoming, field) != getattr(existing, field):
+            return True
+    return False

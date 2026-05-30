@@ -247,6 +247,20 @@ class DatabaseBase(ABC):
             lock_client: Distributed lock client for serializing writes (SQL backends only)
         """
         pass
+
+    @abstractmethod
+    async def patch_documents(self, collection_name: str, documents: List[Document], store_content: bool, collection_config: CollectionConfigInternal, lock_client: LockClient) -> None:
+        """
+        Update document payload fields without re-vectorizing.
+
+        Args:
+            collection_name: Name of the collection
+            documents: Documents with updated payload fields (existing documents only)
+            store_content: Whether to store document content in the database
+            collection_config: Collection configuration
+            lock_client: Distributed lock client for serializing writes (SQL backends only)
+        """
+        pass
     
     @abstractmethod
     async def get_documents(self, collection_name: str, document_ids: List[str], suppress_not_found: bool = False) -> List[Optional[DocumentWithVectors]]:
