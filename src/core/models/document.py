@@ -59,7 +59,8 @@ class Document(BaseModel):
     
     model_config = {
         "populate_by_name": True,
-        "extra": "forbid"
+        "extra": "forbid",
+        "json_schema_mode_override": "validation",
     }
 
     
