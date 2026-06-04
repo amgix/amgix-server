@@ -349,8 +349,7 @@ class SearchResult(Document):
     score: float = Field(..., description="The relevance score for this document")
     vector_scores: List[VectorScore] = Field(default_factory=list, description="Raw per-vector scores with field, vector, score, and rank information")
     
-    # Override content field to exclude it from this model
-    content: None = Field(None, exclude=True)
+    content: Optional[str] = Field(None, exclude=True)
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any], skip_validation: bool = False) -> "SearchResult":
