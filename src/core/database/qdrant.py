@@ -56,6 +56,7 @@ class QdrantDatabase(DatabaseBase):
             host=host,
             port=port,        # Use the port from connection string
             prefer_grpc=True, # Use gRPC when possible
+            timeout=10,
             **kwargs
         )
     
