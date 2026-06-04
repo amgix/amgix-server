@@ -605,7 +605,7 @@ def test_patch_path_metadata_update_sync(setup_collection, test_data_factory):
     r = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc['id']}")
     _assert_http_200(r, "GET document after patch")
     data = r.json()
-    assert data.get("metadata", {}).get("test", {}).get("value") == "updated", f"Expected updated metadata, got: {data.get('metadata')}"
+    assert data.get("metadata", {}).get("test") == "updated", f"Expected updated metadata, got: {data.get('metadata')}"
 
     search_query = test_data_factory.create_search_query("basic", "hello world")
     results = wait_for_search(collection_name, search_query, lambda rs: len(rs) >= 1, timeout_s=20.0)
@@ -626,7 +626,7 @@ def test_metadata_roundtrip(setup_collection):
     data = r.json()
     assert data.get("metadata") is not None
     md = data["metadata"]
-    assert md["source"]["value"] == "api" and md["lang"]["value"] == "en"
+    assert md["source"] == "api" and md["lang"] == "en"
 
 
 @pytest.mark.all_backends
@@ -704,11 +704,11 @@ def test_metadata_indexes_validation(setup_collection):
         data = response.json()
         assert data.get("metadata") is not None
         md = data["metadata"]
-        assert md["author"]["value"] == "John Doe" and md["author"]["type"] == "string"
-        assert md["year"]["value"] == 2023 and md["year"]["type"] == "integer"
-        assert md["rating"]["value"] == 4.5 and md["rating"]["type"] == "float"
-        assert md["published"]["value"] is True and md["published"]["type"] == "boolean"
-        assert md["created_at"]["value"] == "2023-01-15T10:30:00Z" and md["created_at"]["type"] == "datetime"
+        assert md["author"] == "John Doe"
+        assert md["year"] == 2023
+        assert md["rating"] == 4.5
+        assert md["published"] is True
+        assert md["created_at"] == "2023-01-15T10:30:00Z"
         
         # Test 6: Retrieve doc2 via direct GET and verify metadata (with missing keys)
         response = requests.get(f"{API_BASE_URL}/collections/{test_collection_name}/documents/doc2")
@@ -716,8 +716,8 @@ def test_metadata_indexes_validation(setup_collection):
         data = response.json()
         assert data.get("metadata") is not None
         md = data["metadata"]
-        assert md["author"]["value"] == "Jane Smith" and md["author"]["type"] == "string"
-        assert md["year"]["value"] == 2024 and md["year"]["type"] == "integer"
+        assert md["author"] == "Jane Smith"
+        assert md["year"] == 2024
         # Other keys should not be present
         
         # Test 7: Search and verify metadata in results
@@ -734,17 +734,17 @@ def test_metadata_indexes_validation(setup_collection):
         assert doc1_result is not None, "doc1 not found in search results"
         assert doc1_result.get("metadata") is not None
         md1 = doc1_result["metadata"]
-        assert md1["author"]["value"] == "John Doe"
-        assert md1["year"]["value"] == 2023
-        assert md1["rating"]["value"] == 4.5
-        assert md1["published"]["value"] is True
-        assert md1["created_at"]["value"] == "2023-01-15T10:30:00Z"
+        assert md1["author"] == "John Doe"
+        assert md1["year"] == 2023
+        assert md1["rating"] == 4.5
+        assert md1["published"] is True
+        assert md1["created_at"] == "2023-01-15T10:30:00Z"
         
         assert doc2_result is not None, "doc2 not found in search results"
         assert doc2_result.get("metadata") is not None
         md2 = doc2_result["metadata"]
-        assert md2["author"]["value"] == "Jane Smith"
-        assert md2["year"]["value"] == 2024
+        assert md2["author"] == "Jane Smith"
+        assert md2["year"] == 2024
         
     finally:
         # Cleanup

@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Any, Union, Tuple
 from datetime import datetime, timezone
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, field_serializer, model_validator
 import re
 import json
 
@@ -208,8 +208,20 @@ class Document(BaseModel):
         
         return self
 
-    
-        
+    @field_serializer("metadata", when_used="json")
+    def serialize_metadata_flat(self, metadata: Optional[Dict[str, Any]], _info) -> Optional[Dict[str, Any]]:
+        if metadata is None:
+            return None
+        result = {}
+        for k, v in metadata.items():
+            if isinstance(v, MetaValue):
+                result[k] = v.value
+            elif isinstance(v, dict) and "value" in v:
+                result[k] = v["value"]
+            else:
+                result[k] = v
+        return result
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any], store_content: bool = False, skip_validation: bool = False) -> "Document":
         """Create a Document instance from a dictionary"""

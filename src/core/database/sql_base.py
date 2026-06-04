@@ -2044,7 +2044,7 @@ class SQLBase(DatabaseBase):
         for document in documents:
             queue_id = str(uuid.uuid4())
             queue_ids.append(queue_id)
-            document_json = document.model_dump_json()
+            document_json = json.dumps(document.model_dump(mode="python"), default=str)
             doc_timestamp = request_timestamp if op_type == QueueOperationType.DELETE else document.timestamp
             rows.append((queue_id, collection_name, collection_id, document.id, op_type, doc_timestamp, QueuedDocumentStatus.QUEUED, document_json, None, current_time, current_time, 0))
         
