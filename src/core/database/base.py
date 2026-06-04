@@ -547,6 +547,19 @@ class DatabaseBase(ABC):
         pass
     
     @abstractmethod
+    async def get_document_count(self, collection_name: str) -> int:
+        """
+        Get the live document count directly from the database.
+
+        Args:
+            collection_name: Name of the collection
+
+        Returns:
+            Number of documents currently stored in the collection
+        """
+        pass
+
+    @abstractmethod
     async def get_collection_stats(self, collection_name: str) -> Dict[str, Union[int, Dict[str, float]]]:
         """
         Get collection statistics: document count and average document length per field_vector_name.

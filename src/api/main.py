@@ -636,13 +636,10 @@ async def get_collection_stats(collection_name: CollectionName) -> CollectionSta
     # Calling this just to throw 404 if the collection doesn't exist
     await _database.get_collection_info_internal(real_collection_name)
     
-    stats, queue_info = await asyncio.gather(
-        _database.get_collection_stats(real_collection_name),
+    doc_count, queue_info = await asyncio.gather(
+        _database.get_document_count(real_collection_name),
         _database.get_queue_info(real_collection_name),
     )
-    doc_count = stats.get("doc_count", 0)
-    if not isinstance(doc_count, int):
-        doc_count = int(doc_count)
     return CollectionStatsResponse(doc_count=doc_count, queue=queue_info)
 
 

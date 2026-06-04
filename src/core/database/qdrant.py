@@ -827,6 +827,12 @@ class QdrantDatabase(DatabaseBase):
         # Create a CollectionConfigInternal object from the data
         return CollectionConfigInternal.model_validate(config_data)
     
+    async def get_document_count(self, collection_name: str) -> int:
+        info = await self.client.get_collection(collection_name=collection_name)
+        if info.points_count is None:
+            raise RuntimeError("Collection points_count is unavailable")
+        return info.points_count
+
     async def get_collection_stats(self, collection_name: str) -> Dict[str, Union[int, Dict[str, float]]]:
         result = await self.client.retrieve(
             collection_name=self.meta_collection,

@@ -1958,6 +1958,16 @@ class SQLBase(DatabaseBase):
         # Create CollectionConfigInternal
         return CollectionConfigInternal.model_validate(config_dict)
     
+    async def get_document_count(self, collection_name: str) -> int:
+        table = self.get_table_name(collection_name, self.TableType.DOCUMENTS)
+        result = await self.execute_sql(
+            f"SELECT COUNT(*) AS cnt FROM {self.quote_identifier(table)}",
+            ()
+        )
+        if not result:
+            raise RuntimeError("COUNT query returned no rows")
+        return int(result[0]["cnt"])
+
     async def get_collection_stats(self, collection_name: str) -> Dict[str, Union[int, Dict[str, float]]]:
         meta_result = await self.execute_sql(
             self.format_sql("select",
