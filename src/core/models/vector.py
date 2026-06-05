@@ -1,6 +1,7 @@
 from typing import List, Optional, Any, Union, Tuple, Dict
 import re
 from pydantic import BaseModel, Field, field_validator, model_validator
+from .filter_parser import parse_filter_to_dict
 
 from ..common import (
     VectorType, VectorTypeLiteral, DocumentField, DocumentFieldLiteral,
@@ -495,10 +496,24 @@ class SearchQuery(BaseModel):
     document_tags_match_all: bool = Field(
         default=False, description="If True, documents must have ALL specified tags (AND). If False, documents must have ANY of the specified tags (OR)."
     )
-    metadata_filter: Optional[MetadataFilter] = Field(
+    metadata_filter: Optional[Union[MetadataFilter, str]] = Field(
         None,
-        description="Optional recursive metadata filter. Only fields declared in collection metadata_indexes can be filtered."
+        description=(
+            "Optional metadata filter. Accepts either a MetadataFilter object or a filter expression string "
+            "(e.g. 'year > 2020 AND status = \"active\"'). "
+            "Only fields declared in collection metadata_indexes can be filtered."
+        )
     )
+
+    @field_validator("metadata_filter", mode="before")
+    @classmethod
+    def parse_metadata_filter_string(cls, v):
+        if not isinstance(v, str):
+            return v
+        try:
+            return parse_filter_to_dict(v)
+        except ValueError as e:
+            raise ValueError(str(e)) from None
     raw_scores: bool = Field(
         default=False, description="Whether to include individual vector scores in results"
     )

@@ -938,6 +938,104 @@ def test_recursive_metadata_filtering():
 
 
 @pytest.mark.all_backends
+def test_string_metadata_filter():
+    """Test that metadata_filter accepts a filter expression string with identical results to object form."""
+    collection_name = f"test_str_filter_{str(uuid.uuid4())[:8]}"
+    config = {
+        "vectors": [
+            {"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["name"]}
+        ],
+        "metadata_indexes": [
+            {"key": "author", "type": "string"},
+            {"key": "year", "type": "integer"},
+            {"key": "rating", "type": "float"},
+            {"key": "published", "type": "boolean"},
+        ],
+    }
+    response = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config)
+    assert response.status_code == 200, f"Collection creation failed: {response.text}"
+
+    try:
+        docs = [
+            {
+                **create_test_document("sf_1", "String Filter Alpha", "alpha content"),
+                "metadata": {"author": "Alice", "year": 2021, "rating": 4.2, "published": False},
+            },
+            {
+                **create_test_document("sf_2", "String Filter Beta", "beta content"),
+                "metadata": {"author": "Bob", "year": 2023, "rating": 4.8, "published": True},
+            },
+            {
+                **create_test_document("sf_3", "String Filter Gamma", "gamma content"),
+                "metadata": {"author": "Carol", "year": 2024, "rating": 3.5, "published": False},
+            },
+        ]
+        for doc in docs:
+            r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+            assert r.status_code == 200, f"Doc upload failed: {r.text}"
+
+        base_query = {
+            "query": "String Filter",
+            "limit": 10,
+            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}],
+        }
+
+        # eq
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
+                          json={**base_query, "metadata_filter": 'author = "Alice"'})
+        assert r.status_code == 200, f"eq string filter failed: {r.text}"
+        assert {x["id"] for x in r.json()} == {"sf_1"}
+
+        # gt
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
+                          json={**base_query, "metadata_filter": "year > 2022"})
+        assert r.status_code == 200, f"gt string filter failed: {r.text}"
+        assert {x["id"] for x in r.json()} == {"sf_2", "sf_3"}
+
+        # AND
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
+                          json={**base_query, "metadata_filter": "year >= 2022 AND published = true"})
+        assert r.status_code == 200, f"AND string filter failed: {r.text}"
+        assert {x["id"] for x in r.json()} == {"sf_2"}
+
+        # OR
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
+                          json={**base_query, "metadata_filter": 'author = "Alice" OR rating < 4.0'})
+        assert r.status_code == 200, f"OR string filter failed: {r.text}"
+        assert {x["id"] for x in r.json()} == {"sf_1", "sf_3"}
+
+        # NOT
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
+                          json={**base_query, "metadata_filter": "NOT published = true"})
+        assert r.status_code == 200, f"NOT string filter failed: {r.text}"
+        assert {x["id"] for x in r.json()} == {"sf_1", "sf_3"}
+
+        # nested parens
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
+                          json={**base_query, "metadata_filter": "(year > 2020 AND year < 2030) OR rating < 4.0"})
+        assert r.status_code == 200, f"nested string filter failed: {r.text}"
+        assert {x["id"] for x in r.json()} == {"sf_1", "sf_2", "sf_3"}
+
+        # invalid syntax → 422
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
+                          json={**base_query, "metadata_filter": "year >>> 2020"})
+        assert r.status_code == 422, f"Invalid syntax should fail: {r.text}"
+
+        # multi-word field name (spaces in field) → 422
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
+                          json={**base_query, "metadata_filter": "word1 word2 < 5"})
+        assert r.status_code == 422, f"Multi-word field name should fail: {r.text}"
+
+        # unknown key → 400
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
+                          json={**base_query, "metadata_filter": "unknown_key = 1"})
+        assert r.status_code == 400, f"Unknown key should fail: {r.text}"
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
 def test_duplicate_collection_create_fails():
     """Creating an existing collection should fail."""
     name = "dup_create_test"
