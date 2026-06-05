@@ -193,23 +193,6 @@ class Document(BaseModel):
         return validated_metadata
 
    
-    @model_validator(mode='after')
-    def validate_at_least_one_field_has_content(self):
-        """Ensure at least one of name, description, or content has non-empty content."""
-        # Skip validation for SearchResult - it's constructed internally and doesn't need validation
-        # Check by class name to avoid circular import
-        if self.__class__.__name__ == 'SearchResult':
-            return self
-        
-        name_content = self.name.strip() if self.name else None
-        description_content = self.description.strip() if self.description else None
-        content_content = self.content.strip() if self.content else None
-        
-        if not (name_content or description_content or content_content):
-            raise ValueError("Document must have at least one non-empty field (name, description, or content)")
-        
-        return self
-
     @field_serializer("metadata", when_used="json")
     def serialize_metadata_flat(self, metadata: Optional[Dict[str, Any]], _info) -> Optional[Dict[str, Any]]:
         if metadata is None:
