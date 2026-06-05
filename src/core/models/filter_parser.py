@@ -3,7 +3,7 @@ Parse a filter expression string into a MetadataFilter-compatible dict tree.
 
 Supported syntax:
     comparison  : FIELD OP value
-    OP          : "=" | "<" | "<=" | ">" | ">="
+    OP          : "=" | "!=" | "<" | "<=" | ">" | ">="
     value       : string | integer | float | boolean | null
     boolean ops : AND, OR, NOT (case-insensitive)
     grouping    : parentheses
@@ -13,9 +13,11 @@ Examples:
     status = "active" AND enabled = true
     (year > 2020 AND year < 2030) OR status = "draft"
     NOT deleted = true
+    status != "archived"
 
 Operators map to MetadataFilter ops:
     =   -> eq
+    !=  -> neq
     <   -> lt
     <=  -> lte
     >   -> gt
@@ -43,7 +45,7 @@ _GRAMMAR = r"""
           | FALSE            -> bool_val
           | NULL             -> null_val
 
-    OP     : "=" | "<=" | ">=" | "<" | ">"
+    OP     : "!=" | "=" | "<=" | ">=" | "<" | ">"
     FIELD  : /[a-zA-Z0-9_][a-zA-Z0-9_-]*/
     TRUE   : /true/i
     FALSE  : /false/i
@@ -62,6 +64,7 @@ _GRAMMAR = r"""
 
 _OP_MAP = {
     "=":  "eq",
+    "!=": "neq",
     "<":  "lt",
     ">":  "gt",
     "<=": "lte",

@@ -1755,6 +1755,8 @@ class SQLBase(DatabaseBase):
 
                 if node.op == "eq":
                     sql_op = "="
+                elif node.op == "neq":
+                    sql_op = "!="
                 elif node.op == "gt":
                     sql_op = ">"
                 elif node.op == "gte":

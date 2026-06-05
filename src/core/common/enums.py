@@ -193,7 +193,7 @@ MetadataValueTypeLiteral = Literal[
 ]
 
 # Metadata filter operators
-MetadataFilterOpLiteral = Literal["eq", "lt", "gt", "lte", "gte"]
+MetadataFilterOpLiteral = Literal["eq", "neq", "lt", "gt", "lte", "gte"]
 
 # Database features that can be detected during probing
 class DatabaseFeatures:

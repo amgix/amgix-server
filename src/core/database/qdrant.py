@@ -561,7 +561,7 @@ class QdrantDatabase(DatabaseBase):
 
         documents = []
         for point in points:
-            doc = Document.model_validate(point.payload)
+            doc = Document.from_dict(point.payload, skip_validation=True)
             documents.append(doc)
 
         return DocumentFetchResponse(
@@ -806,6 +806,14 @@ class QdrantDatabase(DatabaseBase):
                     return rest.FieldCondition(
                         key=field_path,
                         match=rest.MatchValue(value=node.value)
+                    )
+
+                if node.op == "neq":
+                    return rest.Filter(
+                        must_not=[rest.FieldCondition(
+                            key=field_path,
+                            match=rest.MatchValue(value=node.value)
+                        )]
                     )
 
                 range_params: Dict[str, Any] = {}

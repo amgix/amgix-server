@@ -143,8 +143,8 @@ def validate_metadata_filter(collection_config: CollectionConfigInternal, metada
         expected_type = indexed_types[key]
 
         if expected_type == MetadataValueType.STRING:
-            if op != "eq":
-                raise AmgixValidationError(f"Metadata filter operator '{op}' is not supported for string key '{key}'. Use 'eq'.")
+            if op not in ("eq", "neq"):
+                raise AmgixValidationError(f"Metadata filter operator '{op}' is not supported for string key '{key}'. Use 'eq' or '!='.")
             if not isinstance(value, str):
                 raise AmgixValidationError(f"Metadata filter value for key '{key}' must be a string")
 
@@ -157,8 +157,8 @@ def validate_metadata_filter(collection_config: CollectionConfigInternal, metada
                 raise AmgixValidationError(f"Metadata filter value for key '{key}' must be a number")
 
         elif expected_type == MetadataValueType.BOOLEAN:
-            if op != "eq":
-                raise AmgixValidationError(f"Metadata filter operator '{op}' is not supported for boolean key '{key}'. Use 'eq'.")
+            if op not in ("eq", "neq"):
+                raise AmgixValidationError(f"Metadata filter operator '{op}' is not supported for boolean key '{key}'. Use 'eq' or '!='.")
             if not isinstance(value, bool):
                 raise AmgixValidationError(f"Metadata filter value for key '{key}' must be a boolean")
 

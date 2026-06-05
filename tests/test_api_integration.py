@@ -1016,6 +1016,12 @@ def test_string_metadata_filter():
         assert r.status_code == 200, f"nested string filter failed: {r.text}"
         assert {x["id"] for x in r.json()} == {"sf_1", "sf_2", "sf_3"}
 
+        # neq (!=)
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
+                          json={**base_query, "metadata_filter": 'author != "Alice"'})
+        assert r.status_code == 200, f"neq string filter failed: {r.text}"
+        assert {x["id"] for x in r.json()} == {"sf_2", "sf_3"}
+
         # invalid syntax → 422
         r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
                           json={**base_query, "metadata_filter": "year >>> 2020"})
