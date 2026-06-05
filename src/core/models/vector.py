@@ -1,6 +1,6 @@
 from typing import List, Optional, Any, Union, Tuple, Dict
 import re
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from .filter_parser import parse_filter_to_dict
 
 from ..common import (
@@ -72,7 +72,7 @@ class VectorConfig(BaseModel):
     This model defines how vectors should be generated for a specific field or set of fields.
     Different vector types have different requirements and behaviors.
     """
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "forbid", "populate_by_name": True}
     name: str = Field(..., description="Unique name for this vector configuration")
     type: VectorTypeLiteral = Field(..., description="Type of vector (dense_model, sparse_model, full_text, trigrams, whitespace, wmtr, dense_custom, sparse_custom)")
     model: Optional[str] = Field(
@@ -93,10 +93,11 @@ class VectorConfig(BaseModel):
     top_k: int = Field(
         default=DEFAULT_TOP_K, description="Number of top-scoring terms to keep for sparse vectors. Used by sparse_model, full_text, trigrams, whitespace, wmtr, and sparse_custom vectors. Ignored by dense vectors."
     )
-    wmtr_word_weight: int = Field(
+    wmtr_word_ratio: int = Field(
         default=WMTR_WORD_WEIGHT_PERCENTAGE,
         ge=0,
         le=100,
+        validation_alias=AliasChoices("wmtr_word_ratio", "wmtr_word_weight"),
         description="Percentage of WMTR top_k allocated to word weights."
     )
     index_fields: List[DocumentFieldLiteral] = Field(
@@ -369,7 +370,7 @@ def internal_to_user_config(internal_config: CollectionConfigInternal) -> Collec
             revision=vector.revision,
             dimensions=vector.dimensions,  # Include dimensions for all vectors
             top_k=vector.top_k,
-            wmtr_word_weight=vector.wmtr_word_weight,
+            wmtr_word_ratio=vector.wmtr_word_ratio,
             index_fields=vector.index_fields,
             language_default_code=vector.language_default_code,
             language_detect=vector.language_detect,

@@ -47,7 +47,7 @@ class WMTRVector(VectorBase):
             text=text,
             lang_code=lang_code,
             top_k_limit=config.top_k,
-            word_weight_percentage=config.wmtr_word_weight,
+            word_weight_percentage=config.wmtr_word_ratio,
             use_stopwords=True,
             avgdl=avgdl,
             trigram_weight=trigram_weight,
