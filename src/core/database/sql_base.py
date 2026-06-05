@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from .base import DatabaseBase, AmgixNotFound
 from .common import AmgixValidationError
 from ..models.cluster import MetricsBucket
-from ..models.document import Document, DocumentWithVectors, QueueDocument, QueueInfo, SearchResult, DocumentStatus, DocumentStatusResponse, VectorScore
+from ..models.document import Document, DocumentWithVectors, QueueDocument, QueueInfo, SearchResult, DocumentStatus, DocumentStatusResponse, VectorScore, DocumentFetchRequest, DocumentFetchResponse
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config
 from ..common import (
     VectorType, DenseDistance, APP_PREFIX, DatabaseInfo, DatabaseFeatures, 
@@ -1524,6 +1524,104 @@ class SQLBase(DatabaseBase):
         except Exception:
             raise
     
+    async def fetch_documents(
+        self,
+        collection_name: str,
+        request: DocumentFetchRequest,
+        collection_config: CollectionConfigInternal,
+    ) -> DocumentFetchResponse:
+        docs_table = self.get_table_name(collection_name, self.TableType.DOCUMENTS)
+        tags_table = self.get_table_name(collection_name, self.TableType.TAGS)
+        d_id = self.quote_identifier("id")
+        d_pk = self.quote_identifier("pk_id")
+
+        doc_columns = ["pk_id", "id", "timestamp", "name", "description", "metadata", "content"]
+        select_cols = ", ".join(f"d.{self.quote_identifier(c)}" for c in doc_columns)
+
+        conditions: List[str] = []
+        params: Dict[str, Any] = {}
+
+        if request.after:
+            conditions.append(f"d.{d_id} > %(after)s")
+            params["after"] = request.after
+
+        if request.document_tags:
+            params["document_tags"] = tuple(request.document_tags)
+            if request.document_tags_match_all:
+                conditions.append(f"""
+                    (SELECT COUNT(*) FROM {self.quote_identifier(tags_table)} t
+                     WHERE t.{self.quote_identifier('doc_pk_id')} = d.{d_pk}
+                     AND t.{self.quote_identifier('tag')} IN %(document_tags)s)
+                    = {len(request.document_tags)}
+                """)
+            else:
+                conditions.append(f"""
+                    EXISTS (SELECT 1 FROM {self.quote_identifier(tags_table)} t
+                            WHERE t.{self.quote_identifier('doc_pk_id')} = d.{d_pk}
+                            AND t.{self.quote_identifier('tag')} IN %(document_tags)s)
+                """)
+
+        metadata_filter_sql = ""
+        if request.metadata_filter:
+            metadata_filter_sql, filter_params = self._convert_metadata_filter_to_sql(
+                request.metadata_filter,
+                collection_config,
+            )
+            params.update(filter_params)
+
+        if metadata_filter_sql:
+            conditions.append(f"({metadata_filter_sql})")
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        sql = f"""
+            SELECT {select_cols}
+            FROM {self.quote_identifier(docs_table)} d
+            {where_clause}
+            ORDER BY d.{d_id}
+            LIMIT %(page_size)s
+        """
+        params["page_size"] = request.page_size + 1  # fetch one extra to detect next page
+
+        rows = await self.execute_sql(sql, params)
+
+        has_more = len(rows) > request.page_size
+        rows = rows[:request.page_size]
+
+        if not rows:
+            return DocumentFetchResponse(documents=[], after=None)
+
+        # Fetch tags for this page
+        pk_ids = [row["pk_id"] for row in rows]
+        pk_placeholders = ", ".join(["%s"] * len(pk_ids))
+        tags_sql = self.format_sql(
+            "select",
+            table=tags_table,
+            columns=self.quote_column_list(["doc_pk_id", "tag"]),
+            where=f" WHERE {self.quote_identifier('doc_pk_id')} IN ({pk_placeholders})",
+        )
+        tags_rows = await self.execute_sql(tags_sql, tuple(pk_ids))
+        tags_by_pk: Dict[int, List[str]] = {}
+        for tr in tags_rows:
+            tags_by_pk.setdefault(tr["doc_pk_id"], []).append(tr["tag"])
+
+        documents: List[Document] = []
+        for row in rows:
+            metadata = json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]
+            doc = Document.model_validate({
+                "id": row["id"],
+                "timestamp": row["timestamp"],
+                "name": row.get("name"),
+                "description": row.get("description"),
+                "content": row.get("content"),
+                "metadata": metadata,
+                "tags": tags_by_pk.get(row["pk_id"]),
+            })
+            documents.append(doc)
+
+        next_after = rows[-1]["id"] if has_more else None
+        return DocumentFetchResponse(documents=documents, after=next_after)
+
     async def delete_document(self, collection_name: str, document_id: str) -> bool:
         """Delete a document by ID."""
         try:

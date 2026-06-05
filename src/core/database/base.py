@@ -8,7 +8,7 @@ import uuid
 import asyncio
 
 from ..models.cluster import MetricsBucket
-from ..models.document import Document, DocumentWithVectors, SearchResult, QueueDocument, QueueInfo, DocumentStatusResponse
+from ..models.document import Document, DocumentWithVectors, SearchResult, QueueDocument, QueueInfo, DocumentStatusResponse, DocumentFetchRequest, DocumentFetchResponse
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig
 from ..common import (
     APP_PREFIX, DOC_NAMESPACE, DatabaseInfo, DatabaseFeatures, QueueOperationTypeLiteral,
@@ -281,6 +281,27 @@ class DatabaseBase(ABC):
         """
         pass
     
+    @abstractmethod
+    async def fetch_documents(
+        self,
+        collection_name: str,
+        request: DocumentFetchRequest,
+        collection_config: "CollectionConfigInternal",
+    ) -> DocumentFetchResponse:
+        """
+        Return a paginated page of documents, optionally filtered.
+
+        Args:
+            collection_name: Name of the collection
+            request: Pagination/filter parameters
+            collection_config: Collection configuration (needed for filter validation)
+
+        Returns:
+            DocumentFetchResponse with a page of documents and an opaque `after` token
+            (None when no further pages exist)
+        """
+        pass
+
     @abstractmethod
     async def delete_document(self, collection_name: str, document_id: str) -> bool:
         """

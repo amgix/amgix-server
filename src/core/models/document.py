@@ -4,13 +4,14 @@ from pydantic import BaseModel, Field, field_validator, field_serializer, model_
 import re
 import json
 
-from .vector import VectorData, CustomDocumentVector
+from .vector import VectorData, CustomDocumentVector, MetadataFilter
 from src.core.common import (
     MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH, MAX_DOCUMENT_TAGS_COUNT,
     MAX_DOCUMENT_ID_LENGTH, MAX_DOCUMENT_NAME_LENGTH, MAX_DOCUMENT_DESCRIPTION_LENGTH,
     MAX_DOCUMENT_CONTENT_LENGTH, MAX_DOCUMENT_TAG_LENGTH, QueuedDocumentStatusLiteral,
     QueueOperationTypeLiteral,
-    MetadataValueType, MetadataValueTypeLiteral
+    MetadataValueType, MetadataValueTypeLiteral,
+    MAX_DOCUMENT_FETCH_PAGE_SIZE, DEFAULT_DOCUMENT_FETCH_PAGE_SIZE,
 )
 
 
@@ -425,3 +426,54 @@ class DocumentStatusResponse(BaseModel):
     Complete status response for a document including queue states.
     """
     statuses: List[DocumentStatus] = Field(..., description="List of statuses sorted by timestamp (newest first)")
+
+
+class DocumentFetchRequest(BaseModel):
+    """Request body for paginated document fetching."""
+    model_config = {"extra": "forbid"}
+
+    page_size: int = Field(
+        DEFAULT_DOCUMENT_FETCH_PAGE_SIZE,
+        ge=1,
+        le=MAX_DOCUMENT_FETCH_PAGE_SIZE,
+        description=f"Number of documents per page (1 to {MAX_DOCUMENT_FETCH_PAGE_SIZE})",
+    )
+    after: Optional[str] = Field(
+        None,
+        description="Pagination token returned by a previous fetch call. Omit or set to null to start from the beginning.",
+    )
+    metadata_filter: Optional[Union[MetadataFilter, str]] = Field(
+        None,
+        description="Optional metadata filter. Accepts a MetadataFilter object or a filter expression string.",
+    )
+    document_tags: Optional[List[str]] = Field(
+        None,
+        max_length=MAX_DOCUMENT_TAGS_COUNT,
+        description=f"Optional filter to include only documents with specific tags (max {MAX_DOCUMENT_TAGS_COUNT} tags).",
+    )
+    document_tags_match_all: bool = Field(
+        default=False,
+        description="If True, documents must have ALL specified tags (AND). If False, ANY (OR).",
+    )
+
+    @field_validator("metadata_filter", mode="before")
+    @classmethod
+    def parse_metadata_filter_string(cls, v):
+        from .filter_parser import parse_filter_to_dict
+        if not isinstance(v, str):
+            return v
+        try:
+            return parse_filter_to_dict(v)
+        except ValueError as e:
+            raise ValueError(str(e)) from None
+
+
+class DocumentFetchResponse(BaseModel):
+    """Response for paginated document fetching."""
+    model_config = {"extra": "forbid"}
+
+    documents: List[Document] = Field(..., description="Page of documents")
+    after: Optional[str] = Field(
+        None,
+        description="Pagination token for the next page. Null when there are no more documents.",
+    )

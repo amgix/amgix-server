@@ -3472,6 +3472,214 @@ def test_sparse_custom_vectors_only():
             print(f"Warning: Failed to cleanup collection {collection_name}: {e}")
 
 
+@pytest.mark.all_backends
+def test_fetch_documents_basic():
+    """Fetch endpoint returns all documents across pages and terminates correctly."""
+    collection_name = f"test_fetch_basic_{str(uuid.uuid4())[:8]}"
+    config = {
+        "vectors": [{"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["name"]}],
+    }
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config)
+    assert r.status_code == 200, f"Collection creation failed: {r.text}"
+
+    try:
+        doc_ids = [f"fetch_doc_{i}" for i in range(1, 8)]
+        for doc_id in doc_ids:
+            doc = create_test_document(doc_id, f"Doc {doc_id}", f"Content for {doc_id}")
+            r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+            assert r.status_code == 200, f"Sync upsert failed for {doc_id}: {r.text}"
+
+        # Fetch all docs using page_size=3 to exercise pagination
+        fetched_ids: List[str] = []
+        after = None
+        pages = 0
+        while True:
+            body: Dict[str, Any] = {"page_size": 3}
+            if after:
+                body["after"] = after
+            r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/fetch", json=body)
+            assert r.status_code == 200, f"Fetch failed: {r.text}"
+            data = r.json()
+            assert "documents" in data
+            assert "after" in data
+            fetched_ids.extend(d["id"] for d in data["documents"])
+            pages += 1
+            after = data["after"]
+            if after is None:
+                break
+
+        assert set(fetched_ids) == set(doc_ids), f"Expected {set(doc_ids)}, got {set(fetched_ids)}"
+        # 7 docs at page_size=3 means 3 pages (3+3+1)
+        assert pages == 3
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_fetch_documents_default_page_size():
+    """Fetch with no body uses default page_size (100) and returns after=null for small collections."""
+    collection_name = f"test_fetch_defaults_{str(uuid.uuid4())[:8]}"
+    config = {
+        "vectors": [{"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["name"]}],
+    }
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config)
+    assert r.status_code == 200
+
+    try:
+        for i in range(3):
+            doc = create_test_document(f"def_doc_{i}", f"Default Doc {i}", f"Content {i}")
+            r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+            assert r.status_code == 200, f"Sync upsert failed: {r.text}"
+
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/fetch", json={})
+        assert r.status_code == 200
+        data = r.json()
+        assert len(data["documents"]) == 3
+        assert data["after"] is None  # no next page
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_fetch_documents_empty_collection():
+    """Fetching from an empty collection returns empty documents list and after=null."""
+    collection_name = f"test_fetch_empty_{str(uuid.uuid4())[:8]}"
+    config = {
+        "vectors": [{"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["name"]}],
+    }
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config)
+    assert r.status_code == 200
+
+    try:
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/fetch", json={})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["documents"] == []
+        assert data["after"] is None
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_fetch_documents_metadata_filter():
+    """Fetch with metadata_filter (object and string form) returns only matching documents."""
+    collection_name = f"test_fetch_meta_{str(uuid.uuid4())[:8]}"
+    config = {
+        "vectors": [{"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["name"]}],
+        "metadata_indexes": [
+            {"key": "year", "type": "integer"},
+            {"key": "active", "type": "boolean"},
+        ],
+    }
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config)
+    assert r.status_code == 200
+
+    try:
+        docs = [
+            {**create_test_document("fm_1", "Doc A", "content"), "metadata": {"year": 2020, "active": True}},
+            {**create_test_document("fm_2", "Doc B", "content"), "metadata": {"year": 2022, "active": False}},
+            {**create_test_document("fm_3", "Doc C", "content"), "metadata": {"year": 2024, "active": True}},
+        ]
+        for doc in docs:
+            r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+            assert r.status_code == 200, f"Sync upsert failed: {r.text}"
+
+        # Object form filter
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/fetch", json={
+            "metadata_filter": {"key": "year", "op": "gt", "value": 2021},
+        })
+        assert r.status_code == 200, f"Object filter fetch failed: {r.text}"
+        assert {d["id"] for d in r.json()["documents"]} == {"fm_2", "fm_3"}
+
+        # String form filter
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/fetch", json={
+            "metadata_filter": "year > 2021 AND active = true",
+        })
+        assert r.status_code == 200, f"String filter fetch failed: {r.text}"
+        assert {d["id"] for d in r.json()["documents"]} == {"fm_3"}
+
+        # Unknown key → 400
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/fetch", json={
+            "metadata_filter": "unknown_key = 1",
+        })
+        assert r.status_code == 400, f"Unknown key should fail: {r.text}"
+
+        # Invalid syntax → 422
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/fetch", json={
+            "metadata_filter": "year >>> 2020",
+        })
+        assert r.status_code == 422, f"Invalid syntax should fail: {r.text}"
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_fetch_documents_tags_filter():
+    """Fetch with document_tags returns only tagged documents; match_all respected."""
+    collection_name = f"test_fetch_tags_{str(uuid.uuid4())[:8]}"
+    config = {
+        "vectors": [{"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["name"]}],
+    }
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config)
+    assert r.status_code == 200
+
+    try:
+        # doc_type param sets tags in create_test_document
+        docs = [
+            create_test_document("ft_1", "Doc 1", "content", doc_type=None),  # no tags
+            create_test_document("ft_2", "Doc 2", "content", doc_type="article"),
+            create_test_document("ft_3", "Doc 3", "content", doc_type="tutorial"),
+        ]
+        docs[2]["tags"] = ["article", "tutorial"]  # both tags
+
+        for doc in docs:
+            r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+            assert r.status_code == 200, f"Sync upsert failed: {r.text}"
+
+        # OR: any of article, tutorial
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/fetch", json={
+            "document_tags": ["article", "tutorial"],
+        })
+        assert r.status_code == 200, f"Tags OR fetch failed: {r.text}"
+        assert {d["id"] for d in r.json()["documents"]} == {"ft_2", "ft_3"}
+
+        # AND: must have both article AND tutorial
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/fetch", json={
+            "document_tags": ["article", "tutorial"],
+            "document_tags_match_all": True,
+        })
+        assert r.status_code == 200, f"Tags AND fetch failed: {r.text}"
+        assert {d["id"] for d in r.json()["documents"]} == {"ft_3"}
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_fetch_documents_page_size_validation():
+    """page_size out of range returns 422."""
+    collection_name = f"test_fetch_valid_{str(uuid.uuid4())[:8]}"
+    config = {
+        "vectors": [{"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["name"]}],
+    }
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config)
+    assert r.status_code == 200
+
+    try:
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/fetch", json={"page_size": 0})
+        assert r.status_code == 422
+
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/fetch", json={"page_size": 1001})
+        assert r.status_code == 422
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
 if __name__ == "__main__":
     # For manual testing
     pytest.main([__file__, "-v"])

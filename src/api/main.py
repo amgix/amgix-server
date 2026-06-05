@@ -29,6 +29,8 @@ _VALID_METRIC_KEY_STR = {k.value for k in MetricKey}
 from src.core.models.document import (
     CollectionStatsResponse,
     Document,
+    DocumentFetchRequest,
+    DocumentFetchResponse,
     DocumentStatusResponse,
     QueueDocument,
     QueueInfo,
@@ -43,6 +45,7 @@ from src.core.common import (
 )
 from src.core.database.common import (
     get_connected_database,
+    validate_metadata_filter,
     validate_metadata_types,
     AmgixValidationError,
 )
@@ -850,6 +853,34 @@ async def get_document(collection_name: CollectionName, document_id: str = Path(
     return Document.model_construct(
         **doc_with_vectors.model_dump(exclude={'vectors', 'token_lengths'}),
     )
+
+
+@shared_router.post("/collections/{collection_name}/documents/fetch", operation_id="fetch_documents")
+async def fetch_documents(collection_name: CollectionName, body: DocumentFetchRequest) -> DocumentFetchResponse:
+    """Fetch a page of documents from a collection.
+
+    Returns documents in stable internal order with cursor-based pagination.
+    Pass the returned `after` token in the next request to get the following page.
+    `after` is null when there are no more documents.
+
+    Args:
+        collection_name: The name of the collection.
+        body: Pagination and filter parameters.
+
+    Returns:
+        A `DocumentFetchResponse` with a page of documents and a pagination token.
+
+    Raises:
+        HTTPException: 404 if the collection does not exist.
+        HTTPException: 400 if a filter references an unindexed metadata key.
+    """
+    real_collection_name = get_real_collection_name(collection_name)
+    collection_config = await _database.get_collection_info_internal(real_collection_name)
+
+    if body.metadata_filter:
+        validate_metadata_filter(collection_config, body.metadata_filter)
+
+    return await _database.fetch_documents(real_collection_name, body, collection_config)
 
 
 @shared_router.delete("/collections/{collection_name}/documents/{document_id}", operation_id="delete_document")

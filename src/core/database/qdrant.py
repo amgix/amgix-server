@@ -14,7 +14,7 @@ from qdrant_client.models import FormulaQuery, SumExpression, MultExpression, Pr
 
 from .base import DatabaseBase, AmgixNotFound
 from ..models.cluster import MetricsBucket
-from ..models.document import Document, DocumentWithVectors, SearchResult, QueueDocument, QueueInfo, DocumentStatus, DocumentStatusResponse, VectorScore
+from ..models.document import Document, DocumentWithVectors, SearchResult, QueueDocument, QueueInfo, DocumentStatus, DocumentStatusResponse, VectorScore, DocumentFetchRequest, DocumentFetchResponse
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config
 from ..common import APP_PREFIX, VectorType, DatabaseInfo, DatabaseFeatures, SEARCH_PREFETCH_MULTIPLIER, DenseDistance, QueuedDocumentStatus, QueueOperationType, QueueOperationTypeLiteral, get_user_collection_name, MetadataValueType
 from ..common.lock_manager import LockClient
@@ -519,7 +519,56 @@ class QdrantDatabase(DatabaseBase):
         
         # Return documents in the same order as document_ids, None for missing ones
         return [doc_map.get(doc_id) for doc_id in document_ids]
-    
+
+    async def fetch_documents(
+        self,
+        collection_name: str,
+        request: DocumentFetchRequest,
+        collection_config: CollectionConfigInternal,
+    ) -> DocumentFetchResponse:
+        # Build filter from tags and metadata_filter (same logic as search)
+        conditions: List[rest.Condition] = []
+        if request.document_tags:
+            if request.document_tags_match_all:
+                for tag in request.document_tags:
+                    conditions.append(rest.FieldCondition(key="tags", match=rest.MatchValue(value=tag)))
+            else:
+                conditions.append(rest.FieldCondition(key="tags", match=rest.MatchAny(any=request.document_tags)))
+
+        metadata_filter = (
+            self._convert_metadata_filter_to_qdrant(request.metadata_filter, collection_config)
+            if request.metadata_filter else None
+        )
+
+        if conditions and metadata_filter:
+            scroll_filter = rest.Filter(must=[rest.Filter(must=conditions), metadata_filter])
+        elif conditions:
+            scroll_filter = rest.Filter(must=conditions)
+        else:
+            scroll_filter = metadata_filter
+
+        # Decode the opaque `after` token — it's just the Qdrant point UUID string
+        offset = request.after if request.after else None
+
+        points, next_offset = await self.client.scroll(
+            collection_name=collection_name,
+            scroll_filter=scroll_filter,
+            limit=request.page_size,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False,
+        )
+
+        documents = []
+        for point in points:
+            doc = Document.model_validate(point.payload)
+            documents.append(doc)
+
+        return DocumentFetchResponse(
+            documents=documents,
+            after=str(next_offset) if next_offset is not None else None,
+        )
+
     async def delete_document(self, collection_name: str, document_id: str) -> bool:
         """
         Delete a document by ID.
