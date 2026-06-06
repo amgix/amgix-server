@@ -181,19 +181,40 @@ class MetadataValueType:
     FLOAT = "float"
     BOOLEAN = "boolean"
     DATETIME = "datetime"
-    
+    ARRAY = "array"
+    OBJECT = "object"
+
     @classmethod
     def all(cls) -> list[str]:
         """Return all available metadata value types."""
+        return [
+            cls.STRING, cls.INTEGER, cls.FLOAT, cls.BOOLEAN, cls.DATETIME,
+            cls.ARRAY, cls.OBJECT,
+        ]
+
+    @classmethod
+    def indexable(cls) -> list[str]:
+        """Scalar types that may be declared in metadata_indexes."""
         return [cls.STRING, cls.INTEGER, cls.FLOAT, cls.BOOLEAN, cls.DATETIME]
 
-# Type-safe literal for metadata value types
+# Type-safe literal for metadata value types (document metadata)
 MetadataValueTypeLiteral = Literal[
     MetadataValueType.STRING,
     MetadataValueType.INTEGER,
     MetadataValueType.FLOAT,
     MetadataValueType.BOOLEAN,
-    MetadataValueType.DATETIME
+    MetadataValueType.DATETIME,
+    MetadataValueType.ARRAY,
+    MetadataValueType.OBJECT,
+]
+
+# Scalar types only — used for metadata_indexes
+MetadataIndexValueTypeLiteral = Literal[
+    MetadataValueType.STRING,
+    MetadataValueType.INTEGER,
+    MetadataValueType.FLOAT,
+    MetadataValueType.BOOLEAN,
+    MetadataValueType.DATETIME,
 ]
 
 # Metadata filter operators

@@ -12,7 +12,8 @@ from ..common import (
     MAX_VECTOR_DIMENSIONS, DEFAULT_TOP_K, LANGUAGE_DETECTION_CONFIDENCE,
     WMTR_WORD_WEIGHT_PERCENTAGE,
     WMTR_DEFAULT_TRIGRAM_WEIGHT,
-    MetadataValueTypeLiteral, MetadataFilterOpLiteral, MAX_METADATA_KEY_LENGTH
+    MetadataValueTypeLiteral, MetadataIndexValueTypeLiteral,
+    MetadataFilterOpLiteral, MAX_METADATA_KEY_LENGTH
 )
 
 
@@ -274,7 +275,7 @@ class VectorConfigInternal(VectorConfig):
 class MetadataIndex(BaseModel):
     """Metadata field index configuration"""
     key: str = Field(..., description="Metadata field key to index")
-    type: MetadataValueTypeLiteral = Field(..., description="Type of the metadata value")
+    type: MetadataIndexValueTypeLiteral = Field(..., description="Type of the metadata value")
     
     @field_validator('key')
     @classmethod

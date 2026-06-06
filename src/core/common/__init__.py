@@ -80,6 +80,7 @@ __all__ = [
     "DenseDistanceLiteral",
     "MetadataValueType",
     "MetadataValueTypeLiteral",
+    "MetadataIndexValueTypeLiteral",
     "MetadataFilterOpLiteral",
     "DatabaseInfo",
     "DatabaseFeatures",

@@ -3745,6 +3745,73 @@ def test_noop_collection_explicit():
         requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
 
 
+@pytest.mark.all_backends
+def test_metadata_array_object_roundtrip():
+    """Array (raw list) and object (explicit MetaValue) metadata roundtrip via GET and fetch."""
+    collection_name = f"test_meta_array_obj_{str(uuid.uuid4())[:8]}"
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json={})
+    assert r.status_code == 200, f"Collection creation failed: {r.text}"
+
+    try:
+        doc = create_test_document("arr_obj_doc", "Title", "Body")
+        doc["metadata"] = {
+            "aliases": ["alpha", "beta"],
+            "organization": {
+                "value": {"id": "org-1", "name": "EPA"},
+                "type": "object",
+            },
+        }
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+        assert r.status_code == 200, f"Sync upsert failed: {r.text}"
+
+        r = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/arr_obj_doc")
+        assert r.status_code == 200, f"GET failed: {r.text}"
+        md = r.json()["metadata"]
+        assert md["aliases"] == ["alpha", "beta"]
+        assert md["organization"] == {"id": "org-1", "name": "EPA"}
+
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/fetch", json={})
+        assert r.status_code == 200, f"Fetch failed: {r.text}"
+        fetched = r.json()["documents"][0]["metadata"]
+        assert fetched["aliases"] == ["alpha", "beta"]
+        assert fetched["organization"] == {"id": "org-1", "name": "EPA"}
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_metadata_object_requires_explicit_form():
+    """Raw dict metadata values are rejected; object must use explicit {value, type} form."""
+    collection_name = f"test_meta_obj_explicit_{str(uuid.uuid4())[:8]}"
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json={})
+    assert r.status_code == 200
+
+    try:
+        doc = create_test_document("bad_obj_doc", "Title", "Body")
+        doc["metadata"] = {"organization": {"id": "org-1", "name": "EPA"}}
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+        assert r.status_code == 422, f"Expected 422 for raw object metadata, got {r.status_code}: {r.text}"
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_metadata_indexes_reject_array_object():
+    """array and object cannot be declared in metadata_indexes."""
+    collection_name = f"test_meta_idx_reject_{str(uuid.uuid4())[:8]}"
+    for bad_type in ("array", "object"):
+        config = {
+            "vectors": [{"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["name"]}],
+            "metadata_indexes": [{"key": "data", "type": bad_type}],
+        }
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}_{bad_type}", json=config)
+        assert r.status_code == 422, (
+            f"Expected 422 for metadata_indexes type={bad_type}, got {r.status_code}: {r.text}"
+        )
+
+
 if __name__ == "__main__":
     # For manual testing
     pytest.main([__file__, "-v"])

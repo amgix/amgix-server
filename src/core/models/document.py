@@ -117,7 +117,8 @@ class Document(BaseModel):
         """Validate metadata keys and convert values to MetaValue instances.
         
         Accepts raw values (string, int, float, bool) and converts them to MetaValue.
-        Datetime values must be provided as MetaValue objects (or dicts) with type='datetime'.
+        Datetime and object values must use explicit MetaValue form: {"value": ..., "type": "datetime"|"object"}.
+        Arrays may be provided as raw lists (type inferred) or explicit MetaValue with type='array'.
         """
         if v is None:
             return None
@@ -146,7 +147,12 @@ class Document(BaseModel):
                 if 'value' in value and 'type' in value:
                     meta_value = MetaValue(**value)
                 else:
-                    raise ValueError(f"Metadata value for key '{key}' is a dict but missing 'value' or 'type' fields. For datetime, use {{'value': '...', 'type': 'datetime'}}")
+                    raise ValueError(
+                        f"Metadata value for key '{key}' is a dict but missing 'value' or 'type' fields. "
+                        f"For datetime or object, use {{'value': ..., 'type': 'datetime'}} or {{'value': ..., 'type': 'object'}}"
+                    )
+            elif isinstance(value, list):
+                meta_value = MetaValue(value=value, type=MetadataValueType.ARRAY)
             # If it's a raw value, infer type and convert
             # Note: bool must be checked before int because bool is a subclass of int in Python
             elif isinstance(value, str):
@@ -158,7 +164,10 @@ class Document(BaseModel):
             elif isinstance(value, float):
                 meta_value = MetaValue(value=value, type=MetadataValueType.FLOAT)
             else:
-                raise ValueError(f"Metadata value for key '{key}' must be string, int, float, bool, or MetaValue (required for datetime), got {type(value).__name__}")
+                raise ValueError(
+                    f"Metadata value for key '{key}' must be string, int, float, bool, list, "
+                    f"or MetaValue (required for datetime and object), got {type(value).__name__}"
+                )
             
             # Validate type is in allowed values
             if meta_value.type not in MetadataValueType.all():
@@ -187,7 +196,13 @@ class Document(BaseModel):
                     datetime.fromisoformat(meta_value.value.replace('Z', '+00:00'))
                 except (ValueError, AttributeError):
                     raise ValueError(f"Metadata value for key '{key}' must be a valid ISO 8601 datetime string, got '{meta_value.value}'")
-            
+            elif meta_value.type == MetadataValueType.ARRAY:
+                if not isinstance(meta_value.value, list):
+                    raise ValueError(f"Metadata value for key '{key}' must be list for type='array', got {type(meta_value.value).__name__}")
+            elif meta_value.type == MetadataValueType.OBJECT:
+                if not isinstance(meta_value.value, dict):
+                    raise ValueError(f"Metadata value for key '{key}' must be dict for type='object', got {type(meta_value.value).__name__}")
+
             validated_metadata[key] = meta_value
         
         return validated_metadata
