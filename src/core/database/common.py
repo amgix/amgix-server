@@ -89,8 +89,10 @@ def validate_metadata_types(collection_config: CollectionConfigInternal, documen
     for key, expected_type in expected_types.items():
         if key in document.metadata:
             meta_value = document.metadata[key]
+            if meta_value.value is None:
+                continue
             actual_type = meta_value.type
-            
+
             if actual_type != expected_type:
                 raise AmgixValidationError(
                     f"Metadata key '{key}' has type '{actual_type}' but collection config expects type '{expected_type}'"

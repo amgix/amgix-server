@@ -3798,6 +3798,64 @@ def test_metadata_object_requires_explicit_form():
 
 
 @pytest.mark.all_backends
+def test_metadata_null_roundtrip():
+    """Null metadata values are accepted and roundtrip via GET and fetch."""
+    collection_name = f"test_meta_null_{str(uuid.uuid4())[:8]}"
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json={})
+    assert r.status_code == 200, f"Collection creation failed: {r.text}"
+
+    try:
+        doc = create_test_document("null_doc", "Title", "Body")
+        doc["metadata"] = {
+            "optional_field": None,
+            "present": "yes",
+        }
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+        assert r.status_code == 200, f"Sync upsert failed: {r.text}"
+
+        r = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/null_doc")
+        assert r.status_code == 200, f"GET failed: {r.text}"
+        md = r.json()["metadata"]
+        assert "optional_field" in md
+        assert md["optional_field"] is None
+        assert md["present"] == "yes"
+
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/fetch", json={})
+        assert r.status_code == 200, f"Fetch failed: {r.text}"
+        fetched = r.json()["documents"][0]["metadata"]
+        assert fetched["optional_field"] is None
+        assert fetched["present"] == "yes"
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_metadata_null_indexed_field():
+    """Null on an indexed metadata key is accepted (stored as unset for indexing)."""
+    collection_name = f"test_meta_null_idx_{str(uuid.uuid4())[:8]}"
+    config = {
+        "vectors": [{"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["name"]}],
+        "metadata_indexes": [{"key": "year", "type": "integer"}],
+    }
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config)
+    assert r.status_code == 200, f"Collection creation failed: {r.text}"
+
+    try:
+        doc = create_test_document("null_idx_doc", "Title", "Body")
+        doc["metadata"] = {"year": None}
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+        assert r.status_code == 200, f"Sync upsert with null indexed field failed: {r.text}"
+
+        r = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/null_idx_doc")
+        assert r.status_code == 200, f"GET failed: {r.text}"
+        assert r.json()["metadata"]["year"] is None
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
 def test_metadata_indexes_reject_array_object():
     """array and object cannot be declared in metadata_indexes."""
     collection_name = f"test_meta_idx_reject_{str(uuid.uuid4())[:8]}"

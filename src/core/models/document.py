@@ -153,6 +153,8 @@ class Document(BaseModel):
                     )
             elif isinstance(value, list):
                 meta_value = MetaValue(value=value, type=MetadataValueType.ARRAY)
+            elif value is None:
+                meta_value = MetaValue(value=None, type=MetadataValueType.OBJECT)
             # If it's a raw value, infer type and convert
             # Note: bool must be checked before int because bool is a subclass of int in Python
             elif isinstance(value, str):
@@ -200,8 +202,8 @@ class Document(BaseModel):
                 if not isinstance(meta_value.value, list):
                     raise ValueError(f"Metadata value for key '{key}' must be list for type='array', got {type(meta_value.value).__name__}")
             elif meta_value.type == MetadataValueType.OBJECT:
-                if not isinstance(meta_value.value, dict):
-                    raise ValueError(f"Metadata value for key '{key}' must be dict for type='object', got {type(meta_value.value).__name__}")
+                if meta_value.value is not None and not isinstance(meta_value.value, dict):
+                    raise ValueError(f"Metadata value for key '{key}' must be dict or null for type='object', got {type(meta_value.value).__name__}")
 
             validated_metadata[key] = meta_value
         

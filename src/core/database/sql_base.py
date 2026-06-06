@@ -1133,7 +1133,9 @@ class SQLBase(DatabaseBase):
                     # Extract value from metadata if present
                     if metadata_index.key in document_with_vectors.metadata:
                         meta_value = document_with_vectors.metadata[metadata_index.key]
-                        if metadata_index.type == MetadataValueType.BOOLEAN:
+                        if meta_value.value is None:
+                            values.append(None)
+                        elif metadata_index.type == MetadataValueType.BOOLEAN:
                             values.append(1 if meta_value.value else 0)
                         elif metadata_index.type == MetadataValueType.DATETIME:
                             values.append(datetime.fromisoformat(meta_value.value.replace('Z', '+00:00')))
@@ -1212,7 +1214,9 @@ class SQLBase(DatabaseBase):
                     # Extract value from metadata if present
                     if metadata_index.key in document_with_vectors.metadata:
                         meta_value = document_with_vectors.metadata[metadata_index.key]
-                        if metadata_index.type == MetadataValueType.BOOLEAN:
+                        if meta_value.value is None:
+                            set_values.append(None)
+                        elif metadata_index.type == MetadataValueType.BOOLEAN:
                             set_values.append(1 if meta_value.value else 0)
                         elif metadata_index.type == MetadataValueType.DATETIME:
                             set_values.append(datetime.fromisoformat(meta_value.value.replace('Z', '+00:00')))
