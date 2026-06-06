@@ -51,7 +51,7 @@ class Document(BaseModel):
     content: Optional[str] = Field(None, max_length=MAX_DOCUMENT_CONTENT_LENGTH, description=f"Main content of the document (max {MAX_DOCUMENT_CONTENT_LENGTH} characters)")
     metadata: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Dictionary of metadata key-value pairs. Datetime and object values require explicit {value, type} form."
+        description="Dictionary of metadata key-value pairs. Datetime values require explicit {value, type} form; objects may be plain dicts."
     )
     custom_vectors: Optional[List[CustomDocumentVector]] = Field(
         default=None,
@@ -116,8 +116,10 @@ class Document(BaseModel):
     def validate_metadata(cls, v: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Validate metadata keys and normalize values to flat storage form.
         
-        Accepts raw values (string, int, float, bool, list, null) and stores them flat.
-        Datetime and object values must use explicit MetaValue form: {"value": ..., "type": "datetime"|"object"}.
+        Accepts raw values (string, int, float, bool, list, dict, null) and stores them flat.
+        Datetime values must use explicit MetaValue form: {"value": ..., "type": "datetime"}.
+        Objects may be sent as a plain dict or as {"value": ..., "type": "object"} (wrapper
+        must contain only those two keys).
         Legacy wrapped storage values {"value": ..., "type": ...} are unwrapped on read.
         """
         if v is None:
@@ -144,13 +146,10 @@ class Document(BaseModel):
                 meta_value = value
             # If it's a dict (could be MetaValue dict representation), try to parse it
             elif isinstance(value, dict):
-                if 'value' in value and 'type' in value:
+                if set(value.keys()) == {'value', 'type'}:
                     meta_value = MetaValue(**value)
                 else:
-                    raise ValueError(
-                        f"Metadata value for key '{key}' is a dict but missing 'value' or 'type' fields. "
-                        f"For datetime or object, use {{'value': ..., 'type': 'datetime'}} or {{'value': ..., 'type': 'object'}}"
-                    )
+                    meta_value = MetaValue(value=value, type=MetadataValueType.OBJECT)
             elif isinstance(value, list):
                 meta_value = MetaValue(value=value, type=MetadataValueType.ARRAY)
             elif value is None:

@@ -3781,17 +3781,110 @@ def test_metadata_array_object_roundtrip():
 
 
 @pytest.mark.all_backends
-def test_metadata_object_requires_explicit_form():
-    """Raw dict metadata values are rejected; object must use explicit {value, type} form."""
-    collection_name = f"test_meta_obj_explicit_{str(uuid.uuid4())[:8]}"
+def test_metadata_object_raw_dict_sync_roundtrip():
+    """Plain dict object metadata roundtrips via sync upsert."""
+    collection_name = f"test_meta_obj_raw_sync_{str(uuid.uuid4())[:8]}"
     r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json={})
     assert r.status_code == 200
 
     try:
-        doc = create_test_document("bad_obj_doc", "Title", "Body")
+        doc = create_test_document("raw_obj_sync_doc", "Title", "Body")
         doc["metadata"] = {"organization": {"id": "org-1", "name": "EPA"}}
         r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
-        assert r.status_code == 422, f"Expected 422 for raw object metadata, got {r.status_code}: {r.text}"
+        assert r.status_code == 200, f"Sync upsert failed: {r.text}"
+
+        r = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/raw_obj_sync_doc")
+        assert r.status_code == 200, f"GET failed: {r.text}"
+        assert r.json()["metadata"]["organization"] == {"id": "org-1", "name": "EPA"}
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_metadata_object_async_roundtrip():
+    """Object metadata (explicit MetaValue on ingress) roundtrips via async upsert + queue."""
+    collection_name = f"test_meta_obj_async_{str(uuid.uuid4())[:8]}"
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json={})
+    assert r.status_code == 200, f"Collection creation failed: {r.text}"
+
+    try:
+        doc = create_test_document("async_obj_doc", "Title", "Body")
+        doc["metadata"] = {
+            "organization": {
+                "value": {"id": "org-1", "name": "EPA"},
+                "type": "object",
+            },
+        }
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents", json=doc)
+        assert r.status_code == 200, f"Async upsert failed: {r.text}"
+
+        wait_for_document(collection_name, "async_obj_doc")
+
+        r = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/async_obj_doc")
+        assert r.status_code == 200, f"GET failed: {r.text}"
+        assert r.json()["metadata"]["organization"] == {"id": "org-1", "name": "EPA"}
+
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/fetch", json={})
+        assert r.status_code == 200, f"Fetch failed: {r.text}"
+        fetched = r.json()["documents"][0]["metadata"]
+        assert fetched["organization"] == {"id": "org-1", "name": "EPA"}
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_metadata_object_with_value_and_type_fields_sync_roundtrip():
+    """Dicts that include value/type among other keys are stored as objects, not MetaValue."""
+    collection_name = f"test_meta_obj_mixed_keys_{str(uuid.uuid4())[:8]}"
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json={})
+    assert r.status_code == 200
+
+    try:
+        doc = create_test_document("mixed_keys_doc", "Title", "Body")
+        doc["metadata"] = {
+            "organization": {
+                "value": "dataset",
+                "type": "catalog",
+                "id": "org-3",
+                "name": "NOAA",
+            },
+        }
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+        assert r.status_code == 200, f"Sync upsert failed: {r.text}"
+
+        r = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/mixed_keys_doc")
+        assert r.status_code == 200, f"GET failed: {r.text}"
+        assert r.json()["metadata"]["organization"] == {
+            "value": "dataset",
+            "type": "catalog",
+            "id": "org-3",
+            "name": "NOAA",
+        }
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_metadata_object_raw_dict_async_roundtrip():
+    """Plain dict object metadata roundtrips via async upsert + queue."""
+    collection_name = f"test_meta_obj_raw_async_{str(uuid.uuid4())[:8]}"
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json={})
+    assert r.status_code == 200, f"Collection creation failed: {r.text}"
+
+    try:
+        doc = create_test_document("raw_async_obj_doc", "Title", "Body")
+        doc["metadata"] = {"organization": {"id": "org-2", "name": "USDA"}}
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents", json=doc)
+        assert r.status_code == 200, f"Async upsert failed: {r.text}"
+
+        wait_for_document(collection_name, "raw_async_obj_doc")
+
+        r = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/raw_async_obj_doc")
+        assert r.status_code == 200, f"GET failed: {r.text}"
+        assert r.json()["metadata"]["organization"] == {"id": "org-2", "name": "USDA"}
 
     finally:
         requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
