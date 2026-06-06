@@ -3686,6 +3686,65 @@ def test_fetch_documents_page_size_validation():
         requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
 
 
+@pytest.mark.all_backends
+def test_noop_collection_implicit():
+    """Collection created without vectors gets an implicit noop vector; docs fetchable, search returns empty."""
+    collection_name = f"test_noop_implicit_{str(uuid.uuid4())[:8]}"
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json={})
+    assert r.status_code == 200, f"Collection creation failed: {r.text}"
+
+    try:
+        doc_ids = ["noop_doc_1", "noop_doc_2"]
+        for doc_id in doc_ids:
+            doc = create_test_document(doc_id, f"Doc {doc_id}", f"Content for {doc_id}")
+            r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+            assert r.status_code == 200, f"Sync upsert failed for {doc_id}: {r.text}"
+
+        # All docs must come back via fetch
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/fetch", json={})
+        assert r.status_code == 200, f"Fetch failed: {r.text}"
+        data = r.json()
+        assert set(d["id"] for d in data["documents"]) == set(doc_ids)
+
+        # Search must return empty — noop sparse vector matches nothing
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json={"query": "doc content"})
+        assert r.status_code == 200, f"Search failed: {r.text}"
+        assert r.json() == []
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_noop_collection_explicit():
+    """Collection created with an explicit noop vector behaves identically to the implicit case."""
+    collection_name = f"test_noop_explicit_{str(uuid.uuid4())[:8]}"
+    config = {"vectors": [{"name": "noop", "type": "noop", "index_fields": ["name"]}]}
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config)
+    assert r.status_code == 200, f"Collection creation failed: {r.text}"
+
+    try:
+        doc_ids = ["noop_doc_a", "noop_doc_b", "noop_doc_c"]
+        for doc_id in doc_ids:
+            doc = create_test_document(doc_id, f"Doc {doc_id}", f"Content for {doc_id}")
+            r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+            assert r.status_code == 200, f"Sync upsert failed for {doc_id}: {r.text}"
+
+        # All docs must come back via fetch
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/fetch", json={})
+        assert r.status_code == 200, f"Fetch failed: {r.text}"
+        data = r.json()
+        assert set(d["id"] for d in data["documents"]) == set(doc_ids)
+
+        # Search must return empty — noop sparse vector matches nothing
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json={"query": "doc content"})
+        assert r.status_code == 200, f"Search failed: {r.text}"
+        assert r.json() == []
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
 if __name__ == "__main__":
     # For manual testing
     pytest.main([__file__, "-v"])

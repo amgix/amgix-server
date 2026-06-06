@@ -19,16 +19,19 @@ class VectorType:
     # Custom vector types (user-provided)
     DENSE_CUSTOM = "dense_custom"      # User-provided dense vectors
     SPARSE_CUSTOM = "sparse_custom"    # User-provided sparse vectors
-    
+
+    # No-op tokenizer — always returns empty sparse vector; used for payload-only collections
+    NOOP = "noop"
+
     @classmethod
     def all(cls) -> list[str]:
         """Return all available vector types."""
-        return [cls.DENSE_MODEL, cls.SPARSE_MODEL, cls.FULL_TEXT, cls.TRIGRAMS, cls.WHITESPACE, cls.WMTR, cls.KEYWORD, cls.DENSE_CUSTOM, cls.SPARSE_CUSTOM]
+        return [cls.DENSE_MODEL, cls.SPARSE_MODEL, cls.FULL_TEXT, cls.TRIGRAMS, cls.WHITESPACE, cls.WMTR, cls.KEYWORD, cls.DENSE_CUSTOM, cls.SPARSE_CUSTOM, cls.NOOP]
     
     @classmethod
     def sparse_types(cls) -> list[str]:
         """Return all sparse vector types."""
-        return [cls.SPARSE_MODEL, cls.FULL_TEXT, cls.TRIGRAMS, cls.WHITESPACE, cls.WMTR, cls.KEYWORD, cls.SPARSE_CUSTOM]
+        return [cls.SPARSE_MODEL, cls.FULL_TEXT, cls.TRIGRAMS, cls.WHITESPACE, cls.WMTR, cls.KEYWORD, cls.SPARSE_CUSTOM, cls.NOOP]
     
     @classmethod
     def dense_types(cls) -> list[str]:
@@ -67,6 +70,7 @@ VectorTypeLiteral = Literal[
     VectorType.KEYWORD,
     VectorType.DENSE_CUSTOM,
     VectorType.SPARSE_CUSTOM,
+    VectorType.NOOP,
 ]
 
 # Dense vector distance metrics

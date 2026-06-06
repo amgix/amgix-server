@@ -288,13 +288,23 @@ class MetadataIndex(BaseModel):
         return v
 
 
+_NOOP_DEFAULT_VECTOR = {
+    "name": "noop",
+    "type": "noop",
+    "index_fields": ["name"],
+}
+
+
 class CollectionConfig(BaseModel):
     """
     API model for collection configuration - uses VectorConfig.
+
+    If ``vectors`` is omitted or empty a single noop vector is injected
+    automatically, creating a payload-only collection.
     """
     model_config = {"extra": "forbid"}
-    vectors: List[VectorConfig] = Field(
-        ..., description="List of vector configurations for this collection"
+    vectors: Optional[List[VectorConfig]] = Field(
+        default=None, description="List of vector configurations for this collection"
     )
     store_content: bool = Field(
         default=True, description="Whether to store document content in the database."
@@ -303,18 +313,20 @@ class CollectionConfig(BaseModel):
         default=None,
         description="List of metadata fields to index for filtering and sorting"
     )
-    
-    @field_validator('vectors')
+
+    @model_validator(mode='before')
     @classmethod
-    def validate_vectors_not_empty(cls, v):
-        if not v:
-            raise ValueError("Collection must have at least one vector configuration")
-        return v
-    
+    def inject_noop_if_empty(cls, data):
+        if isinstance(data, dict) and not data.get("vectors"):
+            data = {**data, "vectors": [_NOOP_DEFAULT_VECTOR]}
+        return data
+
     @field_validator('vectors')
     @classmethod
     def validate_unique_vector_names(cls, v):
         """Validate that all vector names are unique within the collection."""
+        if not v:
+            return v
         names = [vector.name for vector in v]
         seen = set()
         duplicates = []

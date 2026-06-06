@@ -100,6 +100,17 @@ class Vectorizer:
                             ))
                             token_lengths_per_doc[doc_idx][field_vector_name] = token_length
 
+                elif config.type == VectorType.NOOP:
+                    for doc_idx, _doc in enumerate(documents):
+                        for field in config.index_fields:
+                            vectors_per_doc[doc_idx].append(VectorData(
+                                vector_name=config.name,
+                                field=field,
+                                vector_type=config.type,
+                                sparse_indices=[],
+                                sparse_values=[]
+                            ))
+
                 else:  # All other sparse vector types (SPARSE_MODEL, TRIGRAMS, FULL_TEXT, WHITESPACE, WMTR)
                     texts: List[str] = []
                     avgdls: List[float] = []
@@ -354,7 +365,17 @@ class Vectorizer:
                     sparse_values=values
                 )
                 vector_data_list.append(vector_data)
-                
+
+        elif config.type == VectorType.NOOP:
+            for field in fields:
+                vector_data_list.append(VectorData(
+                    vector_name=config.name,
+                    field=field,
+                    vector_type=config.type,
+                    sparse_indices=[],
+                    sparse_values=[]
+                ))
+
         else:  # All other sparse vector types (SPARSE_MODEL, TRIGRAMS, FULL_TEXT, WHITESPACE, WMTR)
             # Use query_model/query_revision if specified in config, otherwise use model/revision
             effective_config = config
