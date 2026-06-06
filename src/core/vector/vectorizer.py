@@ -153,7 +153,7 @@ class Vectorizer:
                 raise ValueError(f"Failed to generate vector '{config.name}' for fields {config.index_fields}: {str(e)}") from e
 
         return [
-            DocumentWithVectors(
+            DocumentWithVectors.model_construct(
                 **doc.model_dump(),
                 vectors=vectors_per_doc[i],
                 token_lengths=token_lengths_per_doc[i]

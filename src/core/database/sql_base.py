@@ -1109,8 +1109,7 @@ class SQLBase(DatabaseBase):
         async def insert_document(document_with_vectors: DocumentWithVectors, conn=None):
             # Prepare metadata JSON
             if document_with_vectors.metadata:
-                metadata_dict = {k: v.model_dump() for k, v in document_with_vectors.metadata.items()}
-                metadata_json = json.dumps(metadata_dict)
+                metadata_json = json.dumps(document_with_vectors.metadata)
             else:
                 metadata_json = None
             
@@ -1132,15 +1131,15 @@ class SQLBase(DatabaseBase):
                     
                     # Extract value from metadata if present
                     if metadata_index.key in document_with_vectors.metadata:
-                        meta_value = document_with_vectors.metadata[metadata_index.key]
-                        if meta_value.value is None:
+                        value = document_with_vectors.metadata[metadata_index.key]
+                        if value is None:
                             values.append(None)
                         elif metadata_index.type == MetadataValueType.BOOLEAN:
-                            values.append(1 if meta_value.value else 0)
+                            values.append(1 if value else 0)
                         elif metadata_index.type == MetadataValueType.DATETIME:
-                            values.append(datetime.fromisoformat(meta_value.value.replace('Z', '+00:00')))
+                            values.append(datetime.fromisoformat(value.replace('Z', '+00:00')))
                         else:
-                            values.append(meta_value.value)
+                            values.append(value)
                     else:
                         values.append(None)
             
@@ -1191,8 +1190,7 @@ class SQLBase(DatabaseBase):
         async def update_document(document_with_vectors: DocumentWithVectors, conn=None):
             # Prepare metadata JSON
             if document_with_vectors.metadata:
-                metadata_dict = {k: v.model_dump() for k, v in document_with_vectors.metadata.items()}
-                metadata_json = json.dumps(metadata_dict)
+                metadata_json = json.dumps(document_with_vectors.metadata)
             else:
                 metadata_json = None
             
@@ -1213,15 +1211,15 @@ class SQLBase(DatabaseBase):
                     
                     # Extract value from metadata if present
                     if metadata_index.key in document_with_vectors.metadata:
-                        meta_value = document_with_vectors.metadata[metadata_index.key]
-                        if meta_value.value is None:
+                        value = document_with_vectors.metadata[metadata_index.key]
+                        if value is None:
                             set_values.append(None)
                         elif metadata_index.type == MetadataValueType.BOOLEAN:
-                            set_values.append(1 if meta_value.value else 0)
+                            set_values.append(1 if value else 0)
                         elif metadata_index.type == MetadataValueType.DATETIME:
-                            set_values.append(datetime.fromisoformat(meta_value.value.replace('Z', '+00:00')))
+                            set_values.append(datetime.fromisoformat(value.replace('Z', '+00:00')))
                         else:
-                            set_values.append(meta_value.value)
+                            set_values.append(value)
                     else:
                         set_values.append(None)
             

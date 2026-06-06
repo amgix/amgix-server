@@ -2,7 +2,7 @@
 Common database utilities for getting connected database instances.
 """
 
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlparse, urlunparse
 from datetime import datetime
 from src.core.database.base_factory import DatabaseFactory
@@ -62,19 +62,30 @@ async def get_connected_database(connection_string: str, logger):
     return database
 
 
+def _metadata_value_matches_index_type(value: Any, expected_type: str) -> bool:
+    if expected_type == MetadataValueType.STRING:
+        return isinstance(value, str)
+    if expected_type == MetadataValueType.INTEGER:
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected_type == MetadataValueType.FLOAT:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected_type == MetadataValueType.BOOLEAN:
+        return isinstance(value, bool)
+    if expected_type == MetadataValueType.DATETIME:
+        return isinstance(value, str) and _is_iso_datetime_string(value)
+    return False
+
+
 def validate_metadata_types(collection_config: CollectionConfigInternal, document: Document) -> None:
     """
-    Validate that document metadata types match the types declared in collection_config.metadata_indexes.
-    
-    For each key in metadata_indexes, if that key exists in document.metadata,
-    validates that the MetaValue.type matches the declared type in metadata_indexes.
+    Validate that document metadata values match the types declared in collection_config.metadata_indexes.
     
     Args:
         collection_config: Collection configuration with metadata_indexes
         document: Document with metadata to validate
         
     Raises:
-        AmgixValidationError: If a metadata key's type doesn't match the declared type
+        AmgixValidationError: If a metadata key's value doesn't match the declared index type
     """
     if not collection_config.metadata_indexes:
         return
@@ -82,25 +93,21 @@ def validate_metadata_types(collection_config: CollectionConfigInternal, documen
     if not document.metadata:
         return
     
-    # Build mapping of key -> expected type from metadata_indexes
     expected_types = {idx.key: idx.type for idx in collection_config.metadata_indexes}
     
-    # Validate each indexed metadata field
     for key, expected_type in expected_types.items():
         if key in document.metadata:
-            meta_value = document.metadata[key]
-            if meta_value.value is None:
+            value = document.metadata[key]
+            if value is None:
                 continue
-            actual_type = meta_value.type
-
-            if actual_type != expected_type:
+            if not _metadata_value_matches_index_type(value, expected_type):
                 raise AmgixValidationError(
-                    f"Metadata key '{key}' has type '{actual_type}' but collection config expects type '{expected_type}'"
+                    f"Metadata key '{key}' value does not match collection config expected type '{expected_type}'"
                 )
             if (
                 expected_type == MetadataValueType.STRING
-                and isinstance(meta_value.value, str)
-                and len(meta_value.value) > MAX_INDEXED_METADATA_VALUE_LENGTH
+                and isinstance(value, str)
+                and len(value) > MAX_INDEXED_METADATA_VALUE_LENGTH
             ):
                 raise AmgixValidationError(
                     f"String metadata value for key '{key}' exceeds {MAX_INDEXED_METADATA_VALUE_LENGTH} character limit"

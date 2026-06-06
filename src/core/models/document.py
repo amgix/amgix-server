@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Any, Union, Tuple
 from datetime import datetime, timezone
-from pydantic import BaseModel, Field, field_validator, field_serializer, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 import re
 import json
 
@@ -51,7 +51,7 @@ class Document(BaseModel):
     content: Optional[str] = Field(None, max_length=MAX_DOCUMENT_CONTENT_LENGTH, description=f"Main content of the document (max {MAX_DOCUMENT_CONTENT_LENGTH} characters)")
     metadata: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Dictionary of metadata key-value pairs. Values can be simple types (string, int, float, bool) or MetaValue objects (required for datetime)"
+        description="Dictionary of metadata key-value pairs. Datetime and object values require explicit {value, type} form."
     )
     custom_vectors: Optional[List[CustomDocumentVector]] = Field(
         default=None,
@@ -113,12 +113,12 @@ class Document(BaseModel):
 
     @field_validator('metadata', mode='before')
     @classmethod
-    def validate_metadata(cls, v: Optional[Dict[str, Any]]) -> Optional[Dict[str, MetaValue]]:
-        """Validate metadata keys and convert values to MetaValue instances.
+    def validate_metadata(cls, v: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Validate metadata keys and normalize values to flat storage form.
         
-        Accepts raw values (string, int, float, bool) and converts them to MetaValue.
+        Accepts raw values (string, int, float, bool, list, null) and stores them flat.
         Datetime and object values must use explicit MetaValue form: {"value": ..., "type": "datetime"|"object"}.
-        Arrays may be provided as raw lists (type inferred) or explicit MetaValue with type='array'.
+        Legacy wrapped storage values {"value": ..., "type": ...} are unwrapped on read.
         """
         if v is None:
             return None
@@ -205,24 +205,25 @@ class Document(BaseModel):
                 if meta_value.value is not None and not isinstance(meta_value.value, dict):
                     raise ValueError(f"Metadata value for key '{key}' must be dict or null for type='object', got {type(meta_value.value).__name__}")
 
-            validated_metadata[key] = meta_value
+            validated_metadata[key] = meta_value.value
         
         return validated_metadata
 
-   
-    @field_serializer("metadata", when_used="json")
-    def serialize_metadata_flat(self, metadata: Optional[Dict[str, Any]], _info) -> Optional[Dict[str, Any]]:
-        if metadata is None:
-            return None
-        result = {}
-        for k, v in metadata.items():
-            if isinstance(v, MetaValue):
-                result[k] = v.value
-            elif isinstance(v, dict) and "value" in v:
-                result[k] = v["value"]
+    @staticmethod
+    def _flatten_stored_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """Unwrap legacy wrapped storage values to flat form."""
+        flattened = {}
+        for key, value in metadata.items():
+            if (
+                isinstance(value, dict)
+                and "value" in value
+                and "type" in value
+                and set(value.keys()) <= {"value", "type"}
+            ):
+                flattened[key] = value["value"]
             else:
-                result[k] = v
-        return result
+                flattened[key] = value
+        return flattened
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any], store_content: bool = False, skip_validation: bool = False) -> "Document":
@@ -239,7 +240,6 @@ class Document(BaseModel):
                 meta_parsed = meta_raw
             else:
                 meta_parsed = {}
-            # Pydantic will automatically convert dict values to MetaValue instances
             data["metadata"] = meta_parsed
         
         # Timestamp: ensure proper datetime with UTC tzinfo
@@ -260,7 +260,8 @@ class Document(BaseModel):
             data["content"] = None
         
         if skip_validation:
-            # Create document without running validators (useful for DB retrieval)
+            if data.get("metadata"):
+                data["metadata"] = cls._flatten_stored_metadata(data["metadata"])
             return cls.model_construct(**data)
         else:
             return cls(**data)

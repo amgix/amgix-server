@@ -300,11 +300,25 @@ class BunnyTalk:
         hints = get_type_hints(handler, globalns=getattr(handler, '__globals__', None))
         # Map param name → TypeAdapter for types that need coercion, None for pass-through primitives
         param_adapters: Dict[str, Optional[TypeAdapter]] = {}
+        # Map param name → from_dict callable for BaseModel params that support skip_validation
+        param_from_dict: Dict[str, tuple] = {}  # name → (from_dict_fn, has_store_content)
         for name, param in sig.parameters.items():
             annotation = hints.get(name, inspect.Parameter.empty)
             if annotation == inspect.Parameter.empty:
                 raise TypeError(f"Missing or unresolvable type annotation for parameter '{name}' in handler '{handler.__name__}'")
             param_adapters[name] = _make_adapter_if_needed(annotation)
+            # Check if this param's type has from_dict(skip_validation=True) — avoids re-running
+            # business validators on data already validated at the API layer.
+            if inspect.isclass(annotation) and issubclass(annotation, BaseModel):
+                from_dict_fn = getattr(annotation, 'from_dict', None)
+                if callable(from_dict_fn):
+                    try:
+                        fd_sig = inspect.signature(from_dict_fn)
+                        if 'skip_validation' in fd_sig.parameters:
+                            has_store_content = 'store_content' in fd_sig.parameters
+                            param_from_dict[name] = (from_dict_fn, has_store_content)
+                    except (ValueError, TypeError):
+                        pass
 
         async def process_message(message: Message):
             try:
@@ -333,7 +347,7 @@ class BunnyTalk:
                     # This is an RPC call, send response back
                     try:
                         # Automatically map parameters to handler function
-                        result = await self._call_handler_with_params_local(handler, payload, param_names, param_adapters, is_async)
+                        result = await self._call_handler_with_params_local(handler, payload, param_names, param_adapters, is_async, param_from_dict)
                         # Wrap result in RPCResponse
                         if isinstance(result, RPCResponse):
                             response = result
@@ -372,7 +386,7 @@ class BunnyTalk:
                     )
                 else:
                     # Regular event, automatically map parameters to handler function
-                    await self._call_handler_with_params_local(handler, payload, param_names, param_adapters, is_async)
+                    await self._call_handler_with_params_local(handler, payload, param_names, param_adapters, is_async, param_from_dict)
                 
                 await message.ack()
             except Exception as e:
@@ -507,6 +521,7 @@ class BunnyTalk:
         param_names: list,
         param_adapters: Dict[str, TypeAdapter],
         is_async: bool,
+        param_from_dict: Dict[str, tuple] = None,
     ) -> Any:
         """
         Map JSON payload fields to the handler, using Pydantic adapters so primitives like
@@ -516,6 +531,14 @@ class BunnyTalk:
         kwargs = payload.get('kwargs', {})
 
         def convert_value(param_name: str, value: Any) -> Any:
+            # Use from_dict(skip_validation=True) when available — avoids re-running business
+            # validators on data already validated at the API layer.
+            if param_from_dict and param_name in param_from_dict and isinstance(value, dict):
+                from_dict_fn, has_store_content = param_from_dict[param_name]
+                kw = {'skip_validation': True}
+                if has_store_content:
+                    kw['store_content'] = True
+                return from_dict_fn(value, **kw)
             adapter = param_adapters.get(param_name)
             if not adapter:
                 return value
@@ -704,7 +727,10 @@ class BunnyTalk:
                         # Fall back to generic exception if dynamic reconstruction fails
                         error_class = None
                     if inspect.isclass(error_class) and issubclass(error_class, Exception):
-                        raise error_class(response.error)
+                        try:
+                            raise error_class(response.error)
+                        except TypeError:
+                            raise Exception(f"{class_name}: {response.error}")
                 raise Exception(response.error)
             
             # Convert result back to expected type if needed

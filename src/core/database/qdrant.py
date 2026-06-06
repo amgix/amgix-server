@@ -305,10 +305,9 @@ class QdrantDatabase(DatabaseBase):
         )
         
         # Create payload indexes for declared metadata fields
-        # Index on metadata.<key>.value to access the actual value, not the MetaValue object
         if config.metadata_indexes:
             for metadata_index in config.metadata_indexes:
-                field_path = f"metadata.{metadata_index.key}.value"
+                field_path = f"metadata.{metadata_index.key}"
                 if metadata_index.type == MetadataValueType.STRING:
                     schema_type = rest.PayloadSchemaType.KEYWORD
                 elif metadata_index.type == MetadataValueType.INTEGER:
@@ -801,7 +800,7 @@ class QdrantDatabase(DatabaseBase):
 
         def convert_node(node: MetadataFilter) -> Any:
             if node.key:
-                field_path = f"metadata.{node.key}.value"
+                field_path = f"metadata.{node.key}"
                 if node.op == "eq":
                     return rest.FieldCondition(
                         key=field_path,
