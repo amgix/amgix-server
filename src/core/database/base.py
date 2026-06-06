@@ -9,7 +9,7 @@ import asyncio
 
 from ..models.cluster import MetricsBucket
 from ..models.document import Document, DocumentWithVectors, SearchResult, QueueDocument, QueueInfo, DocumentStatusResponse, DocumentFetchRequest, DocumentFetchResponse
-from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig
+from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, MetadataFilter
 from ..common import (
     APP_PREFIX, DOC_NAMESPACE, DatabaseInfo, DatabaseFeatures, QueueOperationTypeLiteral,
     MAX_DATABASE_WAIT_SECONDS
@@ -281,6 +281,23 @@ class DatabaseBase(ABC):
         """
         pass
     
+    @abstractmethod
+    async def fetch_documents_by_metadata_values(
+        self,
+        collection_name: str,
+        metadata_key: str,
+        values: List[Any],
+        metadata_filter: Optional[MetadataFilter],
+        collection_config: CollectionConfigInternal,
+        max_documents: int,
+    ) -> List[Document]:
+        """
+        Fetch documents whose flat metadata[metadata_key] is in values, optionally
+        constrained by an additional metadata filter on the same collection.
+        At most max_documents are returned.
+        """
+        pass
+
     @abstractmethod
     async def fetch_documents(
         self,

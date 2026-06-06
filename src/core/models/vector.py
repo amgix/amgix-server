@@ -518,6 +518,15 @@ class SearchQuery(BaseModel):
             "Only fields declared in collection metadata_indexes can be filtered."
         )
     )
+    join: Optional[Union[str, List[str]]] = Field(
+        None,
+        description=(
+            "Optional join of another collection onto each search result. "
+            "Forms: '<collection>', '<collection>[<parent>=<child>]', or with '(<filter>)'. "
+            "Parent refs: $id, $.meta.<key>. Child refs: $$id, $$.meta.<key>. "
+            "Omitted '[]' defaults to [$id=$$id]. Joined documents appear under joined[collection_name]."
+        ),
+    )
 
     @field_validator("metadata_filter", mode="before")
     @classmethod

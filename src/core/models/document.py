@@ -350,7 +350,12 @@ class SearchResult(Document):
     
     score: float = Field(..., description="The relevance score for this document")
     vector_scores: List[VectorScore] = Field(default_factory=list, description="Raw per-vector scores with field, vector, score, and rank information")
-    
+    joined: Optional[Dict[str, List["Document"]]] = Field(
+        default=None,
+        exclude_if=lambda v: v is None,
+        description="Documents from joined collections, keyed by collection name",
+    )
+
     content: Optional[str] = Field(None, exclude=True)
     
     @classmethod
@@ -368,6 +373,7 @@ class SearchResult(Document):
         # Reuse Document's from_dict to handle timestamp conversion and other common fields
         # We pass store_content=False since SearchResult doesn't need content
         doc_data = data.copy()
+        joined_raw = doc_data.pop('joined', None)
         if 'score' in doc_data:
             score = doc_data.pop('score')
             vector_scores_raw = doc_data.pop('vector_scores', {})
@@ -393,6 +399,8 @@ class SearchResult(Document):
             result_data = doc.model_dump()
             result_data['score'] = score
             result_data['vector_scores'] = vector_scores
+            if joined_raw is not None:
+                result_data['joined'] = joined_raw
             # Now construct the SearchResult
             if skip_validation:
                 return cls.model_construct(**result_data)
@@ -404,6 +412,8 @@ class SearchResult(Document):
             result_data = doc.model_dump()
             result_data['score'] = 0.0
             result_data['vector_scores'] = data.get('vector_scores', {})
+            if joined_raw is not None:
+                result_data['joined'] = joined_raw
             if skip_validation:
                 return cls.model_construct(**result_data)
             else:

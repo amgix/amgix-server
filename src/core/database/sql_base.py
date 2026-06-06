@@ -1526,6 +1526,78 @@ class SQLBase(DatabaseBase):
         except Exception:
             raise
     
+    async def fetch_documents_by_metadata_values(
+        self,
+        collection_name: str,
+        metadata_key: str,
+        values: List[Any],
+        metadata_filter: Optional[MetadataFilter],
+        collection_config: CollectionConfigInternal,
+        max_documents: int,
+    ) -> List[Document]:
+        if not values or max_documents <= 0:
+            return []
+
+        docs_table = self.get_table_name(collection_name, self.TableType.DOCUMENTS)
+        tags_table = self.get_table_name(collection_name, self.TableType.TAGS)
+        meta_col = self.quote_identifier(f"meta_{metadata_key}")
+
+        doc_columns = ["pk_id", "id", "timestamp", "name", "description", "metadata", "content"]
+        select_cols = ", ".join(f"d.{self.quote_identifier(c)}" for c in doc_columns)
+
+        conditions = [f"d.{meta_col} IN %(join_values)s"]
+        params: Dict[str, Any] = {"join_values": tuple(values)}
+
+        if metadata_filter:
+            filter_sql, filter_params = self._convert_metadata_filter_to_sql(
+                metadata_filter,
+                collection_config,
+            )
+            if filter_sql:
+                conditions.append(f"({filter_sql})")
+                params.update(filter_params)
+
+        where_clause = f"WHERE {' AND '.join(conditions)}"
+        sql = f"""
+            SELECT {select_cols}
+            FROM {self.quote_identifier(docs_table)} d
+            {where_clause}
+            LIMIT %(join_limit)s
+        """
+        params["join_limit"] = max_documents
+
+        rows = await self.execute_sql(sql, params)
+        if not rows:
+            return []
+
+        pk_ids = [row["pk_id"] for row in rows]
+        pk_placeholders = ", ".join(["%s"] * len(pk_ids))
+        tags_sql = self.format_sql(
+            "select",
+            table=tags_table,
+            columns=self.quote_column_list(["doc_pk_id", "tag"]),
+            where=f" WHERE {self.quote_identifier('doc_pk_id')} IN ({pk_placeholders})",
+        )
+        tags_rows = await self.execute_sql(tags_sql, tuple(pk_ids))
+        tags_by_pk: Dict[int, List[str]] = {}
+        for tr in tags_rows:
+            tags_by_pk.setdefault(tr["doc_pk_id"], []).append(tr["tag"])
+
+        documents: List[Document] = []
+        for row in rows:
+            metadata = json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]
+            doc = Document.model_validate({
+                "id": row["id"],
+                "timestamp": row["timestamp"],
+                "name": row.get("name"),
+                "description": row.get("description"),
+                "content": row.get("content"),
+                "metadata": metadata,
+                "tags": tags_by_pk.get(row["pk_id"]),
+            })
+            documents.append(doc)
+        return documents
+
     async def fetch_documents(
         self,
         collection_name: str,

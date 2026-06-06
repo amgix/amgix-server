@@ -29,7 +29,7 @@ from __future__ import annotations
 from lark import Lark, Transformer, Token, v_args
 from lark.exceptions import UnexpectedInput
 
-_GRAMMAR = r"""
+FILTER_EXPR_GRAMMAR = r"""
     ?expr : expr _AND expr  -> and_expr
           | expr _OR expr   -> or_expr
           | _NOT expr       -> not_expr
@@ -62,6 +62,8 @@ _GRAMMAR = r"""
     %ignore WS
 """
 
+_GRAMMAR = "start: expr\n" + FILTER_EXPR_GRAMMAR
+
 _OP_MAP = {
     "=":  "eq",
     "!=": "neq",
@@ -75,7 +77,7 @@ _parser = Lark(_GRAMMAR, start="expr", parser="earley", ambiguity="resolve")
 
 
 @v_args(inline=True)
-class _FilterTransformer(Transformer):
+class FilterExprTransformer(Transformer):
     def and_expr(self, left, right):
         return {"and": [left, right]}
 
@@ -107,7 +109,7 @@ class _FilterTransformer(Transformer):
         return None
 
 
-_transformer = _FilterTransformer()
+_transformer = FilterExprTransformer()
 
 
 def parse_filter_to_dict(expr: str) -> dict:

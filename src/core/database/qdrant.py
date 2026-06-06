@@ -519,6 +519,44 @@ class QdrantDatabase(DatabaseBase):
         # Return documents in the same order as document_ids, None for missing ones
         return [doc_map.get(doc_id) for doc_id in document_ids]
 
+    async def fetch_documents_by_metadata_values(
+        self,
+        collection_name: str,
+        metadata_key: str,
+        values: List[Any],
+        metadata_filter: Optional[MetadataFilter],
+        collection_config: CollectionConfigInternal,
+        max_documents: int,
+    ) -> List[Document]:
+        if not values or max_documents <= 0:
+            return []
+
+        in_condition = rest.FieldCondition(
+            key=f"metadata.{metadata_key}",
+            match=rest.MatchAny(any=list(values)),
+        )
+        extra_filter = (
+            self._convert_metadata_filter_to_qdrant(metadata_filter, collection_config)
+            if metadata_filter
+            else None
+        )
+        if extra_filter:
+            scroll_filter = rest.Filter(must=[in_condition, extra_filter])
+        else:
+            scroll_filter = rest.Filter(must=[in_condition])
+
+        points, _ = await self.client.scroll(
+            collection_name=collection_name,
+            scroll_filter=scroll_filter,
+            limit=max_documents,
+            with_payload=True,
+            with_vectors=False,
+        )
+        return [
+            Document.from_dict(point.payload, store_content=True, skip_validation=True)
+            for point in points
+        ]
+
     async def fetch_documents(
         self,
         collection_name: str,
