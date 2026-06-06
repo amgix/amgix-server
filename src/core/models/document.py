@@ -352,7 +352,6 @@ class SearchResult(Document):
     vector_scores: List[VectorScore] = Field(default_factory=list, description="Raw per-vector scores with field, vector, score, and rank information")
     joined: Optional[Dict[str, List["Document"]]] = Field(
         default=None,
-        exclude_if=lambda v: v is None,
         description="Documents from joined collections, keyed by collection name",
     )
 
