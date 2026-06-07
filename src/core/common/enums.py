@@ -46,7 +46,7 @@ class VectorType:
     @classmethod
     def custom_tokenization(cls) -> list[str]:
         """Return vector types that use custom tokenization logic."""
-        return [cls.FULL_TEXT, cls.TRIGRAMS, cls.WHITESPACE, cls.WMTR]
+        return [cls.FULL_TEXT, cls.TRIGRAMS, cls.WHITESPACE, cls.WMTR, cls.NOOP]
     
     @classmethod
     def custom_vectors(cls) -> list[str]:

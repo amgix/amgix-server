@@ -8,16 +8,18 @@ from .whitespace import WhiteSpaceVector
 from .wmtr import WMTRVector
 from .dense_custom import CustomDenseVector
 from .sparse_custom import CustomSparseVector
+from .noop import NoopVector
 
 __all__ = [
-    "VectorBase", 
-    "TrigramsVector", 
-    "Vectorizer", 
-    "DenseModelVector", 
-    "SparseModelVector", 
-    "CustomDenseVector", 
-    "CustomSparseVector", 
+    "VectorBase",
+    "TrigramsVector",
+    "Vectorizer",
+    "DenseModelVector",
+    "SparseModelVector",
+    "CustomDenseVector",
+    "CustomSparseVector",
     "FullTextVector",
     "WhiteSpaceVector",
     "WMTRVector",
+    "NoopVector",
 ]

@@ -12,7 +12,7 @@ from src.core.common.embed_router import EmbedRouter
 from src.core.common.metrics_definitions import MetricKey
 from src.core.common.metrics_service import MetricsService
 from src.core.models.vector import VectorConfigInternal
-from src.core.vector import VectorBase, TrigramsVector, FullTextVector, WhiteSpaceVector, WMTRVector, DenseModelVector, SparseModelVector, CustomDenseVector, CustomSparseVector
+from src.core.vector import VectorBase, TrigramsVector, FullTextVector, WhiteSpaceVector, WMTRVector, DenseModelVector, SparseModelVector, CustomDenseVector, CustomSparseVector, NoopVector
 from src.core.common.bunny_talk import BunnyTalk
 from src.core.database.base import DatabaseBase
 from src.core.common.enums import VectorType
@@ -179,6 +179,7 @@ class EmbedRouterService(EncoderBase):
             VectorType.SPARSE_MODEL: SparseModelVector,
             VectorType.DENSE_CUSTOM: CustomDenseVector,
             VectorType.SPARSE_CUSTOM: CustomSparseVector,
+            VectorType.NOOP: NoopVector,
         }
 
         self.local_models = {}
