@@ -61,6 +61,8 @@ const CLUSTER_MAP_PLACEHOLDER_HEIGHT = 72
 
 const CLUSTER_MAP_NODE_API_FILL = '#4f3a78'
 const CLUSTER_MAP_NODE_API_STROKE = '#cdb4fc'
+const CLUSTER_MAP_NODE_NOW_FILL = '#3a2060'
+const CLUSTER_MAP_NODE_NOW_STROKE = '#b47afc'
 const CLUSTER_MAP_NODE_ENCODER_INDEX_FILL = '#3d2848'
 const CLUSTER_MAP_NODE_ENCODER_INDEX_STROKE = '#e0a8ec'
 const CLUSTER_MAP_NODE_ENCODER_QUERY_FILL = '#172f45'
@@ -84,7 +86,7 @@ const API_LATENCY_HEAT_COOL_RGB = { r: 46, g: 125, b: 50 }
 const API_LATENCY_HEAT_HOT_RGB = { r: 198, g: 40, b: 40 }
 
 type EncoderKind = 'index' | 'query' | 'all'
-type ClusterMapNodeBucket = 'api' | EncoderKind
+type ClusterMapNodeBucket = 'api' | 'now' | EncoderKind
 type ClusterMapPosition = { x: number; y: number }
 type CytoscapeWithNodeHtmlLabel = Core & {
   nodeHtmlLabel(
@@ -237,10 +239,11 @@ function clusterMapFirstWindowSampleForMetric(
 }
 
 function roleMaterialLigature(bucket: ClusterMapNodeBucket): string {
-  if (bucket === 'api') {
-    return 'api'
-  }
   switch (bucket) {
+    case 'api':
+      return 'api'
+    case 'now':
+      return 'layers'
     case 'index':
       return 'database'
     case 'query':
@@ -326,19 +329,20 @@ function buildMaterialIconNodeLabel(
   const labelClass = stale
     ? 'dashboard-cluster-map-node-label dashboard-cluster-map-node-label--stale'
     : 'dashboard-cluster-map-node-label'
+  const isApiLike = bucket === 'api' || bucket === 'now'
   const caption: ClusterMapNodeRowCaption =
-    bucket !== 'api' && node.is_leader === true ? { kind: 'leader', host } : { kind: 'plain', text: host }
+    isApiLike && node.is_leader !== true ? { kind: 'plain', text: host } : node.is_leader === true ? { kind: 'leader', host } : { kind: 'plain', text: host }
   const row = buildNodeRow(roleMaterialLigature(bucket), caption)
   const latMs = nodeLocalAvgLatencyMsForMap(node, bucket)
-  let latencyLine = `<span class='dashboard-cluster-map-node-latency dashboard-cluster-map-node-latency--empty'>- ${bucket === 'api' ? 'ms avg' : 'ms/psg'}</span>`
+  let latencyLine = `<span class='dashboard-cluster-map-node-latency dashboard-cluster-map-node-latency--empty'>- ${isApiLike ? 'ms avg' : 'ms/psg'}</span>`
   if (latMs != null && Number.isFinite(latMs)) {
     const latText = formatClusterMapAvgMs(latMs)
     if (latText !== '') {
-      latencyLine = `<span class='dashboard-cluster-map-node-latency'>${escapeHtmlText(latText)} ${bucket === 'api' ? 'ms avg' : 'ms/psg'}</span>`
+      latencyLine = `<span class='dashboard-cluster-map-node-latency'>${escapeHtmlText(latText)} ${isApiLike ? 'ms avg' : 'ms/psg'}</span>`
     }
   }
 
-  if (bucket === 'api') {
+  if (isApiLike) {
     const reqText = apiClusterMapRequestsRateText(node)
     const errText = apiClusterMapErrorsRateText(node)
     const reqLine =
@@ -371,19 +375,26 @@ function encoderKindFromRole(role: string): EncoderKind {
   return 'all'
 }
 
+type ApiEntry = [string, NodeView, ClusterMapNodeBucket]
+
 function partitionClusterNodes(nodes: { [key: string]: NodeView }): {
-  apiEntries: Array<[string, NodeView]>
+  apiEntries: Array<ApiEntry>
   encoderByKind: Record<EncoderKind, Array<[string, NodeView]>>
+  nowEntries: Array<[string, NodeView]>
 } {
-  const apiEntries: Array<[string, NodeView]> = []
+  const apiEntries: Array<ApiEntry> = []
   const encoderByKind: Record<EncoderKind, Array<[string, NodeView]>> = {
     index: [],
     query: [],
     all: [],
   }
+  const nowEntries: Array<[string, NodeView]> = []
   for (const [host, node] of Object.entries(nodes)) {
-    if (node.role === 'api') {
-      apiEntries.push([host, node])
+    if (node.role === 'now') {
+      apiEntries.push([host, node, 'now'])
+      nowEntries.push([host, node])
+    } else if (node.role === 'api') {
+      apiEntries.push([host, node, 'api'])
     } else {
       encoderByKind[encoderKindFromRole(node.role)].push([host, node])
     }
@@ -392,7 +403,8 @@ function partitionClusterNodes(nodes: { [key: string]: NodeView }): {
   for (const kind of Object.keys(encoderByKind) as EncoderKind[]) {
     encoderByKind[kind].sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }))
   }
-  return { apiEntries, encoderByKind }
+  nowEntries.sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }))
+  return { apiEntries, encoderByKind, nowEntries }
 }
 
 function encoderEntriesInEdgeOrder(
@@ -462,7 +474,7 @@ function encoderLocalDocLatencyMs(node: NodeView): number | null {
 }
 
 function nodeLocalAvgLatencyMsForMap(node: NodeView, bucket: ClusterMapNodeBucket): number | null {
-  if (bucket === 'api') {
+  if (bucket === 'api' || bucket === 'now') {
     return apiRequestAvgMs(node)
   }
   return encoderLocalDocLatencyMs(node)
@@ -670,18 +682,21 @@ function buildClusterGraph(view: Metrics | null, systemInfo: SystemInfoResponse 
     return [placeholderNode('No nodes reported')]
   }
 
-  const { apiEntries, encoderByKind } = partitionClusterNodes(nodes)
+  const { apiEntries, encoderByKind, nowEntries } = partitionClusterNodes(nodes)
   const encodersAll = encoderEntriesInEdgeOrder(encoderByKind)
   if (apiEntries.length === 0 && encodersAll.length === 0) {
     return [placeholderNode('No nodes reported')]
   }
 
-  const apiHeat = apiLatencyHeatStrokeByHost(apiEntries)
+  const apiHeat = apiLatencyHeatStrokeByHost(apiEntries.map(([h, n]): [string, NodeView] => [h, n]))
   const encoderHeat = encoderDocLatencyHeatByKind(encoderByKind)
   const elements: ElementDefinition[] = []
   const nowSec = Date.now() / 1000
 
-  const hasBroker = apiEntries.length > 0 && encodersAll.length > 0
+  // hasBroker: show RabbitMQ when there are pure encoders OR when 'now' nodes are present (they use broker too)
+  const hasBroker = (apiEntries.length > 0 && encodersAll.length > 0) || nowEntries.length > 0
+  // hasDb: show DB when there are encoders OR 'now' nodes (they talk directly to the DB)
+  const hasDb = encodersAll.length > 0 || nowEntries.length > 0
   let brokerY = CLUSTER_MAP_BROKER_Y
 
   if (apiEntries.length > 0) {
@@ -700,27 +715,33 @@ function buildClusterGraph(view: Metrics | null, systemInfo: SystemInfoResponse 
       )
     }
 
-    apiEntries.forEach(([host, node], index) => {
+    apiEntries.forEach(([host, node, bucket], index) => {
       const pos = apiPositions[index]
       if (pos == null) {
         return
       }
       const nodeId = sanitizeClusterMapNodeId(host)
-      const heatStroke = apiHeat.get(host) ?? CLUSTER_MAP_NODE_API_STROKE
+      const isNow = bucket === 'now'
+      const baseStroke = isNow ? CLUSTER_MAP_NODE_NOW_STROKE : CLUSTER_MAP_NODE_API_STROKE
+      const fill = isNow ? CLUSTER_MAP_NODE_NOW_FILL : CLUSTER_MAP_NODE_API_FILL
+      const heatStroke = apiHeat.get(host) ?? baseStroke
       const borderWidth =
         apiHeat.has(host) ? CLUSTER_MAP_NODE_HEAT_STROKE_WIDTH : CLUSTER_MAP_NODE_STROKE_WIDTH
       const stale = clusterMapNodeHeartbeatStale(node, nowSec)
+      const cssClass = isNow
+        ? (stale ? 'map-node html-node api-node now-node map-node-stale' : 'map-node html-node api-node now-node')
+        : (stale ? 'map-node html-node api-node map-node-stale' : 'map-node html-node api-node')
       elements.push(
         htmlNode(
           nodeId,
-          buildMaterialIconNodeLabel(host, node, 'api', stale),
+          buildMaterialIconNodeLabel(host, node, bucket, stale),
           pos,
-          CLUSTER_MAP_NODE_API_FILL,
+          fill,
           heatStroke,
           borderWidth,
           CLUSTER_MAP_NODE_WIDTH,
           CLUSTER_MAP_NODE_HEIGHT,
-          stale ? 'map-node html-node api-node map-node-stale' : 'map-node html-node api-node',
+          cssClass,
         ),
       )
     })
@@ -798,7 +819,7 @@ function buildClusterGraph(view: Metrics | null, systemInfo: SystemInfoResponse 
     currentGroupY = encoderRowBaseY + maxEncoderBlockHeight + CLUSTER_MAP_GROUP_GAP_Y
   }
 
-  if (encodersAll.length > 0) {
+  if (hasDb) {
     const dbKindRaw = systemInfo?.database_kind?.trim() ?? ''
     const dbKind = dbKindRaw.length > 0 ? dbKindRaw : CLUSTER_MAP_DB_LABEL_FALLBACK
     elements.push(
@@ -854,14 +875,20 @@ function buildClusterGraph(view: Metrics | null, systemInfo: SystemInfoResponse 
     }
   }
 
-  if (encodersAll.length > 0) {
-    const encDbFan = { count: encodersAll.length }
-    for (let i = 0; i < encodersAll.length; i++) {
-      const [host] = encodersAll[i]!
+  if (hasDb) {
+    const dbFanEntries: Array<[string, NodeView]> = [...encodersAll, ...nowEntries]
+    const dbFan = { count: dbFanEntries.length }
+    for (let i = 0; i < dbFanEntries.length; i++) {
+      const [host] = dbFanEntries[i]!
       const nodeId = sanitizeClusterMapNodeId(host)
-      const stroke = encoderHeat.get(host) ?? CLUSTER_MAP_EDGE_COLOR
+      const isNowNode = nowEntries.some(([h]) => h === host)
+      const stroke = isNowNode
+        ? (apiHeat.get(host) ?? CLUSTER_MAP_EDGE_COLOR)
+        : (encoderHeat.get(host) ?? CLUSTER_MAP_EDGE_COLOR)
       const lineWidth =
-        encoderHeat.has(host) ? CLUSTER_MAP_NODE_HEAT_STROKE_WIDTH : CLUSTER_MAP_NODE_STROKE_WIDTH
+        (isNowNode ? apiHeat.has(host) : encoderHeat.has(host))
+          ? CLUSTER_MAP_NODE_HEAT_STROKE_WIDTH
+          : CLUSTER_MAP_NODE_STROKE_WIDTH
       elements.push(
         edgeElement(
           `edge_${nodeId}_${CLUSTER_MAP_DB_NODE_ID}`,
@@ -869,7 +896,7 @@ function buildClusterGraph(view: Metrics | null, systemInfo: SystemInfoResponse 
           CLUSTER_MAP_DB_NODE_ID,
           stroke,
           lineWidth,
-          { index: i, count: encDbFan.count },
+          { index: i, count: dbFan.count },
         ),
       )
     }

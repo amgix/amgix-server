@@ -1338,15 +1338,20 @@ function sortEncoderNodeEntries(entries: Array<[string, NodeView]>): Array<[stri
   return copy
 }
 
+function isApiRole(role: string): boolean {
+  return role === 'api' || role === 'now'
+}
+
 function partitionApiAndEncoderNodes(
   nodes: { [key: string]: NodeView },
 ): { api: Array<[string, NodeView]>; encoders: Array<[string, NodeView]> } {
   const api: Array<[string, NodeView]> = []
   const encoders: Array<[string, NodeView]> = []
   for (const entry of Object.entries(nodes)) {
-    if (entry[1].role === 'api') {
+    if (isApiRole(entry[1].role)) {
       api.push(entry)
-    } else {
+    }
+    if (isIndexWorkerRole(entry[1].role)) {
       encoders.push(entry)
     }
   }
@@ -1354,7 +1359,7 @@ function partitionApiAndEncoderNodes(
 }
 
 function isIndexWorkerRole(role: string): boolean {
-  return role === 'index' || role === 'all'
+  return role === 'index' || role === 'all' || role === 'now'
 }
 
 function partitionIndexRoleNodes(nodes: { [key: string]: NodeView }): Array<[string, NodeView]> {
@@ -1457,7 +1462,7 @@ function aggregateApiChartMetrics(
   let sawErr5xx = false
 
   for (const node of Object.values(view.nodes)) {
-    if (node.role !== 'api') {
+    if (!isApiRole(node.role)) {
       continue
     }
     const list = node.metrics ?? []
@@ -3588,8 +3593,14 @@ export class HomePanel extends DashboardPanel {
       return
     }
     const { api: apiNodeEntries, encoders: encoderNodeEntries } = partitionApiAndEncoderNodes(nodes)
-    $root.find('[data-home-cluster-info="api-nodes"]').text(String(apiNodeEntries.length))
-    $root.find('[data-home-cluster-info="encoder-nodes"]').text(String(encoderNodeEntries.length))
+    const pureApiCount = apiNodeEntries.filter(([, n]) => n.role !== 'now').length
+    const nowApiCount = apiNodeEntries.filter(([, n]) => n.role === 'now').length
+    const apiCountText = nowApiCount > 0 ? `${pureApiCount} + ${nowApiCount}` : String(pureApiCount)
+    $root.find('[data-home-cluster-info="api-nodes"]').text(apiCountText)
+    const pureEncoderCount = encoderNodeEntries.filter(([, n]) => n.role !== 'now').length
+    const nowCount = encoderNodeEntries.filter(([, n]) => n.role === 'now').length
+    const encoderCountText = nowCount > 0 ? `${pureEncoderCount} + ${nowCount}` : String(pureEncoderCount)
+    $root.find('[data-home-cluster-info="encoder-nodes"]').text(encoderCountText)
     const apiAgg = aggregateApiChartMetrics(view)
     const $apiRps = $root.find('[data-home-cluster-info="api-rps"]')
     if (apiAgg.allRps != null && Number.isFinite(apiAgg.allRps)) {
