@@ -310,7 +310,11 @@ class MetricsService:
                 except Exception:
                     pass
             if self._pending_1m:
-                self._schedule_flush()
+                final = self._schedule_flush()
+                try:
+                    final.result()
+                except Exception:
+                    pass
         finally:
             await bunny_talk.close()
 
