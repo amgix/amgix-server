@@ -489,15 +489,19 @@ class EncoderService(EncoderBase):
             new_docs_in_batch = first_update.get("new_doc_count", 0)
             new_doc_count = old_doc_count + new_docs_in_batch
 
-            for field_vector_name, update_data in updates.items():
-                old_avgdl = avgdls.get(field_vector_name, 0.0)
+            if new_doc_count <= 0:
+                new_doc_count = 0
+                avgdls = {}
+            else:
+                for field_vector_name, update_data in updates.items():
+                    old_avgdl = avgdls.get(field_vector_name, 0.0)
 
-                new_sum_token_lengths = update_data.get("new_sum_token_lengths", 0)
-                update_sum_token_lengths = update_data.get("update_sum_token_lengths", 0)
-                old_sum_token_lengths = update_data.get("old_sum_token_lengths", 0)
+                    new_sum_token_lengths = update_data.get("new_sum_token_lengths", 0)
+                    update_sum_token_lengths = update_data.get("update_sum_token_lengths", 0)
+                    old_sum_token_lengths = update_data.get("old_sum_token_lengths", 0)
 
-                new_avgdl = (old_avgdl * old_doc_count - old_sum_token_lengths + new_sum_token_lengths + update_sum_token_lengths) / new_doc_count
-                avgdls[field_vector_name] = new_avgdl
+                    new_avgdl = (old_avgdl * old_doc_count - old_sum_token_lengths + new_sum_token_lengths + update_sum_token_lengths) / new_doc_count
+                    avgdls[field_vector_name] = new_avgdl
 
             await self.database.set_collection_stats(collection_name, {"doc_count": new_doc_count, "avgdls": avgdls})
 
