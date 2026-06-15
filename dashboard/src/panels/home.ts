@@ -2754,6 +2754,131 @@ export class HomePanel extends DashboardPanel {
     ch.update('none')
   }
 
+  private syncBrokerMetricsChartTheme(
+    ch: Chart<'line'>,
+    cutoff: number,
+    now: number,
+    gridColor: string,
+    tickColor: string,
+    tooltipBg: string,
+    tooltipBorder: string,
+    chartFont: ReturnType<typeof readClusterChartFont>,
+  ): void {
+    const xScale = ch.options.scales?.x
+    if (xScale && typeof xScale === 'object' && 'min' in xScale && 'max' in xScale && !ch.isZoomedOrPanned()) {
+      ;(xScale as { min?: number; max?: number }).min = cutoff
+      ;(xScale as { min?: number; max?: number }).max = now
+    }
+    ch.options.color = tickColor
+    const plSync = ch.options.plugins as Record<string, unknown> | undefined
+    if (plSync) {
+      plSync.zoom = homeLineChartZoomOptions(cutoff, now)
+    }
+    if (ch.options.font && typeof ch.options.font === 'object') {
+      const f = ch.options.font as { family?: string; size?: number }
+      f.family = chartFont.family
+      f.size = chartFont.tickPx
+    }
+    const tip = ch.options.plugins?.tooltip
+    if (tip && typeof tip === 'object') {
+      const t = tip as {
+        backgroundColor?: string
+        borderColor?: string
+        borderWidth?: number
+        titleColor?: string
+        bodyColor?: string
+        titleFont?: { family?: string; size?: number }
+        bodyFont?: { family?: string; size?: number }
+      }
+      t.backgroundColor = tooltipBg
+      t.borderColor = tooltipBorder
+      t.borderWidth = 1
+      t.titleColor = tickColor
+      t.bodyColor = tickColor
+      if (t.titleFont) {
+        t.titleFont.family = chartFont.family
+        t.titleFont.size = chartFont.tooltipPx
+      }
+      if (t.bodyFont) {
+        t.bodyFont.family = chartFont.family
+        t.bodyFont.size = chartFont.tooltipPx
+      }
+    }
+    const spanMs = now - cutoff
+    const xs = ch.options.scales?.x
+    if (xs && typeof xs === 'object') {
+      const gx = (xs as { grid?: { color?: string }; ticks?: { color?: string; font?: { family?: string; size?: number } } }).grid
+      if (gx) {
+        gx.color = gridColor
+      }
+      const tx = (xs as {
+        ticks?: {
+          color?: string
+          font?: { family?: string; size?: number }
+          callback?: (tickValue: string | number, index: number, ticks: unknown) => string | string[]
+        }
+      }).ticks
+      if (tx) {
+        tx.color = tickColor
+        if (tx.font) {
+          tx.font.family = chartFont.family
+          tx.font.size = chartFont.tickPx
+        }
+        tx.callback = (tickValue: string | number) => {
+          const n = typeof tickValue === 'number' ? tickValue : Number(tickValue)
+          if (!Number.isFinite(n)) {
+            return ''
+          }
+          return formatClusterChartXAxisTickLabel(n, spanMs)
+        }
+      }
+    }
+    const syncYAxis = (
+      ys: unknown,
+      yAxisTitle: string,
+      gridOnChartArea: boolean,
+    ): void => {
+      if (typeof ys !== 'object' || ys === null) {
+        return
+      }
+      const axis = ys as {
+        grid?: { color?: string; drawOnChartArea?: boolean }
+        ticks?: { color?: string; font?: { family?: string; size?: number } }
+        title?: { display?: boolean; text?: string; color?: string; font?: { family?: string; size?: number; weight?: number } }
+      }
+      if (!axis.grid) {
+        axis.grid = {}
+      }
+      axis.grid.color = gridColor
+      axis.grid.drawOnChartArea = gridOnChartArea
+      if (!axis.ticks) {
+        axis.ticks = {}
+      }
+      axis.ticks.color = tickColor
+      if (!axis.ticks.font) {
+        axis.ticks.font = {}
+      }
+      axis.ticks.font.family = chartFont.family
+      axis.ticks.font.size = chartFont.tickPx
+      if (!axis.title) {
+        axis.title = {}
+      }
+      axis.title.display = true
+      axis.title.text = yAxisTitle
+      axis.title.color = tickColor
+      if (!axis.title.font) {
+        axis.title.font = { family: chartFont.family, size: chartFont.titlePx, weight: 600 }
+      } else {
+        axis.title.font.family = chartFont.family
+        axis.title.font.size = chartFont.titlePx
+        axis.title.font.weight = 600
+      }
+    }
+    syncYAxis(ch.options.scales?.y, 'Search/Stats (msgs)', true)
+    syncYAxis(ch.options.scales?.y1, 'Docs (msgs)', false)
+    ch.update('none')
+  }
+
   private destroyClusterThroughputChart(): void {
     this.clusterThroughputChart?.destroy()
     this.clusterThroughputChart = null
@@ -3409,7 +3534,6 @@ export class HomePanel extends DashboardPanel {
     const now = Date.now()
     const resolution = this.trendResolutionSec()
     const cutoff = Math.floor((now - this.homeChartHistoryMs) / (resolution * 1000)) * (resolution * 1000)
-    const spanMs = now - cutoff
     const livePoint = brokerMetricLivePoint(this.metricsChartLiveView, now)
     const history = sortedBrokerMetricsPoints(this.brokerChartTrends, livePoint, cutoff, now, resolution)
     const yNum = (v: number | null) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
@@ -3469,25 +3593,8 @@ export class HomePanel extends DashboardPanel {
     } else {
       const ch = this.brokerMetricsChart
       ch.data.datasets = datasets as typeof ch.data.datasets
-      const xScale = ch.options.scales?.x
-      if (xScale && typeof xScale === 'object' && 'min' in xScale && 'max' in xScale && !ch.isZoomedOrPanned()) {
-        ;(xScale as { min?: number; max?: number }).min = cutoff
-        ;(xScale as { min?: number; max?: number }).max = now
-      }
-      const xs = ch.options.scales?.x
-      if (xs && typeof xs === 'object') {
-        const tx = (xs as { ticks?: { callback?: (tickValue: string | number) => string | string[] } }).ticks
-        if (tx) {
-          tx.callback = (tickValue: string | number) => {
-            const n = typeof tickValue === 'number' ? tickValue : Number(tickValue)
-            if (!Number.isFinite(n)) {
-              return ''
-            }
-            return formatClusterChartXAxisTickLabel(n, spanMs)
-          }
-        }
-      }
-      ch.options = buildBrokerMetricsChartOptions(
+      this.syncBrokerMetricsChartTheme(
+        ch,
         cutoff,
         now,
         gridColor,
@@ -3496,7 +3603,6 @@ export class HomePanel extends DashboardPanel {
         tooltipBorder,
         chartFont,
       )
-      ch.update('none')
     }
   }
 
