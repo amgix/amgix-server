@@ -470,7 +470,7 @@ class BunnyTalk:
             # instead of ChannelNotFoundEntity due to race conditions when the broker closes the channel on 404.
             error_str = str(e).casefold()
             if "channel closed" in error_str or "not_found" in error_str or "rpc timeout" in error_str:
-                self.logger.debug(f"Queue check failed for {queue_name}: {e}")
+                self.logger.warning(f"Queue check failed for {queue_name}: {e}")
                 return None, None
             raise
 

@@ -681,7 +681,7 @@ class EmbedRouterService(EncoderBase):
             if self.metrics.is_leader():
                 for metric_key, queue_name in BROKER_QUEUE_BY_METRIC.items():
                     try:
-                        _, message_count = await self.bunny_talk.get_queue_info(queue_name, timeout=1.0)
+                        _, message_count = await self.bunny_talk.get_queue_info(queue_name, timeout=2.0)
                         if message_count is None:
                             continue
                         self.metrics.record(metric_key, float(message_count), n=1)
