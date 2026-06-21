@@ -311,9 +311,12 @@ class EncoderService(EncoderBase):
 
                     if documents_to_skip:
                         self.index_metrics.record(MetricKey.INDEX_QUEUE_DOCS_SKIPPED_STALE, float(len(documents_to_skip)))
-                        await self.database.delete_from_queue([qd.queue_id for qd in documents_to_skip])
+                        # DO NOT delete here. Delete atomically with the rest at the end.
 
                     if not documents_to_process:
+                        # If everything was skipped, we still need to delete them before returning
+                        if documents_to_skip:
+                            await self.database.delete_from_queue([qd.queue_id for qd in documents_to_skip])
                         return
 
                     documents_to_vectorize = []
@@ -409,7 +412,10 @@ class EncoderService(EncoderBase):
                         if updates:
                             await self.bunny_talk.talk("collection-stats", collection_name=collection_name, updates=updates)
 
-                    await self.database.delete_from_queue([qd.queue_id for qd in documents_to_process])
+                    # Delete ALL processed and skipped documents atomically at the very end
+                    all_completed_ids = [qd.queue_id for qd in documents_to_process] + [qd.queue_id for qd in documents_to_skip]
+                    if all_completed_ids:
+                        await self.database.delete_from_queue(all_completed_ids)
 
                     if new_doc_count_batch:
                         self.index_metrics.record(MetricKey.INDEX_QUEUE_DOCS_NEW, float(new_doc_count_batch))
