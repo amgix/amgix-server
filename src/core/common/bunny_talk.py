@@ -16,6 +16,33 @@ from pydantic import BaseModel, TypeAdapter
 from aio_pika import DeliveryMode, ExchangeType, Message, RobustConnection, RobustChannel, RobustExchange, RobustQueue, connect_robust
 from aio_pika.exceptions import AMQPException, ChannelNotFoundEntity
 from src.core.common.constants import APP_PREFIX, MAX_QUEUE_MESSAGES, MAX_QUEUE_SIZE_BYTES, RPC_TIMEOUT_SECONDS, MAX_DB_RETRIES
+import aiormq.tools
+
+# ==============================================================================
+# MONKEY PATCH: aiormq.tools.CountdownContext.__aexit__
+# ==============================================================================
+# BUG: In aiormq versions <= 6.9.4, `Channel.basic_publish` uses an `asyncio.Lock`
+# wrapped in a custom `CountdownContext` to enforce publish timeouts.
+# The bug is that `CountdownContext` also applies the exact same timeout to the
+# `__aexit__` phase (which attempts to release the lock). If a timeout occurs
+# inside the block (e.g. because the event loop is blocked by synchronous CPU
+# tasks like `embed()`), `CountdownContext` immediately cancels the lock release
+# operation and throws another `TimeoutError`. This permanently traps the
+# `aiormq` channel lock in an acquired state. Since the AMQP channel doesn't
+# actually close, `aio_pika.RobustChannel` never knows it needs to recover,
+# leading to all subsequent publish operations (like RPC replies or rebalancer
+# signals) timing out indefinitely.
+#
+# FIX: Releasing an `asyncio.Lock` is an instantaneous memory operation that
+# never performs network I/O and cannot hang. We monkey-patch `__aexit__` here
+# to directly call the underlying context's `__aexit__`, skipping the broken
+# countdown wrapper for the release phase.
+# ==============================================================================
+async def _patched_countdown_context_aexit(self, exc_type, exc_val, exc_tb):
+    return await self.ctx.__aexit__(exc_type, exc_val, exc_tb)
+
+aiormq.tools.CountdownContext.__aexit__ = _patched_countdown_context_aexit
+# ==============================================================================
 
 # Get hostname for tracing
 HOSTNAME = os.getenv('HOSTNAME', 'unknown')
