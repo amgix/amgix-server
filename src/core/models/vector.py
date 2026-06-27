@@ -528,15 +528,6 @@ class SearchQuery(BaseModel):
         ),
     )
 
-    @field_validator("metadata_filter", mode="before")
-    @classmethod
-    def parse_metadata_filter_string(cls, v):
-        if not isinstance(v, str):
-            return v
-        try:
-            return parse_filter_to_dict(v)
-        except ValueError as e:
-            raise ValueError(str(e)) from None
     raw_scores: bool = Field(
         default=False, description="Whether to include individual vector scores in results"
     )
@@ -552,6 +543,16 @@ class SearchQuery(BaseModel):
             "'linear' = min-max normalize each retriever's scores on its prefetch list, then sum weight * normalized score."
         ),
     )
+
+    @field_validator("metadata_filter", mode="before")
+    @classmethod
+    def parse_metadata_filter_string(cls, v):
+        if not isinstance(v, str):
+            return v
+        try:
+            return parse_filter_to_dict(v)
+        except ValueError as e:
+            raise ValueError(str(e)) from None
 
     @field_validator('query')
     @classmethod
