@@ -1428,6 +1428,8 @@ class QdrantDatabase(DatabaseBase):
                     bucket_seconds=p["bucket_seconds"],
                     value=p["value"],
                     n=p.get("n"),
+                    hostname=p.get("hostname"),
+                    source=p.get("source"),
                 ))
 
             if len(points) < 1000:

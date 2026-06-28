@@ -32,6 +32,8 @@ class MetricsBucket(BaseModel):
     bucket_seconds: int = Field(..., description="Bucket duration in seconds")
     value: float = Field(..., description="Mergeable numerator for the bucket")
     n: Optional[int] = Field(default=None, description="Mergeable denominator for average-like metrics")
+    hostname: Optional[str] = Field(default=None, description="Reporting node hostname (historical buckets only)")
+    source: Optional[str] = Field(default=None, description="Reporting node source, e.g. api or index (historical buckets only)")
 
 
 class NodeMetricSeries(BaseModel):

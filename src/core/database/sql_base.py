@@ -2618,6 +2618,8 @@ class SQLBase(DatabaseBase):
                 bucket_seconds=int(row["bucket_seconds"]),
                 value=float(row["value"]),
                 n=int(row["n"]) if row["n"] is not None else None,
+                hostname=row["hostname"],
+                source=row["source"],
             )
             for row in rows
         ]
