@@ -27,7 +27,7 @@ from src.core.common.bunny_talk import BunnyTalk, trace_chain_var, trace_id_var
 from src.core.common.lock_manager import LockService, LockClient
 from src.core.database.base import AmgixNotFound
 from src.core.database.common import validate_metadata_filter, needs_revectorization
-from src.core.database.search_join import enrich_search_results_with_joins
+from src.core.database.search_join import enrich_documents_with_joins
 from datetime import datetime, timezone
 
 # Set HuggingFace Hub etag timeout to 2s for faster fallback to cache
@@ -674,7 +674,9 @@ class RpcService(EncoderBase):
             query_with_vectors = await Vectorizer.vectorize_search_query(self.router, query, collection_config.vectors)
             results = await self.database.search(collection_name, query_with_vectors, collection_config)
             if query.join:
-                results = await enrich_search_results_with_joins(self.database, results, query.join)
+                results = await enrich_documents_with_joins(
+                    self.database, results, query.join, query.limit
+                )
             return results
         except Exception as e:
             # If config came from cache and operation failed, invalidate cache and retry once
@@ -693,7 +695,9 @@ class RpcService(EncoderBase):
                 query_with_vectors = await Vectorizer.vectorize_search_query(self.router, query, collection_config.vectors)
                 results = await self.database.search(collection_name, query_with_vectors, collection_config)
                 if query.join:
-                    results = await enrich_search_results_with_joins(self.database, results, query.join)
+                    results = await enrich_documents_with_joins(
+                    self.database, results, query.join, query.limit
+                )
                 return results
             # If config was fresh or retry already failed, re-raise
             raise

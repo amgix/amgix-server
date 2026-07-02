@@ -57,7 +57,11 @@ class Document(BaseModel):
         default=None,
         description="Pre-generated custom vectors for this document (optional)"
     )
-    
+    joined: Optional[Dict[str, List["Document"]]] = Field(
+        default=None,
+        description="Documents from joined collections, keyed by collection name",
+    )
+
     model_config = {
         "populate_by_name": True,
         "extra": "forbid",
@@ -349,10 +353,6 @@ class SearchResult(Document):
     
     score: float = Field(..., description="The relevance score for this document")
     vector_scores: List[VectorScore] = Field(default_factory=list, description="Raw per-vector scores with field, vector, score, and rank information")
-    joined: Optional[Dict[str, List["Document"]]] = Field(
-        default=None,
-        description="Documents from joined collections, keyed by collection name",
-    )
 
     content: Optional[str] = Field(None, exclude=True)
     
@@ -463,6 +463,15 @@ class DocumentFetchRequest(BaseModel):
     document_tags_match_all: bool = Field(
         default=False,
         description="If True, documents must have ALL specified tags (AND). If False, ANY (OR).",
+    )
+    join: Optional[Union[str, List[str]]] = Field(
+        None,
+        description=(
+            "Optional join of another collection onto each fetched document. "
+            "Forms: '<collection>', '<collection>[<parent>=<child>]', or with '(<filter>)'. "
+            "Parent refs: $id, $.meta.<key>. Child refs: $$id, $$.meta.<key>. "
+            "Omitted '[]' defaults to [$id=$$id]. Joined documents appear under joined[collection_name]."
+        ),
     )
 
     @field_validator("metadata_filter", mode="before")

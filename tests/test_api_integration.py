@@ -4193,6 +4193,132 @@ def test_search_join_validation_errors():
         requests.delete(f"{API_BASE_URL}/collections/{parent_collection}")
 
 
+@pytest.mark.all_backends
+def test_fetch_join_by_metadata_ref():
+    """Fetch with join enriches documents with records from another collection."""
+    parent_collection = f"test_fetch_join_parent_{str(uuid.uuid4())[:8]}"
+    child_collection = f"test_fetch_join_child_{str(uuid.uuid4())[:8]}"
+
+    parent_config = {
+        "vectors": [{"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["content"]}],
+    }
+    child_config = {
+        "vectors": [{"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["name"]}],
+        "metadata_indexes": [{"key": "parent_ref", "type": "string"}],
+    }
+
+    assert requests.post(f"{API_BASE_URL}/collections/{parent_collection}", json=parent_config).status_code == 200
+    assert requests.post(f"{API_BASE_URL}/collections/{child_collection}", json=child_config).status_code == 200
+
+    try:
+        parent_doc = create_test_document("parent-1", "Parent Title", "joinable parent content here")
+        child_doc = create_test_document("child-1", "Child Title", "child body")
+        child_doc["metadata"] = {"parent_ref": "parent-1"}
+
+        assert requests.post(
+            f"{API_BASE_URL}/collections/{parent_collection}/documents/sync", json=parent_doc
+        ).status_code == 200
+        assert requests.post(
+            f"{API_BASE_URL}/collections/{child_collection}/documents/sync", json=child_doc
+        ).status_code == 200
+
+        r = requests.post(
+            f"{API_BASE_URL}/collections/{parent_collection}/documents/fetch",
+            json={"join": f"{child_collection}[$id=$$.meta.parent_ref]"},
+        )
+        assert r.status_code == 200, f"Fetch with join failed: {r.text}"
+        data = r.json()
+        hit = next(d for d in data["documents"] if d["id"] == "parent-1")
+        joined = hit["joined"][child_collection]
+        assert len(joined) == 1
+        assert joined[0]["id"] == "child-1"
+        assert joined[0]["metadata"]["parent_ref"] == "parent-1"
+        assert "content" in joined[0]
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{parent_collection}")
+        requests.delete(f"{API_BASE_URL}/collections/{child_collection}")
+
+
+@pytest.mark.all_backends
+def test_fetch_join_with_filter():
+    """Fetch join filter on child collection returns only matching children."""
+    parent_collection = f"test_fetch_join_filter_parent_{str(uuid.uuid4())[:8]}"
+    child_collection = f"test_fetch_join_filter_child_{str(uuid.uuid4())[:8]}"
+
+    parent_config = {
+        "vectors": [{"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["content"]}],
+    }
+    child_config = {
+        "vectors": [{"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["name"]}],
+        "metadata_indexes": [
+            {"key": "parent_ref", "type": "string"},
+            {"key": "role", "type": "string"},
+        ],
+    }
+
+    assert requests.post(f"{API_BASE_URL}/collections/{parent_collection}", json=parent_config).status_code == 200
+    assert requests.post(f"{API_BASE_URL}/collections/{child_collection}", json=child_config).status_code == 200
+
+    try:
+        parent_doc = create_test_document("parent-1", "Parent Title", "filter join parent content here")
+        child_primary_a = create_test_document("child-primary-a", "Child A", "child a")
+        child_primary_a["metadata"] = {"parent_ref": "parent-1", "role": "primary"}
+        child_secondary = create_test_document("child-secondary", "Child B", "child b")
+        child_secondary["metadata"] = {"parent_ref": "parent-1", "role": "secondary"}
+        child_primary_c = create_test_document("child-primary-c", "Child C", "child c")
+        child_primary_c["metadata"] = {"parent_ref": "parent-1", "role": "primary"}
+
+        for doc in (parent_doc, child_primary_a, child_secondary, child_primary_c):
+            coll = parent_collection if doc["id"] == "parent-1" else child_collection
+            assert requests.post(
+                f"{API_BASE_URL}/collections/{coll}/documents/sync", json=doc
+            ).status_code == 200
+
+        r = requests.post(
+            f"{API_BASE_URL}/collections/{parent_collection}/documents/fetch",
+            json={"join": f'{child_collection}[$id=$$.meta.parent_ref](role = "primary")'},
+        )
+        assert r.status_code == 200, f"Fetch with join filter failed: {r.text}"
+        hit = next(d for d in r.json()["documents"] if d["id"] == "parent-1")
+        joined_ids = {d["id"] for d in hit["joined"][child_collection]}
+        assert joined_ids == {"child-primary-a", "child-primary-c"}
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{parent_collection}")
+        requests.delete(f"{API_BASE_URL}/collections/{child_collection}")
+
+
+@pytest.mark.all_backends
+def test_fetch_join_validation_errors():
+    """Invalid fetch join syntax and missing join collection return 400."""
+    parent_collection = f"test_fetch_join_errors_{str(uuid.uuid4())[:8]}"
+    config = {
+        "vectors": [{"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["content"]}],
+    }
+    assert requests.post(f"{API_BASE_URL}/collections/{parent_collection}", json=config).status_code == 200
+
+    try:
+        doc = create_test_document("doc-1", "Doc", "fetch join validation error test content")
+        assert requests.post(
+            f"{API_BASE_URL}/collections/{parent_collection}/documents/sync", json=doc
+        ).status_code == 200
+
+        fetch_url = f"{API_BASE_URL}/collections/{parent_collection}/documents/fetch"
+
+        missing_coll = f"nonexistent_fetch_join_coll_{str(uuid.uuid4())[:8]}"
+        r = requests.post(fetch_url, json={"join": missing_coll})
+        assert r.status_code == 400, f"Missing join collection should fail: {r.text}"
+        assert "not found" in _response_detail_lower(r)
+
+        r = requests.post(fetch_url, json={"join": "bad[[syntax"})
+        assert r.status_code == 400, f"Invalid join syntax should fail: {r.text}"
+        assert "invalid join" in _response_detail_lower(r)
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{parent_collection}")
+
+
 if __name__ == "__main__":
     # For manual testing
     pytest.main([__file__, "-v"])

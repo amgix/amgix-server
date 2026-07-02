@@ -50,6 +50,7 @@ from src.core.database.common import (
     AmgixValidationError,
 )
 from src.core.database.base import AmgixNotFound
+from src.core.database.search_join import enrich_documents_with_joins
 from pydantic import Field, BaseModel
 from starlette.concurrency import run_in_threadpool
 
@@ -880,7 +881,12 @@ async def fetch_documents(collection_name: CollectionName, body: DocumentFetchRe
     if body.metadata_filter:
         validate_metadata_filter(collection_config, body.metadata_filter)
 
-    return await _database.fetch_documents(real_collection_name, body, collection_config)
+    response = await _database.fetch_documents(real_collection_name, body, collection_config)
+    if body.join:
+        await enrich_documents_with_joins(
+            _database, response.documents, body.join, body.page_size
+        )
+    return response
 
 
 @shared_router.delete("/collections/{collection_name}/documents/{document_id}", operation_id="delete_document")

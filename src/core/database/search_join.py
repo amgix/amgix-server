@@ -1,28 +1,27 @@
 """
-Search result enrichment: left-join documents from other collections.
+Document enrichment: left-join documents from other collections.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
-from src.core.common import MAX_SEARCH_LIMIT
 from src.core.common.functions import get_real_collection_name
 from src.core.database.base import AmgixNotFound, DatabaseBase
 from src.core.database.common import AmgixValidationError, validate_metadata_filter
-from src.core.models.document import Document, DocumentWithVectors, SearchResult
+from src.core.models.document import Document, DocumentWithVectors
 from src.core.models.join_parser import JoinSideRef, JoinSpec, parse_joins
 from src.core.models.vector import CollectionConfigInternal, MetadataFilter
 
 
-def _parent_join_value(result: SearchResult, ref: JoinSideRef) -> Any:
+def _parent_join_value(document: Document, ref: JoinSideRef) -> Any:
     if ref.kind == "id":
-        return result.id
+        return document.id
     if ref.meta_key:
-        if not result.metadata:
+        if not document.metadata:
             return None
-        return result.metadata.get(ref.meta_key)
+        return document.metadata.get(ref.meta_key)
     return None
 
 
@@ -165,11 +164,12 @@ def _join_value_key(value: Any) -> str:
     return json.dumps(value, sort_keys=True, default=str)
 
 
-async def enrich_search_results_with_joins(
+async def enrich_documents_with_joins(
     database: DatabaseBase,
-    results: List[SearchResult],
+    documents: List[Document],
     join: Union[str, List[str]],
-) -> List[SearchResult]:
+    limit: int,
+) -> List[Document]:
     try:
         specs = parse_joins(join)
     except ValueError as e:
@@ -191,8 +191,8 @@ async def enrich_search_results_with_joins(
 
         join_values: List[Any] = []
         seen: set[str] = set()
-        for result in results:
-            pv = _parent_join_value(result, spec.parent_ref)
+        for document in documents:
+            pv = _parent_join_value(document, spec.parent_ref)
             if pv is None:
                 continue
             k = _join_value_key(pv)
@@ -200,21 +200,21 @@ async def enrich_search_results_with_joins(
                 seen.add(k)
                 join_values.append(pv)
 
-        max_documents = MAX_SEARCH_LIMIT * len(results)
+        max_documents = limit * len(documents)
         children = await _fetch_children_for_join(
             database, spec, join_values, child_config, max_documents
         )
         by_key = _group_children_by_join_key(children, spec.child_ref)
 
-        for result in results:
-            if result.joined is None:
-                result.joined = {}
-            pv = _parent_join_value(result, spec.parent_ref)
+        for document in documents:
+            if document.joined is None:
+                document.joined = {}
+            pv = _parent_join_value(document, spec.parent_ref)
             if pv is None:
-                result.joined[spec.collection_name] = []
+                document.joined[spec.collection_name] = []
             else:
-                result.joined[spec.collection_name] = by_key.get(
+                document.joined[spec.collection_name] = by_key.get(
                     _join_value_key(pv), []
                 )
 
-    return results
+    return documents
