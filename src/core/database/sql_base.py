@@ -1588,16 +1588,15 @@ class SQLBase(DatabaseBase):
 
         documents: List[Document] = []
         for row in rows:
-            metadata = json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]
-            doc = Document.model_validate({
+            doc = Document.from_dict({
                 "id": row["id"],
                 "timestamp": row["timestamp"],
                 "name": row.get("name"),
                 "description": row.get("description"),
                 "content": row.get("content"),
-                "metadata": metadata,
+                "metadata": row.get("metadata"),
                 "tags": tags_by_pk.get(row["pk_id"]),
-            })
+            }, store_content=True)
             documents.append(doc)
         return documents
 
@@ -1687,16 +1686,15 @@ class SQLBase(DatabaseBase):
 
         documents: List[Document] = []
         for row in rows:
-            metadata = json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]
-            doc = Document.model_validate({
+            doc = Document.from_dict({
                 "id": row["id"],
                 "timestamp": row["timestamp"],
                 "name": row.get("name"),
                 "description": row.get("description"),
                 "content": row.get("content"),
-                "metadata": metadata,
+                "metadata": row.get("metadata"),
                 "tags": tags_by_pk.get(row["pk_id"]),
-            })
+            }, store_content=True)
             documents.append(doc)
 
         next_after = rows[-1]["id"] if has_more else None
