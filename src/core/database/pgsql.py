@@ -177,6 +177,9 @@ class PostgreSQLDatabase(SQLBase):
             # Document Type Filtering Templates (with double quotes for PostgreSQL)
             "tags_filter": 'WHERE d.pk_id IN (SELECT doc_pk_id FROM "{tags_table}" t WHERE t.doc_pk_id = d.pk_id AND t.tag = ANY(%(document_tags)s))',
             "tags_filter_and": 'WHERE d.pk_id IN (SELECT doc_pk_id FROM "{tags_table}" t WHERE t.doc_pk_id = d.pk_id AND t.tag = ANY(%(document_tags)s) GROUP BY doc_pk_id HAVING COUNT(DISTINCT t.tag) = %(document_tags_count)s)',
+            "fetch_tags_or": 'EXISTS (SELECT 1 FROM "{tags_table}" t WHERE t.{tag_doc_pk_col} = d.{doc_pk_col} AND t.{tag_col} = ANY(%(document_tags)s))',
+            "fetch_tags_and": '(SELECT COUNT(*) FROM "{tags_table}" t WHERE t.{tag_doc_pk_col} = d.{doc_pk_col} AND t.{tag_col} = ANY(%(document_tags)s)) = {required_count}',
+            "metadata_values_in": "{column} = ANY(%(join_values)s)",
             "sparse_documents_join": 'INNER JOIN "{documents_table}" d ON d."pk_id" = vd."doc_pk_id"',
             "sparse_idf": "ln((%(total_docs)s + 1) / (idf.doc_count + 0.5))",
             

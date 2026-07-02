@@ -160,6 +160,9 @@ class MariaDatabase(SQLBase):
             # Document Type Filtering Templates (with backticks for MariaDB)
             "tags_filter": "WHERE d.pk_id IN (SELECT doc_pk_id FROM `{tags_table}` t WHERE t.doc_pk_id = d.pk_id AND t.tag IN %(document_tags)s)",
             "tags_filter_and": "WHERE d.pk_id IN (SELECT doc_pk_id FROM `{tags_table}` t WHERE t.doc_pk_id = d.pk_id AND t.tag IN %(document_tags)s GROUP BY doc_pk_id HAVING COUNT(DISTINCT t.tag) = %(document_tags_count)s)",
+            "fetch_tags_or": "EXISTS (SELECT 1 FROM `{tags_table}` t WHERE t.{tag_doc_pk_col} = d.{doc_pk_col} AND t.{tag_col} IN %(document_tags)s)",
+            "fetch_tags_and": "(SELECT COUNT(*) FROM `{tags_table}` t WHERE t.{tag_doc_pk_col} = d.{doc_pk_col} AND t.{tag_col} IN %(document_tags)s) = {required_count}",
+            "metadata_values_in": "{column} IN %(join_values)s",
             "sparse_documents_join": "INNER JOIN `{documents_table}` d ON d.`pk_id` = vd.`doc_pk_id`",
             # "sparse_idf": "(LN((SELECT COUNT(*) FROM `{documents_table}`) + 1 / (SELECT COUNT(DISTINCT doc_pk_id) + 0.5 FROM `{vector_data_table}` vd_idf WHERE vd_idf.`token_id` = vd.`token_id` AND vd_idf.`field_vector_name` = vd.`field_vector_name`)))",
             "sparse_idf": "LN((%(total_docs)s + 1) / (idf.doc_count + 0.5))",

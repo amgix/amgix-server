@@ -240,6 +240,9 @@ class SQLBase(DatabaseBase):
         # Tags Filtering Templates
         "tags_filter": "WHERE d.pk_id IN (SELECT doc_pk_id FROM {tags_table} t WHERE t.doc_pk_id = d.pk_id AND t.tag IN %(document_tags)s)",
         "tags_filter_and": "WHERE d.pk_id IN (SELECT doc_pk_id FROM {tags_table} t WHERE t.doc_pk_id = d.pk_id AND t.tag IN %(document_tags)s GROUP BY doc_pk_id HAVING COUNT(DISTINCT t.tag) = %(document_tags_count)s)",
+        "fetch_tags_or": "EXISTS (SELECT 1 FROM {tags_table} t WHERE t.{tag_doc_pk_col} = d.{doc_pk_col} AND t.{tag_col} IN %(document_tags)s)",
+        "fetch_tags_and": "(SELECT COUNT(*) FROM {tags_table} t WHERE t.{tag_doc_pk_col} = d.{doc_pk_col} AND t.{tag_col} IN %(document_tags)s) = {required_count}",
+        "metadata_values_in": "{column} IN %(join_values)s",
         "sparse_documents_join": "INNER JOIN {documents_table} d ON d.`pk_id` = vd.`doc_pk_id`",
         "sparse_idf": "LN((%(total_docs)s + 1) / (idf.doc_count + 0.5))",
 
@@ -1545,7 +1548,7 @@ class SQLBase(DatabaseBase):
         doc_columns = ["pk_id", "id", "timestamp", "name", "description", "metadata", "content"]
         select_cols = ", ".join(f"d.{self.quote_identifier(c)}" for c in doc_columns)
 
-        conditions = [f"d.{meta_col} IN %(join_values)s"]
+        conditions = [self.format_sql("metadata_values_in", column=f"d.{meta_col}")]
         params: Dict[str, Any] = {"join_values": tuple(values)}
 
         if metadata_filter:
@@ -1619,21 +1622,24 @@ class SQLBase(DatabaseBase):
             conditions.append(f"d.{d_id} > %(after)s")
             params["after"] = request.after
 
+        tag_doc_pk_col = self.quote_identifier("doc_pk_id")
+        tag_col = self.quote_identifier("tag")
         if request.document_tags:
             params["document_tags"] = tuple(request.document_tags)
+            tag_filter_kwargs = {
+                "tags_table": tags_table,
+                "tag_doc_pk_col": tag_doc_pk_col,
+                "doc_pk_col": d_pk,
+                "tag_col": tag_col,
+            }
             if request.document_tags_match_all:
-                conditions.append(f"""
-                    (SELECT COUNT(*) FROM {self.quote_identifier(tags_table)} t
-                     WHERE t.{self.quote_identifier('doc_pk_id')} = d.{d_pk}
-                     AND t.{self.quote_identifier('tag')} IN %(document_tags)s)
-                    = {len(request.document_tags)}
-                """)
+                conditions.append(self.format_sql(
+                    "fetch_tags_and",
+                    required_count=len(request.document_tags),
+                    **tag_filter_kwargs,
+                ))
             else:
-                conditions.append(f"""
-                    EXISTS (SELECT 1 FROM {self.quote_identifier(tags_table)} t
-                            WHERE t.{self.quote_identifier('doc_pk_id')} = d.{d_pk}
-                            AND t.{self.quote_identifier('tag')} IN %(document_tags)s)
-                """)
+                conditions.append(self.format_sql("fetch_tags_or", **tag_filter_kwargs))
 
         metadata_filter_sql = ""
         if request.metadata_filter:
