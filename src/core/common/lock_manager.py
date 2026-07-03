@@ -2,6 +2,7 @@ import asyncio
 import os
 import time
 import uuid
+import weakref
 from typing import List, Union
 from logging import Logger
 
@@ -121,10 +122,25 @@ class LockClient:
         self.logger = logger
         self.bunny_talk = bunny_talk
         self.owner_id = f"{os.getenv('HOSTNAME', 'unknown')}-{os.getpid()}-{uuid.uuid4()}"
+        # Distributed acquire is idempotent per owner_id: two concurrent tasks in this
+        # same process requesting the same lock name would both be granted it. These
+        # process-local locks serialize such same-process contention so only one task
+        # at a time actually holds a given distributed lock name. Entries are cleaned
+        # up automatically (WeakValueDictionary) once no task references them anymore.
+        self._local_locks: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
+    
+    def _get_local_lock(self, key: str) -> asyncio.Lock:
+        lock = self._local_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._local_locks[key] = lock
+        return lock
     
     def acquire(self, lock_names: Union[str, List[str]], timeout: float = 5.0):
         """Return context manager for acquiring lock(s)"""
-        return LockContext(self.logger, self.bunny_talk, self.owner_id, lock_names, timeout)
+        names = [lock_names] if isinstance(lock_names, str) else lock_names
+        local_lock = self._get_local_lock("|".join(sorted(names)))
+        return LockContext(self.logger, self.bunny_talk, self.owner_id, lock_names, timeout, local_lock)
     
     async def try_acquire(self, lock_names: Union[str, List[str]], timeout: float = 2.0) -> bool:
         """
@@ -195,59 +211,70 @@ class LockContext:
     """Async context manager for lock acquisition/release"""
     
     def __init__(self, logger: Logger, bunny_talk: BunnyTalk, owner_id: str, 
-                 lock_names: Union[str, List[str]], timeout: float):
+                 lock_names: Union[str, List[str]], timeout: float, local_lock: asyncio.Lock):
         self.logger = logger
         self.bunny_talk = bunny_talk
         self.owner_id = owner_id
         self.lock_names = [lock_names] if isinstance(lock_names, str) else lock_names
         self.timeout = timeout
+        self.local_lock = local_lock
     
     async def __aenter__(self):
-        """Acquire all locks with retry until timeout"""
+        """Acquire the process-local lock first (serializes same-process contention for
+        this lock name), then acquire the distributed lock with retry until timeout"""
         
-        deadline = time.time() + self.timeout
-        retry_delay = 0.1
-        attempt = 0
-        last_error = None
-        
-        while time.time() < deadline:
-            try:
-                # Send single RPC for all locks
-                success = await self.bunny_talk.rpc(
-                    "lock-service",
-                    action="acquire",
-                    lock_names=self.lock_names,
-                    owner_id=self.owner_id,
-                    timeout=2.0  # RPC timeout per attempt
-                )
-                
-                # Clear error on successful RPC (even if lock not acquired)
-                last_error = None
-                
-                if success:
-                    # All acquired successfully
-                    return self
-                
-                # Failed to acquire (lock held by someone else), wait and retry
-                
-            except Exception as e:
-                # RPC error (network, timeout, etc), store and retry
-                last_error = e
+        await self.local_lock.acquire()
+        try:
+            deadline = time.time() + self.timeout
+            retry_delay = 0.1
+            attempt = 0
+            last_error = None
             
-            # Wait before retry
-            attempt += 1
-            backoff = min(attempt * retry_delay, 1.0)
-            await asyncio.sleep(backoff)
-        
-        # Timeout expired
-        if last_error:
-            raise LockAcquisitionError(f"Failed to acquire locks within {self.timeout}s (last error: {last_error}): {self.lock_names}")
-        else:
-            raise LockAcquisitionError(f"Failed to acquire locks within {self.timeout}s: {self.lock_names}")
+            while time.time() < deadline:
+                try:
+                    # Send single RPC for all locks
+                    success = await self.bunny_talk.rpc(
+                        "lock-service",
+                        action="acquire",
+                        lock_names=self.lock_names,
+                        owner_id=self.owner_id,
+                        timeout=2.0  # RPC timeout per attempt
+                    )
+                    
+                    # Clear error on successful RPC (even if lock not acquired)
+                    last_error = None
+                    
+                    if success:
+                        # All acquired successfully
+                        return self
+                    
+                    # Failed to acquire (lock held by someone else), wait and retry
+                    
+                except Exception as e:
+                    # RPC error (network, timeout, etc), store and retry
+                    last_error = e
+                
+                # Wait before retry
+                attempt += 1
+                backoff = min(attempt * retry_delay, 1.0)
+                await asyncio.sleep(backoff)
+            
+            # Timeout expired
+            if last_error:
+                raise LockAcquisitionError(f"Failed to acquire locks within {self.timeout}s (last error: {last_error}): {self.lock_names}")
+            else:
+                raise LockAcquisitionError(f"Failed to acquire locks within {self.timeout}s: {self.lock_names}")
+        except BaseException:
+            # Never leave the local lock held if the distributed acquire didn't succeed
+            self.local_lock.release()
+            raise
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Release all acquired locks"""
-        await self._release_acquired()
+        """Release the distributed lock, then the process-local lock"""
+        try:
+            await self._release_acquired()
+        finally:
+            self.local_lock.release()
         return False  # Don't suppress exceptions
     
     async def _release_acquired(self):
@@ -273,6 +300,8 @@ class LockContext:
                     # Final attempt failed - log and exit (lock will auto-expire)
                     self.logger.error(f"Failed to release locks after {max_attempts} attempts: {e}")
                     return
+                else:
+                    self.logger.warning(f"Failed to release locks after {attempt} attempts: {e}")
                 # Network/RPC error, retry
                 await asyncio.sleep(0.2)
 
