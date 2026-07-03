@@ -721,7 +721,11 @@ async def upload_documents_to_queue(
                 },
             )
     except Exception as e:
-        # If publishing fails, delete all queue entries and raise exception
+        # If publishing fails, delete all queue entries and raise exception.
+        # HTTPException below is handled directly by FastAPI and never reaches the
+        # generic unhandled-exception logger, so log the root cause here explicitly.
+        logger.error(f"Failed to publish event to internal queue for queue_ids {queue_ids}: {e}")
+        logger.error(traceback.format_exc())
         try:
             await _database.delete_from_queue(queue_ids)
         except Exception as e2:
