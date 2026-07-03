@@ -225,6 +225,15 @@ class MariaDatabase(SQLBase):
         self.pool = None
         self.charset = 'utf8mb4'
     
+    def _build_vector_data_partition_clause(self, field_vector_id_values: list) -> str:
+        if not field_vector_id_values:
+            return ""
+        partition_defs = ", ".join(
+            f"PARTITION p{fv_id} VALUES IN ({fv_id})"
+            for fv_id in field_vector_id_values
+        )
+        return f" PARTITION BY LIST (field_vector_id) ({partition_defs})"
+
     async def _get_connection(self):
         """Get a connection from the pool."""
         if self.pool is None:

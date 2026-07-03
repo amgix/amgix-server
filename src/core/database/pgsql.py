@@ -70,6 +70,9 @@ class PostgreSQLDatabase(SQLBase):
             # Separate index creation for simple indexes
             "create_index_simple": 'CREATE INDEX "ix_{name}" ON "{table}" ({columns})',
             "create_unique_index": 'CREATE UNIQUE INDEX "ix_{name}" ON "{table}" ({columns})',
+            # Partitioning for vector_data table (LIST on field_vector_id)
+            "vector_data_partition_clause": " PARTITION BY LIST (field_vector_id)",
+            "create_vector_data_partition": 'CREATE TABLE "{partition_name}" PARTITION OF "{parent_table}" FOR VALUES IN ({field_vector_id})',
             # Vector search session tuning
             "ef_search": 'SET LOCAL hnsw.ef_search = {ef_search}',
             

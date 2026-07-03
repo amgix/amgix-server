@@ -265,6 +265,13 @@ class SQLBase(DatabaseBase):
         # Table Options and Feature Flags
         "table_options": "",
         "if_not_exists": "",
+
+        # Partitioning for vector_data (backends override these)
+        # Appended to the vector_data CREATE TABLE statement
+        "vector_data_partition_clause": "",
+        # PG-style: CREATE TABLE ... PARTITION OF for each field_vector_id.
+        # Empty on MariaDB (partitions declared inline in the CREATE TABLE above).
+        "create_vector_data_partition": "",
     }
     
     # ==========================================
@@ -593,6 +600,14 @@ class SQLBase(DatabaseBase):
         """
         return tuple(value for row in data_rows for value in row)
 
+    def _build_vector_data_partition_clause(self, field_vector_id_values: List[int]) -> str:
+        """
+        Return the partition clause fragment to append to the vector_data CREATE TABLE.
+        Base implementation uses the static template (PG-style: just the PARTITION BY line).
+        MariaDB overrides this to build the full inline PARTITION ... VALUES IN (...) list.
+        """
+        return self.SQL_TEMPLATES.get("vector_data_partition_clause", "")
+
     def _get_field_vector_ids(self, collection_config: CollectionConfigInternal) -> Dict[str, int]:
         field_vector_names: List[str] = []
         for vector in collection_config.vectors:
@@ -739,7 +754,8 @@ class SQLBase(DatabaseBase):
     
     async def create_collection(self, collection_name: str, config: CollectionConfigInternal) -> bool:
         """Create a new collection with specified vector configurations."""
-        
+        field_vector_ids = self._get_field_vector_ids(config)
+
         async def insert_metadata():
             # Insert collection config into system meta table
             insert_sql = self.format_sql("insert", 
@@ -891,66 +907,53 @@ class SQLBase(DatabaseBase):
                     await self.execute_sql_no_result(create_idx_sql)
         
         async def create_vector_data_table():
-            # Prepare columns
+            vd_table = self.get_table_name(collection_name, self.TableType.VECTOR_DATA)
+            fv_id_values = sorted(field_vector_ids.values())
+            partition_clause = self._build_vector_data_partition_clause(fv_id_values)
+
             columns = [
-                self.format_sql("column_pk", name="pk_id"),
-                self.format_sql("column_bigint", name="doc_pk_id", null_constraint=" NOT NULL"),
                 self.format_sql("column_smallint", name="field_vector_id", null_constraint=" NOT NULL"),
                 self.format_sql("column_bigint", name="token_id", null_constraint=" NOT NULL"),
-                self.format_sql("column_float", name="weight", null_constraint=" NOT NULL")
+                self.format_sql("column_bigint", name="doc_pk_id", null_constraint=" NOT NULL"),
+                self.format_sql("column_float", name="weight", null_constraint=" NOT NULL"),
             ]
-            
-            # Prepare indexes
-            # Unique and FK constraints
-            unique_indexes = [
-                ("vec_doc_field_token", self.quote_column_list(["field_vector_id", "token_id", "doc_pk_id"]))
-            ]
-            indexes = [
-                self.format_sql(
-                    "index_foreign_key",
-                    name=self._string_to_uuid(
-                        f"{self.get_table_name(collection_name, self.TableType.VECTOR_DATA)}_vd_doc"
-                    ),
-                    columns=self.quote_identifier("doc_pk_id"),
-                    ref_table=self.get_table_name(collection_name, self.TableType.DOCUMENTS),
-                    ref_columns=self.quote_identifier("pk_id"),
-                    on_delete=" ON DELETE CASCADE"
-                )
-            ]
-            vector_data_simple_indexes = [
-                ("token_vec_doc_idf", self.quote_column_list(["token_id", "field_vector_id", "doc_pk_id"])),
-                ("vec_fv_token_doc_weight", self.quote_column_list(["field_vector_id", "token_id", "doc_pk_id", "weight"]))
-            ]
-            
-            # Create vector data table
+            pk_index = self.format_sql(
+                "index_primary_multi",
+                name=self._string_to_uuid(f"{collection_name}_vec_fv_token_doc"),
+                columns=self.quote_column_list(["field_vector_id", "token_id", "doc_pk_id"]),
+            )
+
             vector_data_sql = self.format_sql("create_table",
-                table_name=self.get_table_name(collection_name, self.TableType.VECTOR_DATA),
+                table_name=vd_table,
                 columns=',\n                '.join(columns),
-                indexes=',\n                '.join([''] + indexes) if indexes else '',
-                table_options=self.SQL_TEMPLATES.get("table_options", "")
+                indexes=',\n                ' + pk_index,
+                table_options=self.SQL_TEMPLATES.get("table_options", "") + partition_clause
             )
             await self.execute_sql_no_result(vector_data_sql)
 
-            # Create unique and simple indexes separately (always use CREATE INDEX)
-            table_name = self.get_table_name(collection_name, self.TableType.VECTOR_DATA)
-            for idx_name, idx_columns in unique_indexes:
-                create_unique_sql = self.format_sql(
-                    "create_unique_index",
-                    table=table_name,
-                    name=self._string_to_uuid(f"{collection_name}_{idx_name}"),
-                    columns=idx_columns,
-                )
-                await self.execute_sql_no_result(create_unique_sql)
-            # Create simple indexes separately (always use CREATE INDEX)
-            for idx_name, idx_columns in vector_data_simple_indexes:
-                table_name = self.get_table_name(collection_name, self.TableType.VECTOR_DATA)
-                create_idx_sql = self.format_sql(
+            # PG-style: create one child partition per field_vector_id after the parent.
+            # MariaDB declares partitions inline above so this template is empty there.
+            partition_template = self.SQL_TEMPLATES.get("create_vector_data_partition", "")
+            if partition_template:
+                for field_vector_id in field_vector_ids.values():
+                    partition_sql = self.format_sql(
+                        "create_vector_data_partition",
+                        parent_table=vd_table,
+                        partition_name=f"{vd_table}_p{field_vector_id}",
+                        field_vector_id=field_vector_id,
+                    )
+                    await self.execute_sql_no_result(partition_sql)
+
+            for idx_name, idx_columns in [
+                ("token_vec_doc_idf", self.quote_column_list(["token_id", "field_vector_id", "doc_pk_id"])),
+                ("vec_fv_token_doc_weight", self.quote_column_list(["field_vector_id", "token_id", "doc_pk_id", "weight"])),
+            ]:
+                await self.execute_sql_no_result(self.format_sql(
                     "create_index_simple",
-                    table=table_name,
+                    table=vd_table,
                     name=self._string_to_uuid(f"{collection_name}_{idx_name}"),
                     columns=idx_columns,
-                )
-                await self.execute_sql_no_result(create_idx_sql)
+                ))
 
         async def create_tags_table():
             # Prepare columns for tags table: doc_pk_id + tag
