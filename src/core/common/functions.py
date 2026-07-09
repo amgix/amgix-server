@@ -2,7 +2,11 @@
 Utility functions used throughout the application.
 """
 import zlib
-from .constants import APP_PREFIX
+from .constants import APP_PREFIX, SEARCH_PREFETCH_MULTIPLIER, SEARCH_PREFETCH_MIN
+
+
+def search_prefetch_limit(limit: int) -> int:
+    return max(SEARCH_PREFETCH_MIN, int(limit * SEARCH_PREFETCH_MULTIPLIER))
 
 
 def get_real_collection_name(user_collection_name: str) -> str:

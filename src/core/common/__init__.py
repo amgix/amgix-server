@@ -14,6 +14,7 @@ __all__ = [
     "APP_NAME",
     "APP_PREFIX",
     "SEARCH_PREFETCH_MULTIPLIER",
+    "SEARCH_PREFETCH_MIN",
     "IDF_THRESHOLD_MULTIPLIER",
     "MAX_BULK_UPLOAD",
     "MAX_COLLECTION_NAME_LENGTH",
@@ -88,6 +89,7 @@ __all__ = [
     # Functions
     "get_real_collection_name",
     "get_user_collection_name",
+    "search_prefetch_limit",
     
     # Classes
     "AMGIXCache",

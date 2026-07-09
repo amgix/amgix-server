@@ -10,6 +10,7 @@ APP_PREFIX = "amgix"
 
 # Search configuration
 SEARCH_PREFETCH_MULTIPLIER = 1.5  # Multiply search limit by this factor for prefetching
+SEARCH_PREFETCH_MIN = 5  # Minimum candidates to fetch per vector arm before fusion
 IDF_THRESHOLD_MULTIPLIER = 3  # Multiply search limit by this factor for IDF filtering threshold
 
 # Bulk upload limits

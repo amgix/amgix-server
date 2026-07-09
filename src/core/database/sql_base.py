@@ -17,7 +17,7 @@ from ..models.document import Document, DocumentWithVectors, QueueDocument, Queu
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config
 from ..common import (
     VectorType, DenseDistance, APP_PREFIX, DatabaseInfo, DatabaseFeatures, 
-    SEARCH_PREFETCH_MULTIPLIER, IDF_THRESHOLD_MULTIPLIER, DEFAULT_SQL_BATCH_SIZE,
+    search_prefetch_limit, IDF_THRESHOLD_MULTIPLIER, DEFAULT_SQL_BATCH_SIZE,
     MAX_METADATA_KEY_LENGTH, MAX_INDEXED_METADATA_VALUE_LENGTH, UUID_LENGTH, MAX_DOCUMENT_TAG_LENGTH,
     MAX_FIELD_VECTOR_NAME_LENGTH, MAX_INTERNAL_COLLECTION_NAME_LENGTH,
     MAX_DOCUMENT_ID_LENGTH, QueuedDocumentStatus, QueueOperationType, QueueOperationTypeLiteral, MAX_STATUS_LENGTH, MAX_SEARCH_LIMIT,
@@ -1943,7 +1943,7 @@ class SQLBase(DatabaseBase):
             if query.raw_scores else None
         )
         raw_scores_map: Dict[int, List[VectorScore]] = {}
-        prefetch_limit = int(query.limit * SEARCH_PREFETCH_MULTIPLIER)
+        prefetch_limit = search_prefetch_limit(query.limit)
         temp_cols = [
             self.format_sql("column_smallint", name="field_vector_id", null_constraint=" NOT NULL"),
             self.format_sql("column_bigint", name="token_id", null_constraint=" NOT NULL"),

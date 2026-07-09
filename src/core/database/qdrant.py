@@ -16,7 +16,7 @@ from .base import DatabaseBase, AmgixNotFound
 from ..models.cluster import MetricsBucket
 from ..models.document import Document, DocumentWithVectors, SearchResult, QueueDocument, QueueInfo, DocumentStatus, DocumentStatusResponse, VectorScore, DocumentFetchRequest, DocumentFetchResponse
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config
-from ..common import APP_PREFIX, VectorType, DatabaseInfo, DatabaseFeatures, SEARCH_PREFETCH_MULTIPLIER, DenseDistance, QueuedDocumentStatus, QueueOperationType, QueueOperationTypeLiteral, get_user_collection_name, MetadataValueType
+from ..common import APP_PREFIX, VectorType, DatabaseInfo, DatabaseFeatures, DenseDistance, QueuedDocumentStatus, QueueOperationType, QueueOperationTypeLiteral, get_user_collection_name, MetadataValueType, search_prefetch_limit
 from ..common.lock_manager import LockClient
 
 
@@ -705,6 +705,7 @@ class QdrantDatabase(DatabaseBase):
         # Prepare batch search requests
         batch_requests = []
         batch_vector_names: List[str] = []
+        prefetch_limit = search_prefetch_limit(query.limit)
         for vector_data in query.vectors:
             vector_name = vector_data.vector_name
             field = vector_data.field
@@ -725,7 +726,7 @@ class QdrantDatabase(DatabaseBase):
                 query_request = rest.QueryRequest(
                     using=field_vector_name,
                     query=vector_data.dense_vector,
-                    limit=int(query.limit * SEARCH_PREFETCH_MULTIPLIER),
+                    limit=prefetch_limit,
                     with_payload=payload_fields,
                     with_vector=False,
                     filter=final_filter
@@ -739,7 +740,7 @@ class QdrantDatabase(DatabaseBase):
                 query_request = rest.QueryRequest(
                     using=field_vector_name,
                     query=sparse_vector,
-                    limit=int(query.limit * SEARCH_PREFETCH_MULTIPLIER),
+                    limit=prefetch_limit,
                     with_payload=payload_fields,
                     with_vector=False,
                     filter=final_filter
