@@ -12,7 +12,7 @@ class CustomSparseVector(VectorBase):
     Handler for custom sparse vectors supplied with documents or queries.
     """
 
-    def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
+    async def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
         raise NotImplementedError("CustomSparseVector does not produce dense vectors")
 
     def _get_sparse_vector(

@@ -57,7 +57,7 @@ MAX_QUEUE_MESSAGES = 500000  # Maximum messages in queue
 MAX_QUEUE_SIZE_BYTES = 1 * 1024 * 1024 * 1024  # Maximum queue size (1GB)
 
 # Vectorization batching defaults (tune based on hardware)
-DENSE_MODEL_BATCH_SIZE = 32
+DENSE_MODEL_BATCH_SIZE = 8
 SPARSE_MODEL_BATCH_SIZE = 8
 
 # Validation thresholds

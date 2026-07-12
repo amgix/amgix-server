@@ -9,8 +9,6 @@ import logging
 from collections import Counter
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Optional, Dict, Union
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-import asyncio
 from langid.langid import LanguageIdentifier, model
 import mmh3
 
@@ -19,7 +17,6 @@ import mmh3
 # warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
 # from stopwordsiso import stopwords
 
-from ..common.constants import MAX_SPARSE_VECTOR_THREADS
 from ..models.vector import VectorConfigInternal
 
 # Large prime number for token hash range
@@ -88,7 +85,7 @@ class VectorBase(ABC):
         
         return indices, values
     
-    def get_sparse_vector(
+    async def get_sparse_vector(
         self,
         config: VectorConfigInternal,
         docs: List[str],
@@ -99,27 +96,6 @@ class VectorBase(ABC):
             self._get_sparse_vector(config, doc, avgdl=avgdl, trigram_weight=trigram_weight)
             for doc, avgdl in zip(self.preprocess_text(docs), avgdls)
         ]
-        # processed_docs = self.preprocess_text(docs)
-        # if not processed_docs:
-        #     return []
-        
-        # # Single doc: avoid overhead
-        # if len(processed_docs) == 1:
-        #     return [await self._get_sparse_vector(processed_docs[0])]
-        
-        # # Run async worker per doc inside separate processes (bypass GIL for pure Python CPU-bound code)
-        # def run_in_process(doc: str) -> Tuple[List[int], List[float]]:
-        #     return asyncio.run(self._get_sparse_vector(doc))
-        
-        # # Use process pool with picklable worker function
-        # results: List[Tuple[List[int], List[float]]] = [([], [])] * len(processed_docs)
-        # with ProcessPoolExecutor(max_workers=MAX_SPARSE_PROCESSES) as executor:
-        #     future_to_idx = {executor.submit(run_in_process, doc): idx for idx, doc in enumerate(processed_docs)}
-        #     for future in as_completed(future_to_idx):
-        #         idx = future_to_idx[future]
-        #         results[idx] = future.result()
-        
-        # return results
 
     @abstractmethod
     def _get_sparse_vector(
@@ -142,7 +118,7 @@ class VectorBase(ABC):
         pass
     
     @abstractmethod
-    def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
+    async def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
         """
         Generate a dense vector from text.
         

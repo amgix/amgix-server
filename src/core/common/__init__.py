@@ -6,8 +6,6 @@ from .constants import *
 from .enums import *
 from .functions import *
 from .cache import AMGIXCache
-from .embed_router import EmbedRouter
-from .metrics_service import MetricsService
 
 __all__ = [
     # Constants
@@ -94,6 +92,4 @@ __all__ = [
     # Classes
     "AMGIXCache",
     "BunnyLock",
-    "EmbedRouter",
-    "MetricsService",
 ]

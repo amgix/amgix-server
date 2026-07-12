@@ -16,5 +16,5 @@ class NoopVector(VectorBase):
     ) -> Tuple[List[int], List[float]]:
         return [], []
 
-    def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
+    async def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
         raise NotImplementedError("NoopVector only supports sparse vectors")

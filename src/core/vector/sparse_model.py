@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import logging
 from typing import List, Optional, Tuple
@@ -58,7 +59,7 @@ class SparseModelVector(VectorBase):
         else:
             self._device = None
 
-    def get_sparse_vector(
+    async def get_sparse_vector(
         self,
         config: VectorConfigInternal,
         docs: List[str],
@@ -143,6 +144,7 @@ class SparseModelVector(VectorBase):
                 chunk_results.append((idxs, values))
 
             results.extend(chunk_results)
+            await asyncio.sleep(0)
 
         return results
 

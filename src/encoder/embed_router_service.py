@@ -289,7 +289,7 @@ class EmbedRouterService(EncoderBase):
                             # yes, just embed locally
                             self.logger.debug(f"Router: known model {model_key}. Embedding locally.")
 
-                            result = self.embed(model_key, vector_config, docs, hops)
+                            result = await self.embed(model_key, vector_config, docs, hops)
 
                         else:
                             # get model specific queue name
@@ -352,7 +352,7 @@ class EmbedRouterService(EncoderBase):
                                 if result is None:
                                     raise e
             else:
-                result = self.embed(
+                result = await self.embed(
                     model_key,
                     vector_config,
                     docs,
@@ -379,7 +379,7 @@ class EmbedRouterService(EncoderBase):
 
         return result
 
-    def embed(
+    async def embed(
         self,
         model_key: tuple[str, str, str],
         vector_config: VectorConfigInternal,
@@ -393,9 +393,9 @@ class EmbedRouterService(EncoderBase):
         start_ns = time.monotonic_ns()
 
         if VectorType.is_dense(vector_config.type):
-            result = self._embed_dense_model(vector_config, docs)
+            result = await self._embed_dense_model(vector_config, docs)
         else:
-            result = self._embed_sparse_model(
+            result = await self._embed_sparse_model(
                 vector_config,
                 docs,
                 avgdls=avgdls,
@@ -412,28 +412,24 @@ class EmbedRouterService(EncoderBase):
 
         return result
 
-    def _embed_dense_model(self, vector_config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
-        """Embed a list of documents using the specified dense model."""
+    async def _embed_dense_model(self, vector_config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
+        return await self._instances[vector_config.type].get_dense_vector(vector_config, docs)
 
-        return self._instances[vector_config.type].get_dense_vector(vector_config, docs)
-
-    def _embed_sparse_model(
+    async def _embed_sparse_model(
         self,
         vector_config: VectorConfigInternal,
         docs: List[str],
         avgdls: Optional[List[float]],
         trigram_weight: float,
     ) -> List[Tuple[List[int], List[float]]]:
-        """Embed a list of documents using the specified sparse model."""
-
         if vector_config.type in VectorType.custom_tokenization():
-            return self._instances[vector_config.type].get_sparse_vector(
+            return await self._instances[vector_config.type].get_sparse_vector(
                 vector_config,
                 docs,
                 avgdls=avgdls,
                 trigram_weight=trigram_weight,
             )
-        return self._instances[vector_config.type].get_sparse_vector(
+        return await self._instances[vector_config.type].get_sparse_vector(
             vector_config,
             docs,
             trigram_weight=trigram_weight,
@@ -507,13 +503,13 @@ class EmbedRouterService(EncoderBase):
         async with self.model_load_locks[model_key]:
             if model_key in self.local_models:
                 self.logger.debug(f"Router: {model_key} was loaded locally while waiting. Embedding locally.")
-                return self.embed(model_key, vector_config, docs, hops)
+                return await self.embed(model_key, vector_config, docs, hops)
 
             # Use distributed lock to prevent multiple workers from loading the same model
             async with self.lock_client.acquire(f"{queue_name}", timeout=RPC_TIMEOUT_SECONDS):
                 if model_key in self.local_models:
                     self.logger.debug(f"Router: {model_key} was loaded locally while waiting for distributed lock. Embedding locally.")
-                    return self.embed(model_key, vector_config, docs, hops)
+                    return await self.embed(model_key, vector_config, docs, hops)
 
                 # Double-check if someone else loaded the model while we were waiting for the lock
                 try:
@@ -550,7 +546,7 @@ class EmbedRouterService(EncoderBase):
                         # Still no route, we can safely load the model
                         self.logger.debug(f"Router: Confirmed no one has {model_key}. Loading locally.")
                         
-                    result = self.embed(model_key, vector_config, docs, hops)
+                    result = await self.embed(model_key, vector_config, docs, hops)
 
                     # successfully embedded, we can start listening for requests for this model
                     self.logger.debug(f"Router: Listening for requests for model {model_key}.")

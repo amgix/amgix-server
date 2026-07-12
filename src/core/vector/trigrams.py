@@ -50,5 +50,5 @@ class TrigramsVector(VectorBase):
             avgdl=avgdl,
         )
     
-    def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
+    async def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
         raise NotImplementedError("TrigramsVector only supports sparse vectors") 

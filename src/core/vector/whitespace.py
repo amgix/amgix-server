@@ -51,5 +51,5 @@ class WhiteSpaceVector(VectorBase):
             avgdl=avgdl,
         )
     
-    def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
+    async def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
         raise NotImplementedError("WhiteSpaceVector does not support dense vectors")

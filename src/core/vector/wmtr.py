@@ -53,6 +53,6 @@ class WMTRVector(VectorBase):
             trigram_weight=trigram_weight,
         )
     
-    def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
+    async def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
         raise NotImplementedError("WMTRVector does not support dense vectors")
     

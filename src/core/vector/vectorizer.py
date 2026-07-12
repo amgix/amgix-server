@@ -3,7 +3,8 @@ import asyncio
 
 from ..models.document import Document, DocumentWithVectors
 from ..models.vector import VectorConfigInternal, SearchQuery, SearchQueryWithVectors, VectorData, VectorSearchWeight
-from ..common import VectorType, EmbedRouter, WMTR_DEFAULT_TRIGRAM_WEIGHT
+from ..common import VectorType, WMTR_DEFAULT_TRIGRAM_WEIGHT
+from ..common.embed_router import EmbedRouter
 from .dense_custom import CustomDenseVector
 from .sparse_custom import CustomSparseVector
 

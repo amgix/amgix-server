@@ -51,6 +51,6 @@ class FullTextVector(VectorBase):
             avgdl=avgdl,
         )
     
-    def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
+    async def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
         raise NotImplementedError("FullTextVector does not support dense vectors")
     

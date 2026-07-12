@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import logging
 import re
@@ -56,25 +57,27 @@ class DenseModelVector(VectorBase):
             self._device = None
 
 
-    def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
+    async def get_dense_vector(self, config: VectorConfigInternal, docs: List[str]) -> List[List[float]]:
         if not config.model or not config.model.strip():
             raise ValueError("DenseVector requires 'model' to be specified in VectorConfig")
         if not DenseModelVector._st_available:
             raise ValueError("SentenceTransformer is not available in this environment")
 
         processed_docs = self.preprocess_text(docs, keep_case=config.keep_case)
-
-        # Use the model's built-in encoding method for consistent dimensions
-        # This ensures the same output dimensions as validation
-        # Use built-in normalization if configured
         model = self._load_model(config.model, config.revision)
-        embeddings = model.encode(
-            processed_docs,
-            normalize_embeddings=config.normalization,
-            show_progress_bar=False,
-            batch_size=DENSE_MODEL_BATCH_SIZE,
-        )
-        return [emb.tolist() for emb in embeddings]
+
+        results = []
+        for start in range(0, len(processed_docs), DENSE_MODEL_BATCH_SIZE):
+            chunk = processed_docs[start:start + DENSE_MODEL_BATCH_SIZE]
+            embeddings = model.encode(
+                chunk,
+                normalize_embeddings=config.normalization,
+                show_progress_bar=False,
+                batch_size=DENSE_MODEL_BATCH_SIZE,
+            )
+            results.extend(emb.tolist() for emb in embeddings)
+            await asyncio.sleep(0)
+        return results
 
     def _get_sparse_vector(
         self,
