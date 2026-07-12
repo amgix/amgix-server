@@ -1,7 +1,9 @@
-import pytest
+import time
+
 import pytest
 import requests
 from typing import Dict, Any
+from datetime import datetime, timezone
 from tests.conftest import skip_if_not_supported
 
 API_BASE_URL = "http://localhost:8234/v1"
@@ -363,6 +365,59 @@ def test_create_collection_with_sparse_custom_top_k_validation():
     
     # Clean up (just in case)
     requests.delete(f"{API_BASE_URL}/collections/{COLLECTION_NAME}_custom_invalid_top_k")
+
+
+@pytest.mark.dense_vectors_only
+def test_model2vec_potion_create_index_search(backend_capabilities):
+    """
+    End-to-end test for minishlab/potion-retrieval-32M (Model2Vec / StaticModel architecture).
+    Verifies collection creation, document indexing, and search all work correctly.
+    """
+    skip_if_not_supported(backend_capabilities, "dense_vectors")
+
+    collection = f"{COLLECTION_NAME}_potion"
+    requests.delete(f"{API_BASE_URL}/collections/{collection}")
+
+    config = {
+        "vectors": [
+            {
+                "name": "denseP",
+                "type": "dense_model",
+                "model": "minishlab/potion-retrieval-32M",
+                "index_fields": ["content"],
+            }
+        ]
+    }
+
+    response = requests.post(f"{API_BASE_URL}/collections/{collection}", json=config)
+    assert response.status_code == 200, response.text
+
+    doc = {
+        "id": "potion_doc_1",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "name": "Potion test document",
+        "content": "machine learning embeddings for semantic search",
+    }
+    response = requests.post(f"{API_BASE_URL}/collections/{collection}/documents", json=doc)
+    assert response.status_code == 200, response.text
+    assert response.json().get("ok") is True
+
+    # Poll until the document is searchable (async indexing).
+    search_body = {"query": "semantic search embeddings", "limit": 5}
+    deadline = time.time() + 30
+    results = []
+    while time.time() < deadline:
+        resp = requests.post(f"{API_BASE_URL}/collections/{collection}/search", json=search_body)
+        assert resp.status_code == 200, resp.text
+        results = resp.json()
+        if any(r.get("id") == "potion_doc_1" for r in results):
+            break
+        time.sleep(0.5)
+
+    assert any(r.get("id") == "potion_doc_1" for r in results), \
+        f"Document not found in search results after 30s: {results}"
+
+    requests.delete(f"{API_BASE_URL}/collections/{collection}")
 
 
 @pytest.mark.all_backends
