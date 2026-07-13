@@ -1,7 +1,7 @@
 import pytest
 import os
 import asyncio
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from unittest.mock import Mock
 
 # Import your models
@@ -345,6 +345,15 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "integration: mark test as integration test requiring backend"
     )
+
+
+def parse_search_response(body: Union[Dict[str, Any], List[Any]]) -> List[Dict[str, Any]]:
+    """Extract search hits from a SearchResponse JSON body."""
+    assert isinstance(body, dict), f"Expected SearchResponse object, got {type(body)}"
+    assert "results" in body, f"Expected 'results' in SearchResponse, got keys: {list(body.keys())}"
+    results = body["results"]
+    assert isinstance(results, list), f"Expected results list, got {type(results)}"
+    return results
 
 
 # Helper function to skip tests based on backend capabilities

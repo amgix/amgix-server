@@ -22,6 +22,7 @@ export * from './OkResponse';
 export * from './QueueInfo';
 export * from './ReadyResponse';
 export * from './SearchQuery';
+export * from './SearchResponse';
 export * from './SearchResult';
 export * from './SystemInfoResponse';
 export * from './ValidationError';

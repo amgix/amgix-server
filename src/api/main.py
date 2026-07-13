@@ -4,6 +4,7 @@ import os
 import logging
 import asyncio
 import pathlib
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from contextlib import asynccontextmanager
@@ -35,6 +36,7 @@ from src.core.models.document import (
     QueueDocument,
     QueueInfo,
     SearchResult,
+    SearchResponse,
 )
 from src.core.models.vector import CollectionConfig, CollectionConfigInternal, VectorConfigInternal, SearchQuery, SearchQueryWithVectors, ModelValidationResponse
 from src.core.models.vector import VectorData
@@ -1040,7 +1042,7 @@ async def delete_collection_queue(collection_name: CollectionName) -> OkResponse
 
 # Search
 @shared_router.post("/collections/{collection_name}/search", operation_id="search")
-async def search(collection_name: CollectionName, query: SearchQuery = ...) -> List[SearchResult]:
+async def search(collection_name: CollectionName, query: SearchQuery = ...) -> SearchResponse:
     """Perform a search query on a collection.
 
     Executes a search query against the specified collection.
@@ -1050,10 +1052,10 @@ async def search(collection_name: CollectionName, query: SearchQuery = ...) -> L
         query: The `SearchQuery` object containing the search text, filters, and other parameters.
 
     Returns:
-        A list of `SearchResult` objects, where each object represents a search result.
+        A `SearchResponse` with search hits and server-side query timing.
     """
     real_collection_name = get_real_collection_name(collection_name)
-    # Delegate to encoder via RPC
+    t0 = time.perf_counter_ns()
     results = await _bunny_talk.rpc(
         "search",
         collection_name=real_collection_name,
@@ -1062,7 +1064,8 @@ async def search(collection_name: CollectionName, query: SearchQuery = ...) -> L
         trace_meta={"collection": real_collection_name},
         return_type=List[SearchResult]
     )
-    return results
+    query_time_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+    return SearchResponse(results=results, query_time_ms=query_time_ms)
 
 
 # -------------------------

@@ -418,6 +418,14 @@ class SearchResult(Document):
                 return cls(**result_data)
 
 
+class SearchResponse(BaseModel):
+    """Response from a search query."""
+    model_config = {"extra": "forbid"}
+
+    results: List[SearchResult] = Field(..., description="Search hits, ordered by relevance")
+    query_time_ms: float = Field(..., ge=0, description="Server-side time to execute this search, in milliseconds")
+
+
 class DocumentStatus(BaseModel):
     """
     Individual status entry for a document.

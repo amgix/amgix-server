@@ -4,7 +4,7 @@ import pytest
 import requests
 from typing import Dict, Any
 from datetime import datetime, timezone
-from tests.conftest import skip_if_not_supported
+from tests.conftest import skip_if_not_supported, parse_search_response
 
 API_BASE_URL = "http://localhost:8234/v1"
 COLLECTION_NAME = "test_model_validation"
@@ -409,7 +409,7 @@ def test_model2vec_potion_create_index_search(backend_capabilities):
     while time.time() < deadline:
         resp = requests.post(f"{API_BASE_URL}/collections/{collection}/search", json=search_body)
         assert resp.status_code == 200, resp.text
-        results = resp.json()
+        results = parse_search_response(resp.json())
         if any(r.get("id") == "potion_doc_1" for r in results):
             break
         time.sleep(0.5)

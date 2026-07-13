@@ -717,17 +717,17 @@ export class QueryPanel extends DashboardPanel {
         searchQuery.vector_weights = vectorWeights
       }
       // console.log(searchQuery)
-      const t0 = performance.now()
-      const results = await api.search({
+      const searchResponse = await api.search({
         collectionName,
         searchQuery,
       })
-      const elapsedMs = Math.max(0, Math.round(performance.now() - t0))
+      const results = searchResponse.results
+      const queryTimeMs = Math.max(0, Math.round(searchResponse.query_time_ms))
       if (gen !== this.searchGeneration) {
         return
       }
       const timingText =
-        results.length > 0 ? `Found in ${elapsedMs} ms` : `No results in ${elapsedMs} ms`
+        results.length > 0 ? `Found in ${queryTimeMs} ms` : `No results in ${queryTimeMs} ms`
       $timing.removeClass('dashboard-query-search-timing--empty').removeAttr('aria-hidden').text(timingText)
       this.renderResults($tbody, results, collectionName)
     } catch (err) {

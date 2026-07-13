@@ -23,6 +23,7 @@ models/OkResponse.ts
 models/QueueInfo.ts
 models/ReadyResponse.ts
 models/SearchQuery.ts
+models/SearchResponse.ts
 models/SearchResult.ts
 models/SystemInfoResponse.ts
 models/ValidationError.ts

@@ -4,7 +4,7 @@ import time
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Callable, List
-from tests.conftest import skip_if_not_supported
+from tests.conftest import skip_if_not_supported, parse_search_response
 from src.core.common import QueuedDocumentStatus
 
 # Test configuration
@@ -80,7 +80,7 @@ def wait_for_search(collection_name: str, query: Dict[str, Any], expect: Callabl
         resp = requests.post(url, json=query)
         if resp.status_code != 200:
             return False
-        last_results = resp.json()
+        last_results = parse_search_response(resp.json())
         return expect(last_results)
     ok = wait_until(_try, timeout_s)
     assert ok, f"Timed out waiting for expected search results; last_results={last_results}"
@@ -243,7 +243,7 @@ def test_document_upsert_and_search(setup_collection):
     
     response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query)
     assert response.status_code == 200
-    results = response.json()
+    results = parse_search_response(response.json())
     
     # Should find at least one document
     assert len(results) > 0
@@ -323,7 +323,7 @@ def test_sparse_model_query_override():
             except Exception:
                 print(resp.text)
         assert resp.status_code == 200
-        results = resp.json()
+        results = parse_search_response(resp.json())
         ids = {r.get("id") for r in results}
         assert "sdoc-1" in ids or "sdoc-2" in ids
     finally:
@@ -377,7 +377,7 @@ def test_search_with_full_text_vectors(setup_collection):
     
     response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query)
     assert response.status_code == 200
-    results = response.json()
+    results = parse_search_response(response.json())
     
     # Should find the machine learning document
     assert len(results) > 0
@@ -402,7 +402,7 @@ def test_search_with_document_tags_filter(setup_collection):
     
     response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query)
     assert response.status_code == 200
-    results = response.json()
+    results = parse_search_response(response.json())
     
     # Should only return articles
     for result in results:
@@ -434,7 +434,7 @@ def test_search_order_with_trigrams(setup_collection):
     }
     response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=q)
     assert response.status_code == 200
-    results = response.json()
+    results = parse_search_response(response.json())
     
     # Debug: Log the full search results
     print(f"\n=== SEARCH DEBUG ===")
@@ -479,7 +479,7 @@ def test_weight_combination_flips_order(setup_collection):
     # Title-only may yield only the title-matching doc; ensure it's ranked first
     r_title_resp = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=q_title)
     assert r_title_resp.status_code == 200
-    r_title = r_title_resp.json()
+    r_title = parse_search_response(r_title_resp.json())
     assert len(r_title) >= 1 and r_title[0]["id"] == "w_title"
 
     # Content-only weighting should put w_content first
@@ -492,7 +492,7 @@ def test_weight_combination_flips_order(setup_collection):
     }
     r_content_resp = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=q_content)
     assert r_content_resp.status_code == 200
-    r_content = r_content_resp.json()
+    r_content = parse_search_response(r_content_resp.json())
     assert len(r_content) >= 1 and r_content[0]["id"] == "w_content"
 
 
@@ -516,7 +516,7 @@ def test_search_limit_enforced(setup_collection):
     }
     resp = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=q)
     assert resp.status_code == 200
-    results = resp.json()
+    results = parse_search_response(resp.json())
     assert len(results) == 2
 
 
@@ -535,7 +535,7 @@ def test_search_no_results_returns_empty(setup_collection):
     # Expect empty list; allow immediate 200 with []
     resp = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=q)
     assert resp.status_code == 200
-    assert resp.json() == []
+    assert parse_search_response(resp.json()) == []
 
 
 @pytest.mark.all_backends
@@ -560,7 +560,7 @@ def test_document_tags_filter_edges(setup_collection):
     }
     resp = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=q_none)
     assert resp.status_code == 200
-    assert resp.json() == []
+    assert parse_search_response(resp.json()) == []
 
     q_both = {
         "query": "desc",
@@ -572,7 +572,7 @@ def test_document_tags_filter_edges(setup_collection):
     }
     resp = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=q_both)
     assert resp.status_code == 200
-    results = resp.json()
+    results = parse_search_response(resp.json())
     types = {(r.get("tags")[0] if r.get("tags") else None) for r in results}
     assert "news" in types and "article" in types
 
@@ -724,7 +724,7 @@ def test_metadata_indexes_validation(setup_collection):
         search_query = {"query": "Test", "limit": 10}
         response = requests.post(f"{API_BASE_URL}/collections/{test_collection_name}/search", json=search_query)
         assert response.status_code == 200
-        results = response.json()
+        results = parse_search_response(response.json())
         assert len(results) >= 2
         
         # Find doc1 and doc2 in results
@@ -832,7 +832,7 @@ def test_recursive_metadata_filtering():
         }
         eq_resp = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=eq_query)
         assert eq_resp.status_code == 200, f"eq filter failed: {eq_resp.text}"
-        eq_ids = {r["id"] for r in eq_resp.json()}
+        eq_ids = {r["id"] for r in parse_search_response(eq_resp.json())}
         assert eq_ids == {"meta_f_1"}
 
         range_query = {
@@ -841,7 +841,7 @@ def test_recursive_metadata_filtering():
         }
         range_resp = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=range_query)
         assert range_resp.status_code == 200, f"range filter failed: {range_resp.text}"
-        range_ids = {r["id"] for r in range_resp.json()}
+        range_ids = {r["id"] for r in parse_search_response(range_resp.json())}
         assert range_ids == {"meta_f_2", "meta_f_3"}
 
         and_query = {
@@ -855,7 +855,7 @@ def test_recursive_metadata_filtering():
         }
         and_resp = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=and_query)
         assert and_resp.status_code == 200, f"and filter failed: {and_resp.text}"
-        and_ids = {r["id"] for r in and_resp.json()}
+        and_ids = {r["id"] for r in parse_search_response(and_resp.json())}
         assert and_ids == {"meta_f_2"}
 
         or_query = {
@@ -869,7 +869,7 @@ def test_recursive_metadata_filtering():
         }
         or_resp = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=or_query)
         assert or_resp.status_code == 200, f"or filter failed: {or_resp.text}"
-        or_ids = {r["id"] for r in or_resp.json()}
+        or_ids = {r["id"] for r in parse_search_response(or_resp.json())}
         assert or_ids == {"meta_f_1", "meta_f_3"}
 
         not_query = {
@@ -880,7 +880,7 @@ def test_recursive_metadata_filtering():
         }
         not_resp = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=not_query)
         assert not_resp.status_code == 200, f"not filter failed: {not_resp.text}"
-        not_ids = {r["id"] for r in not_resp.json()}
+        not_ids = {r["id"] for r in parse_search_response(not_resp.json())}
         assert not_ids == {"meta_f_1", "meta_f_3"}
 
         nested_not_query = {
@@ -899,7 +899,7 @@ def test_recursive_metadata_filtering():
             json=nested_not_query
         )
         assert nested_not_resp.status_code == 200, f"nested not filter failed: {nested_not_resp.text}"
-        nested_not_ids = {r["id"] for r in nested_not_resp.json()}
+        nested_not_ids = {r["id"] for r in parse_search_response(nested_not_resp.json())}
         assert nested_not_ids == {"meta_f_1", "meta_f_3"}
 
         datetime_query = {
@@ -911,7 +911,7 @@ def test_recursive_metadata_filtering():
             json=datetime_query
         )
         assert datetime_resp.status_code == 200, f"datetime filter failed: {datetime_resp.text}"
-        datetime_ids = {r["id"] for r in datetime_resp.json()}
+        datetime_ids = {r["id"] for r in parse_search_response(datetime_resp.json())}
         assert datetime_ids == {"meta_f_2", "meta_f_3"}
 
         invalid_key_query = {
@@ -984,43 +984,43 @@ def test_string_metadata_filter():
         r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
                           json={**base_query, "metadata_filter": 'author = "Alice"'})
         assert r.status_code == 200, f"eq string filter failed: {r.text}"
-        assert {x["id"] for x in r.json()} == {"sf_1"}
+        assert {x["id"] for x in parse_search_response(r.json())} == {"sf_1"}
 
         # gt
         r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
                           json={**base_query, "metadata_filter": "year > 2022"})
         assert r.status_code == 200, f"gt string filter failed: {r.text}"
-        assert {x["id"] for x in r.json()} == {"sf_2", "sf_3"}
+        assert {x["id"] for x in parse_search_response(r.json())} == {"sf_2", "sf_3"}
 
         # AND
         r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
                           json={**base_query, "metadata_filter": "year >= 2022 AND published = true"})
         assert r.status_code == 200, f"AND string filter failed: {r.text}"
-        assert {x["id"] for x in r.json()} == {"sf_2"}
+        assert {x["id"] for x in parse_search_response(r.json())} == {"sf_2"}
 
         # OR
         r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
                           json={**base_query, "metadata_filter": 'author = "Alice" OR rating < 4.0'})
         assert r.status_code == 200, f"OR string filter failed: {r.text}"
-        assert {x["id"] for x in r.json()} == {"sf_1", "sf_3"}
+        assert {x["id"] for x in parse_search_response(r.json())} == {"sf_1", "sf_3"}
 
         # NOT
         r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
                           json={**base_query, "metadata_filter": "NOT published = true"})
         assert r.status_code == 200, f"NOT string filter failed: {r.text}"
-        assert {x["id"] for x in r.json()} == {"sf_1", "sf_3"}
+        assert {x["id"] for x in parse_search_response(r.json())} == {"sf_1", "sf_3"}
 
         # nested parens
         r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
                           json={**base_query, "metadata_filter": "(year > 2020 AND year < 2030) OR rating < 4.0"})
         assert r.status_code == 200, f"nested string filter failed: {r.text}"
-        assert {x["id"] for x in r.json()} == {"sf_1", "sf_2", "sf_3"}
+        assert {x["id"] for x in parse_search_response(r.json())} == {"sf_1", "sf_2", "sf_3"}
 
         # neq (!=)
         r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
                           json={**base_query, "metadata_filter": 'author != "Alice"'})
         assert r.status_code == 200, f"neq string filter failed: {r.text}"
-        assert {x["id"] for x in r.json()} == {"sf_2", "sf_3"}
+        assert {x["id"] for x in parse_search_response(r.json())} == {"sf_2", "sf_3"}
 
         # invalid syntax → 422
         r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search",
@@ -1126,7 +1126,7 @@ def test_document_deletion(setup_collection):
     
     response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query)
     assert response.status_code == 200
-    results = response.json()
+    results = parse_search_response(response.json())
     
     doc_ids = [r["id"] for r in results]
     assert "doc1" not in doc_ids
@@ -1332,7 +1332,7 @@ def test_sparse_model_vectors():
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query)
         assert response.status_code == 200, f"Sparse model search failed: {response.text}"
-        results = response.json()
+        results = parse_search_response(response.json())
         assert len(results) > 0, "Sparse model search returned no results"
         
         print(f"✅ Sparse model vectors working: {len(results)} search results")
@@ -1392,7 +1392,7 @@ def test_sparse_model_end_to_end():
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query)
         assert response.status_code == 200, f"Sparse model search failed: {response.text}"
-        results = response.json()
+        results = parse_search_response(response.json())
         assert len(results) > 0, "Sparse model search returned no results"
         
         print(f"✅ Sparse model vectors working: {len(results)} search results")
@@ -1522,7 +1522,7 @@ def test_sparse_model_end_to_end():
 @pytest.mark.dense_vectors_only
 def test_comprehensive_vector_combinations(backend_capabilities):
     """Test all possible combinations of vector types for comprehensive coverage."""
-    from tests.conftest import skip_if_not_supported
+    from tests.conftest import skip_if_not_supported, parse_search_response
     
     # Skip if backend doesn't support dense vectors
     skip_if_not_supported(backend_capabilities, "dense_vectors")
@@ -1649,7 +1649,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_single)
         assert response.status_code == 200, f"Single tag search failed: {response.text}"
         
-        results_single = response.json()
+        results_single = parse_search_response(response.json())
         print(f"Single tag 'ml' search returned {len(results_single)} documents")
         
         # Should find documents with 'ml' tag
@@ -1667,7 +1667,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_multi)
         assert response.status_code == 200, f"Multiple tag search failed: {response.text}"
         
-        results_multi = response.json()
+        results_multi = parse_search_response(response.json())
         print(f"Multiple tags 'ml,programming' search returned {len(results_multi)} documents")
         
         # Should find documents with either 'ml' OR 'programming' tag
@@ -1762,7 +1762,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
             
             assert response.status_code == 200, f"Search failed for combination {i+1}: {response.text}"
             
-            results = response.json()
+            results = parse_search_response(response.json())
             print(f"Results: {len(results)} documents returned in {search_time_ms:.2f}ms")
             
             # Basic validation
@@ -1809,7 +1809,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         
         assert response.status_code == 200, f"Auto-weight search failed: {response.text}"
         
-        results = response.json()
+        results = parse_search_response(response.json())
         print(f"Auto-weight results: {len(results)} documents returned in {search_time_ms:.2f}ms")
         
         # Should still get results even without explicit weights
@@ -1899,7 +1899,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query)
         assert response.status_code == 200, f"Search after update failed: {response.text}"
         
-        results = response.json()
+        results = parse_search_response(response.json())
         print(f"Search after update: {len(results)} documents returned")
         
         # The updated doc1 should now be more relevant to this query
@@ -1962,7 +1962,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_no_filter)
         assert response.status_code == 200, f"Search without filter failed: {response.text}"
         
-        results_no_filter = response.json()
+        results_no_filter = parse_search_response(response.json())
         print(f"No filter results: {len(results_no_filter)} documents returned")
         
         # Debug: Log all results to understand what we're getting
@@ -1997,7 +1997,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_single_type)
         assert response.status_code == 200, f"Search with single type filter failed: {response.text}"
         
-        results_single_type = response.json()
+        results_single_type = parse_search_response(response.json())
         print(f"Single type filter results: {len(results_single_type)} documents returned")
         
         # All results should be of type "research"
@@ -2018,7 +2018,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_multi_type)
         assert response.status_code == 200, f"Search with multi-type filter failed: {response.text}"
         
-        results_multi_type = response.json()
+        results_multi_type = parse_search_response(response.json())
         print(f"Multiple-type filter results: {len(results_multi_type)} documents returned")
         
         # All results should be of type "tutorial" or "article"
@@ -2040,7 +2040,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_no_match)
         assert response.status_code == 200, f"Search with no-match filter failed: {response.text}"
         
-        results_no_match = response.json()
+        results_no_match = parse_search_response(response.json())
         print(f"No-match filter results: {len(results_no_match)} documents returned")
         
         # Should return empty results since no documents match the filter
@@ -2060,7 +2060,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_dense_filter)
         assert response.status_code == 200, f"Search with dense vector filter failed: {response.text}"
         
-        results_dense_filter = response.json()
+        results_dense_filter = parse_search_response(response.json())
         print(f"Dense vector filter results: {len(results_dense_filter)} documents returned")
         
         # All results should be of allowed types
@@ -2085,7 +2085,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_hybrid_filter)
         assert response.status_code == 200, f"Search with hybrid filter failed: {response.text}"
         
-        results_hybrid_filter = response.json()
+        results_hybrid_filter = parse_search_response(response.json())
         print(f"Hybrid filter results: {len(results_hybrid_filter)} documents returned")
         
         # All results should be of allowed types
@@ -2109,7 +2109,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_empty_type)
         assert response.status_code == 200, f"Search for empty type failed: {response.text}"
         
-        results_empty_type = response.json()
+        results_empty_type = parse_search_response(response.json())
         print(f"Empty type filter results: {len(results_empty_type)} documents returned")
         
         # Should find the document with untagged type
@@ -2133,7 +2133,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_none_type)
         assert response.status_code == 200, f"Search for None type failed: {response.text}"
         
-        results_none_type = response.json()
+        results_none_type = parse_search_response(response.json())
         print(f"None type filter results: {len(results_none_type)} documents returned")
         
         # Should find the document with None type
@@ -2157,7 +2157,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_normal)
         assert response.status_code == 200, f"Normal search failed: {response.text}"
         
-        results_normal = response.json()
+        results_normal = parse_search_response(response.json())
         print(f"Normal search results: {len(results_normal)} documents returned")
         
         # Log all document types found to debug the missing document issue
@@ -2185,7 +2185,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_include_edge)
         assert response.status_code == 200, f"Search including edge cases failed: {response.text}"
         
-        results_edge = response.json()
+        results_edge = parse_search_response(response.json())
         print(f"Edge case inclusive search results: {len(results_edge)} documents returned")
         
         # Should include documents with untagged and None types
@@ -2220,7 +2220,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
 @pytest.mark.dense_vectors_only
 def test_euclidean_distance_functionality(backend_capabilities):
     """Test that euclidean distance functionality works correctly for dense vectors."""
-    from tests.conftest import skip_if_not_supported
+    from tests.conftest import skip_if_not_supported, parse_search_response
     
     # Skip if backend doesn't support dense vectors
     skip_if_not_supported(backend_capabilities, "dense_vectors")
@@ -2291,7 +2291,7 @@ def test_euclidean_distance_functionality(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query)
         assert response.status_code == 200, f"Search with euclidean distance failed: {response.text}"
         
-        results = response.json()
+        results = parse_search_response(response.json())
         print(f"Euclidean distance search returned {len(results)} documents")
         
         # Verify we got results
@@ -2426,7 +2426,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_single)
         assert response.status_code == 200, f"Single tag search failed: {response.text}"
         
-        results_single = response.json()
+        results_single = parse_search_response(response.json())
         print(f"Single tag 'ml' search returned {len(results_single)} documents")
         
         # Should find documents with 'ml' tag
@@ -2444,7 +2444,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_multi)
         assert response.status_code == 200, f"Multiple tag search failed: {response.text}"
         
-        results_multi = response.json()
+        results_multi = parse_search_response(response.json())
         print(f"Multiple tags 'ml,programming' search returned {len(results_multi)} documents")
         
         # Should find documents with either 'ml' OR 'programming' tag
@@ -2503,7 +2503,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
             
             assert response.status_code == 200, f"Search failed for combination {i+1}: {response.text}"
             
-            results = response.json()
+            results = parse_search_response(response.json())
             print(f"Results: {len(results)} documents returned in {search_time_ms:.2f}ms")
             
             # Basic validation
@@ -2550,7 +2550,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
         
         assert response.status_code == 200, f"Auto-weight search failed: {response.text}"
         
-        results = response.json()
+        results = parse_search_response(response.json())
         print(f"Auto-weight results: {len(results)} documents returned in {search_time_ms:.2f}ms")
         
         # Should still get results even without explicit weights
@@ -2640,7 +2640,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query)
         assert response.status_code == 200, f"Search after update failed: {response.text}"
         
-        results = response.json()
+        results = parse_search_response(response.json())
         print(f"Search after update: {len(results)} documents returned")
         
         # The updated doc1 should now be more relevant to this query
@@ -2703,7 +2703,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_no_filter)
         assert response.status_code == 200, f"Search without filter failed: {response.text}"
         
-        results_no_filter = response.json()
+        results_no_filter = parse_search_response(response.json())
         print(f"No filter results: {len(results_no_filter)} documents returned")
         
         # Debug: Log all results to understand what we're getting
@@ -2738,7 +2738,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_single_type)
         assert response.status_code == 200, f"Search with single type filter failed: {response.text}"
         
-        results_single_type = response.json()
+        results_single_type = parse_search_response(response.json())
         print(f"Single type filter results: {len(results_single_type)} documents returned")
         
         # All results should be of type "research"
@@ -2759,7 +2759,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_multi_type)
         assert response.status_code == 200, f"Search with multiple type filter failed: {response.text}"
         
-        results_multi_type = response.json()
+        results_multi_type = parse_search_response(response.json())
         print(f"Multiple type filter results: {len(results_multi_type)} documents returned")
         
         # All results should be of type "tutorial" OR "article"
@@ -2781,7 +2781,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_untagged_type)
         assert response.status_code == 200, f"Search with untagged type filter failed: {response.text}"
         
-        results_untagged_type = response.json()
+        results_untagged_type = parse_search_response(response.json())
         print(f"Untagged type filter results: {len(results_untagged_type)} documents returned")
         
         # All results should have untagged type
@@ -2803,7 +2803,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_nonexistent_type)
         assert response.status_code == 200, f"Search with non-existent type filter failed: {response.text}"
         
-        results_nonexistent_type = response.json()
+        results_nonexistent_type = parse_search_response(response.json())
         print(f"Non-existent type filter results: {len(results_nonexistent_type)} documents returned")
         
         # Should return empty results for non-existent type
@@ -3180,7 +3180,7 @@ def test_custom_vectors_functionality(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query)
         assert response.status_code == 200
         
-        results = response.json()
+        results = parse_search_response(response.json())
         assert len(results) > 0
         assert results[0]["id"] == "custom_test_doc"
         
@@ -3362,7 +3362,7 @@ def test_mixed_custom_and_generated_vectors(backend_capabilities):
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query)
         assert response.status_code == 200
         
-        results = response.json()
+        results = parse_search_response(response.json())
         assert len(results) > 0
         assert results[0]["id"] == "mixed_vectors_doc"
         
@@ -3435,7 +3435,7 @@ def test_sparse_custom_vectors_only():
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query)
         assert response.status_code == 200
         
-        results = response.json()
+        results = parse_search_response(response.json())
         assert len(results) > 0
         assert results[0]["id"] == "sparse_test_doc"
         
@@ -3709,7 +3709,7 @@ def test_noop_collection_implicit():
         # Search must return empty — noop sparse vector matches nothing
         r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json={"query": "doc content"})
         assert r.status_code == 200, f"Search failed: {r.text}"
-        assert r.json() == []
+        assert parse_search_response(r.json()) == []
 
     finally:
         requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
@@ -3739,7 +3739,7 @@ def test_noop_collection_explicit():
         # Search must return empty — noop sparse vector matches nothing
         r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json={"query": "doc content"})
         assert r.status_code == 200, f"Search failed: {r.text}"
-        assert r.json() == []
+        assert parse_search_response(r.json()) == []
 
     finally:
         requests.delete(f"{API_BASE_URL}/collections/{collection_name}")

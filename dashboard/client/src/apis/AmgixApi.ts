@@ -29,7 +29,7 @@ import type {
   QueueInfo,
   ReadyResponse,
   SearchQuery,
-  SearchResult,
+  SearchResponse,
   SystemInfoResponse,
   VersionResponse,
 } from '../models/index';
@@ -62,8 +62,8 @@ import {
     ReadyResponseToJSON,
     SearchQueryFromJSON,
     SearchQueryToJSON,
-    SearchResultFromJSON,
-    SearchResultToJSON,
+    SearchResponseFromJSON,
+    SearchResponseToJSON,
     SystemInfoResponseFromJSON,
     SystemInfoResponseToJSON,
     VersionResponseFromJSON,
@@ -1143,21 +1143,21 @@ export class AmgixApi extends runtime.BaseAPI {
     }
 
     /**
-     * Perform a search query on a collection.  Executes a search query against the specified collection.  Args:     collection_name: The name of the collection to search.     query: The `SearchQuery` object containing the search text, filters, and other parameters.  Returns:     A list of `SearchResult` objects, where each object represents a search result.
+     * Perform a search query on a collection.  Executes a search query against the specified collection.  Args:     collection_name: The name of the collection to search.     query: The `SearchQuery` object containing the search text, filters, and other parameters.  Returns:     A `SearchResponse` with search hits and server-side query timing.
      * Search
      */
-    async searchRaw(requestParameters: SearchRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<SearchResult>>> {
+    async searchRaw(requestParameters: SearchRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<SearchResponse>> {
         const requestOptions = await this.searchRequestOpts(requestParameters);
         const response = await this.request(requestOptions, initOverrides);
 
-        return new runtime.JSONApiResponse(response, (jsonValue) => jsonValue.map(SearchResultFromJSON));
+        return new runtime.JSONApiResponse(response, (jsonValue) => SearchResponseFromJSON(jsonValue));
     }
 
     /**
-     * Perform a search query on a collection.  Executes a search query against the specified collection.  Args:     collection_name: The name of the collection to search.     query: The `SearchQuery` object containing the search text, filters, and other parameters.  Returns:     A list of `SearchResult` objects, where each object represents a search result.
+     * Perform a search query on a collection.  Executes a search query against the specified collection.  Args:     collection_name: The name of the collection to search.     query: The `SearchQuery` object containing the search text, filters, and other parameters.  Returns:     A `SearchResponse` with search hits and server-side query timing.
      * Search
      */
-    async search(requestParameters: SearchRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<SearchResult>> {
+    async search(requestParameters: SearchRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<SearchResponse> {
         const response = await this.searchRaw(requestParameters, initOverrides);
         return await response.value();
     }

@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any
 
 from tests.test_api_integration import wait_for_document
+from tests.conftest import parse_search_response
 
 # Test configuration
 API_BASE_URL = "http://localhost:8234/v1"
@@ -270,12 +271,12 @@ def test_max_length_integration(backend_capabilities):
                 json=search_query
             )
             assert response.status_code == 200, f"Search failed: {MaxLengthTestData.truncate_string(response.text, 200)}"
-            search_results = response.json()
-            print(f"🔍 Search response type: {type(search_results)}")
-            print(f"🔍 Search response length: {len(search_results) if isinstance(search_results, list) else 'N/A'}")
-            if isinstance(search_results, list) and len(search_results) > 0:
+            search_body = parse_search_response(response.json())
+            print(f"🔍 Search response type: {type(search_body)}")
+            print(f"🔍 Search response length: {len(search_body)}")
+            if len(search_body) > 0:
                 # Truncate the first result to avoid massive output
-                first_result = search_results[0]
+                first_result = search_body[0]
                 truncated_result = {}
                 for key, value in first_result.items():
                     if isinstance(value, str) and len(value) > 100:
@@ -284,12 +285,11 @@ def test_max_length_integration(backend_capabilities):
                         truncated_result[key] = value
                 print(f"🔍 First result: {truncated_result}")
             else:
-                print(f"🔍 Search response: {search_results}")
-            
-            # API returns direct list, not dict with "results" key
-            assert isinstance(search_results, list), f"Expected list, got {type(search_results)}"
-            assert len(search_results) > 0, f"No search results returned. Expected at least 1 result with 2 documents in collection"
-            print(f"✅ Search successful, returned {len(search_results)} results")
+                print(f"🔍 Search response: {search_body}")
+
+            assert isinstance(search_body, list), f"Expected list, got {type(search_body)}"
+            assert len(search_body) > 0, f"No search results returned. Expected at least 1 result with 2 documents in collection"
+            print(f"✅ Search successful, returned {len(search_body)} results")
         except Exception as e:
             print(f"❌ Search failed: {e}")
             raise
