@@ -35,7 +35,7 @@ WORKDIR /workspace/dashboard
 RUN npm run build
 
 # Builder stage - build Rust analyzer wheel
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -55,7 +55,7 @@ RUN cd /app/libs/analyzers \
     && maturin build --release
 
 # Multi-stage build for smaller final image
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y \
     curl \
@@ -139,6 +139,8 @@ ARG AMGIX_VERSION=${AMGIX_VERSION}
 ENV AMGIX_VERSION=${AMGIX_VERSION}
 ENV AMGIX_VARIANT='Amgix-One'
 ENV AMGIX_ONE_ENCODER_MODELS='1'
+
+# ENV PYTHON_JIT=1
 
 # Expose only API port (internal services not exposed)
 EXPOSE 8234

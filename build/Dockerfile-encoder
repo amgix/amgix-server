@@ -1,5 +1,5 @@
 # Multi-stage build for smaller final image
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -31,13 +31,13 @@ RUN cd /app/libs/analyzers \
     && pip install --no-cache-dir target/wheels/*.whl
 
 # Final stage - minimal runtime image
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # Set working directory
 WORKDIR /app
 
 # Copy Python packages from builder stage
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/lib/python3.14/site-packages /usr/local/lib/python3.14/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application files

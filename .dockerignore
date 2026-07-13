@@ -17,3 +17,5 @@ dashboard/node_modules/
 *.egg-info/
 data/
 
+libs/analyzers/target/
+**/target/
