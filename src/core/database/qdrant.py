@@ -689,7 +689,7 @@ class QdrantDatabase(DatabaseBase):
 
         # Build weight map keyed by field_vector_name (consistent with SQL backends).
         # Default is 1.0, overridden by user-provided weights.
-        weight_lookup = {(w.vector_name, w.field): w.weight for w in query.vector_weights}
+        weight_lookup = {(w.vector_name, w.field): w.weight for w in query.vector_options}
         weight_map: Dict[str, float] = {}
 
         # formula_expressions are no longer used; keeping example commented out for reference

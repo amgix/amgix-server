@@ -269,22 +269,22 @@ class TestDataFactory:
         }
         
         if test_type == "basic" and self.supports_sparse:
-            base_query["vector_weights"] = [
+            base_query["vector_options"] = [
                 {"vector_name": "trigrams", "field": "name", "weight": 0.5},
                 {"vector_name": "trigrams", "field": "content", "weight": 0.5}
             ]
         
         elif test_type == "advanced":
             if self.supports_sparse:
-                base_query["vector_weights"] = [
+                base_query["vector_options"] = [
                     {"vector_name": "trigrams", "field": "name", "weight": 0.3},
                     {"vector_name": "trigrams", "field": "content", "weight": 0.3}
                 ]
             
             if self.supports_dense:
-                if "vector_weights" not in base_query:
-                    base_query["vector_weights"] = []
-                base_query["vector_weights"].append(
+                if "vector_options" not in base_query:
+                    base_query["vector_options"] = []
+                base_query["vector_options"].append(
                     {"vector_name": "embeddings", "field": "content", "weight": 0.4}
                 )
         

@@ -235,7 +235,7 @@ def test_document_upsert_and_search(setup_collection):
     search_query = {
                     "query": "Python programming",
         "limit": 10,
-        "vector_weights": [
+        "vector_options": [
             {"vector_name": "trigrams", "field": "name", "weight": 0.5},
             {"vector_name": "trigrams", "field": "content", "weight": 0.5}
         ]
@@ -311,7 +311,7 @@ def test_sparse_model_query_override():
         search_body = {
             "query": "sparse retrieval search",
             "limit": 10,
-            "vector_weights": [
+            "vector_options": [
                 {"vector_name": "splade", "field": "content", "weight": 1.0}
             ],
         }
@@ -369,7 +369,7 @@ def test_search_with_full_text_vectors(setup_collection):
     search_query = {
                     "query": "machine learning",
         "limit": 10,
-        "vector_weights": [
+        "vector_options": [
             {"vector_name": "full_text", "field": "name", "weight": 0.3},
             {"vector_name": "full_text", "field": "content", "weight": 0.7}
         ]
@@ -394,7 +394,7 @@ def test_search_with_document_tags_filter(setup_collection):
                     "query": "programming",
         "limit": 10,
         "document_tags": ["article"],
-        "vector_weights": [
+        "vector_options": [
             {"vector_name": "trigrams", "field": "name", "weight": 0.5},
             {"vector_name": "trigrams", "field": "content", "weight": 0.5}
         ]
@@ -427,7 +427,7 @@ def test_search_order_with_trigrams(setup_collection):
     q = {
                     "query": "python",
         "limit": 10,
-        "vector_weights": [
+        "vector_options": [
             {"vector_name": "trigrams", "field": "name", "weight": 0.7},
             {"vector_name": "trigrams", "field": "content", "weight": 0.3},
         ],
@@ -472,7 +472,7 @@ def test_weight_combination_flips_order(setup_collection):
     q_title = {
         "query": "Alpha",
         "limit": 10,
-        "vector_weights": [
+        "vector_options": [
             {"vector_name": "trigrams", "field": "name", "weight": 1.0},
         ],
     }
@@ -486,7 +486,7 @@ def test_weight_combination_flips_order(setup_collection):
     q_content = {
         "query": "Alpha",
         "limit": 10,
-        "vector_weights": [
+        "vector_options": [
             {"vector_name": "trigrams", "field": "content", "weight": 1.0},
         ],
     }
@@ -510,7 +510,7 @@ def test_search_limit_enforced(setup_collection):
     q = {
         "query": "KeyTerm",
         "limit": 2,
-        "vector_weights": [
+        "vector_options": [
             {"vector_name": "trigrams", "field": "name", "weight": 1.0},
         ],
     }
@@ -528,7 +528,7 @@ def test_search_no_results_returns_empty(setup_collection):
     q = {
         "query": "zzzxxyyunlikelyterm",
         "limit": 5,
-        "vector_weights": [
+        "vector_options": [
             {"vector_name": "trigrams", "field": "name", "weight": 1.0},
         ],
     }
@@ -554,7 +554,7 @@ def test_document_tags_filter_edges(setup_collection):
         "query": "news",
         "limit": 10,
         "document_tags": ["blog"],
-        "vector_weights": [
+        "vector_options": [
             {"vector_name": "trigrams", "field": "name", "weight": 1.0},
         ],
     }
@@ -566,7 +566,7 @@ def test_document_tags_filter_edges(setup_collection):
         "query": "desc",
         "limit": 10,
         "document_tags": ["news", "article"],
-        "vector_weights": [
+        "vector_options": [
             {"vector_name": "trigrams", "field": "content", "weight": 1.0},
         ],
     }
@@ -823,7 +823,7 @@ def test_recursive_metadata_filtering():
         base_query = {
             "query": "Filter",
             "limit": 10,
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}],
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}],
         }
 
         eq_query = {
@@ -977,7 +977,7 @@ def test_string_metadata_filter():
         base_query = {
             "query": "String Filter",
             "limit": 10,
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}],
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}],
         }
 
         # eq
@@ -1119,7 +1119,7 @@ def test_document_deletion(setup_collection):
     search_query = {
         "query": "Python",
         "limit": 10,
-        "vector_weights": [
+        "vector_options": [
             {"vector_name": "trigrams", "field": "name", "weight": 1.0}
         ]
     }
@@ -1140,7 +1140,7 @@ def test_empty_search_query(setup_collection):
     search_query = {
         "query": "",
         "limit": 10,
-        "vector_weights": [
+        "vector_options": [
             {"vector_name": "trigrams", "field": "name", "weight": 1.0}
         ]
     }
@@ -1264,7 +1264,7 @@ def test_invalid_collection():
     search_query = {
         "query": "test",
         "limit": 10,
-        "vector_weights": [
+        "vector_options": [
             {"vector_name": "trigrams", "field": "name", "weight": 1.0}
         ]
     }
@@ -1643,7 +1643,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
             "query": "machine learning",
             "limit": 10,
             "document_tags": ["ml"],
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_single)
@@ -1661,7 +1661,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
             "query": "machine learning",
             "limit": 10,
             "document_tags": ["ml", "programming"],
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_multi)
@@ -1742,15 +1742,15 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         ]
         
         # Test each combination
-        for i, vector_weights in enumerate(vector_combinations):
-            print(f"\n--- Testing combination {i+1}/15: {len(vector_weights)} vector types ---")
-            print(f"Vector weights: {vector_weights}")
+        for i, vector_options in enumerate(vector_combinations):
+            print(f"\n--- Testing combination {i+1}/15: {len(vector_options)} vector types ---")
+            print(f"Vector options: {vector_options}")
             
             # Search with this combination
             search_query = {
                 "query": "machine learning programming",
                 "limit": 5,
-                "vector_weights": vector_weights
+                "vector_options": vector_options
             }
             
             # Time the search
@@ -1793,12 +1793,12 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         print(f"Auto-weight test: 1")
         print(f"All searches completed successfully!")
         
-        # Test auto-weight generation (no vector_weights specified)
+        # Test auto-weight generation (no vector_options specified)
         print(f"\n--- Testing auto-weight generation ---")
         search_query = {
             "query": "machine learning programming",
             "limit": 5
-            # No vector_weights - should auto-generate equal weights
+            # No vector_options - should auto-generate equal weights
         }
         
         # Time the auto-weight search
@@ -1893,7 +1893,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         search_query = {
             "query": "advanced machine learning techniques",
             "limit": 5,
-            "vector_weights": [{"vector_name": "dense_embeddings", "field": "content", "weight": 1.0}]
+            "vector_options": [{"vector_name": "dense_embeddings", "field": "content", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query)
@@ -1956,7 +1956,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         search_query_no_filter = {
             "query": "machine python ai data empty none",  # First word from each title to guarantee matches
             "limit": 20,  # Higher limit to see more results
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_no_filter)
@@ -1991,7 +1991,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
             "query": "machine python ai data empty none",  # First word from each title to guarantee matches
             "limit": 10,
             "document_tags": ["research"],
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_single_type)
@@ -2012,7 +2012,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
             "query": "machine python ai data empty none",  # First word from each title to guarantee matches
             "limit": 10,
             "document_tags": ["tutorial", "article"],
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_multi_type)
@@ -2034,7 +2034,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
             "query": "machine python ai data empty none",  # First word from each title to guarantee matches
             "limit": 10,
             "document_tags": ["blog"],  # No documents of type "blog"
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_no_match)
@@ -2054,7 +2054,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
             "query": "machine python ai data empty none",  # First word from each title to guarantee matches
             "limit": 10,
             "document_tags": ["research", "tutorial"],
-            "vector_weights": [{"vector_name": "dense_embeddings", "field": "content", "weight": 1.0}]
+            "vector_options": [{"vector_name": "dense_embeddings", "field": "content", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_dense_filter)
@@ -2076,7 +2076,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
             "query": "machine python ai data empty none",  # First word from each title to guarantee matches
             "limit": 10,
             "document_tags": ["article", "news"],
-            "vector_weights": [
+            "vector_options": [
                 {"vector_name": "dense_embeddings", "field": "content", "weight": 0.5},
                 {"vector_name": "trigrams", "field": "name", "weight": 0.5}
             ]
@@ -2103,7 +2103,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
             "query": "empty type document",
             "limit": 10,
             "document_tags": ["untagged"],  # Untagged type
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_empty_type)
@@ -2127,7 +2127,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
             "query": "none type document",
             "limit": 10,
             "document_tags": ["None"],  # String "None" instead of actual None
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_none_type)
@@ -2151,7 +2151,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
         search_query_normal = {
             "query": "machine python ai data empty none",  # First word from each title to guarantee matches
             "limit": 20,  # Higher limit to see all documents
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_normal)
@@ -2179,7 +2179,7 @@ def test_comprehensive_vector_combinations(backend_capabilities):
             "query": "machine python ai data empty none",  # First word from each title to guarantee matches
             "limit": 20,
             "document_tags": ["untagged", "None", "research", "tutorial"],  # Include edge cases (string "None" instead of actual None)
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_include_edge)
@@ -2285,7 +2285,7 @@ def test_euclidean_distance_functionality(backend_capabilities):
         search_query = {
             "query": "machine learning",
             "limit": 3,
-            "vector_weights": [{"vector_name": "euclidean_embeddings", "field": "content", "weight": 1.0}]
+            "vector_options": [{"vector_name": "euclidean_embeddings", "field": "content", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query)
@@ -2420,7 +2420,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
             "query": "machine learning",
             "limit": 10,
             "document_tags": ["ml"],
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_single)
@@ -2438,7 +2438,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
             "query": "machine learning",
             "limit": 10,
             "document_tags": ["ml", "programming"],
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_multi)
@@ -2483,15 +2483,15 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
         ]
         
         # Test each combination
-        for i, vector_weights in enumerate(vector_combinations):
-            print(f"\n--- Testing sparse combination {i+1}/7: {len(vector_weights)} vector types ---")
-            print(f"Vector weights: {vector_weights}")
+        for i, vector_options in enumerate(vector_combinations):
+            print(f"\n--- Testing sparse combination {i+1}/7: {len(vector_options)} vector types ---")
+            print(f"Vector options: {vector_options}")
             
             # Search with this combination
             search_query = {
                 "query": "machine learning programming",
                 "limit": 5,
-                "vector_weights": vector_weights
+                "vector_options": vector_options
             }
             
             # Time the search
@@ -2534,12 +2534,12 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
         print(f"Auto-weight test: 1")
         print(f"All searches completed successfully!")
         
-        # Test auto-weight generation (no vector_weights specified)
+        # Test auto-weight generation (no vector_options specified)
         print(f"\n--- Testing auto-weight generation ---")
         search_query = {
             "query": "machine learning programming",
             "limit": 5
-            # No vector_weights - should auto-generate equal weights
+            # No vector_options - should auto-generate equal weights
         }
         
         # Time the auto-weight search
@@ -2634,7 +2634,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
         search_query = {
             "query": "advanced machine learning techniques",
             "limit": 5,
-            "vector_weights": [{"vector_name": "sparse_embeddings", "field": "content", "weight": 1.0}]
+            "vector_options": [{"vector_name": "sparse_embeddings", "field": "content", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query)
@@ -2697,7 +2697,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
         search_query_no_filter = {
             "query": "machine python ai data empty none",  # First word from each title to guarantee matches
             "limit": 20,  # Higher limit to see more results
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_no_filter)
@@ -2732,7 +2732,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
             "query": "machine python ai data empty none",  # First word from each title to guarantee matches
             "limit": 10,
             "document_tags": ["research"],
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_single_type)
@@ -2753,7 +2753,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
             "query": "machine python ai data empty none",  # First word from each title to guarantee matches
             "limit": 10,
             "document_tags": ["tutorial", "article"],
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_multi_type)
@@ -2775,7 +2775,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
             "query": "machine python ai data empty none",  # First word from each title to guarantee matches
             "limit": 10,
             "document_tags": ["untagged"],
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_untagged_type)
@@ -2797,7 +2797,7 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
             "query": "machine python ai data empty none",  # First word from each title to guarantee matches
             "limit": 10,
             "document_tags": ["nonexistent_type"],
-            "vector_weights": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
+            "vector_options": [{"vector_name": "trigrams", "field": "name", "weight": 1.0}]
         }
         
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query_nonexistent_type)
@@ -3352,7 +3352,7 @@ def test_mixed_custom_and_generated_vectors(backend_capabilities):
                     "vector": [0.7, 0.3]  # Similar but different dense vector
                 }
             ],
-            "vector_weights": [
+            "vector_options": [
                 {"vector_name": "custom_dense", "field": "content", "weight": 0.6},
                 {"vector_name": "wmtr_generated", "field": "content", "weight": 0.4}
             ],

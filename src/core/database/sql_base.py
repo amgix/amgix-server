@@ -1768,7 +1768,7 @@ class SQLBase(DatabaseBase):
         """
         field_vector_ids = self._get_field_vector_ids(collection_config)
         vector_config_map = {vc.name: vc for vc in collection_config.vectors}
-        weight_lookup = {(x.vector_name, x.field): x.weight for x in query.vector_weights}
+        weight_lookup = {(x.vector_name, x.field): x.weight for x in query.vector_options}
         search_arms = []
 
         for vector_data in query.vectors:

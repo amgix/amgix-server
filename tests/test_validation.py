@@ -249,7 +249,7 @@ class TestSearchQueryValidation:
         """Search with invalid vector name should fail."""
         response = requests.post(f"{API_BASE_URL}/collections/{self.collection_name}/search", json={
             "query": "test query",
-            "vector_weights": [{"vector_name": "invalid vector name", "weight": 1.0, "field": "name"}]
+            "vector_options": [{"vector_name": "invalid vector name", "weight": 1.0, "field": "name"}]
         })
         assert response.status_code == 422
         error_detail = response.json()["detail"]
@@ -259,7 +259,7 @@ class TestSearchQueryValidation:
         """Search with valid vector name should work."""
         response = requests.post(f"{API_BASE_URL}/collections/{self.collection_name}/search", json={
             "query": "test query",
-            "vector_weights": [{"vector_name": "test_vector", "weight": 1.0, "field": "name"}]
+            "vector_options": [{"vector_name": "test_vector", "weight": 1.0, "field": "name"}]
         })
         # Should not fail validation (might fail for other reasons, but not validation)
         assert response.status_code != 422

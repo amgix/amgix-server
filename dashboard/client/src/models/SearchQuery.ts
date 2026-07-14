@@ -13,13 +13,13 @@
  */
 
 import { mapValues } from '../runtime';
-import type { VectorSearchWeight } from './VectorSearchWeight';
+import type { VectorSearchOption } from './VectorSearchOption';
 import {
-    VectorSearchWeightFromJSON,
-    VectorSearchWeightFromJSONTyped,
-    VectorSearchWeightToJSON,
-    VectorSearchWeightToJSONTyped,
-} from './VectorSearchWeight';
+    VectorSearchOptionFromJSON,
+    VectorSearchOptionFromJSONTyped,
+    VectorSearchOptionToJSON,
+    VectorSearchOptionToJSONTyped,
+} from './VectorSearchOption';
 import type { CustomVector } from './CustomVector';
 import {
     CustomVectorFromJSON,
@@ -37,7 +37,7 @@ import {
 
 /**
  * Configuration for a search query.
- * Defines the query string and vector weights.
+ * Defines the query string and vector options.
  * This is the model that will be sent by end users to the search API endpoint.
  * @export
  * @interface SearchQuery
@@ -51,10 +51,10 @@ export interface SearchQuery {
     query: string;
     /**
      * List of vectors, fields, and weights to use for searching. If empty, equal weights will be auto-generated for all available vectors.
-     * @type {Array<VectorSearchWeight>}
+     * @type {Array<VectorSearchOption>}
      * @memberof SearchQuery
      */
-    vector_weights?: Array<VectorSearchWeight>;
+    vector_options?: Array<VectorSearchOption>;
     /**
      * Pre-generated custom vectors for this search query (optional)
      * @type {Array<CustomVector>}
@@ -98,12 +98,6 @@ export interface SearchQuery {
      */
     raw_scores?: boolean;
     /**
-     * WMTR trigram channel multiplier for this search query.
-     * @type {number}
-     * @memberof SearchQuery
-     */
-    wmtr_trigram_weight?: number;
-    /**
      * How to combine multi-vector search results. 'rrf' = reciprocal rank fusion (rank-based). 'linear' = min-max normalize each retriever's scores on its prefetch list, then sum weight * normalized score.
      * @type {SearchQueryFusionModeEnum}
      * @memberof SearchQuery
@@ -141,7 +135,7 @@ export function SearchQueryFromJSONTyped(json: any, ignoreDiscriminator: boolean
     return {
         
         'query': json['query'],
-        'vector_weights': json['vector_weights'] == null ? undefined : ((json['vector_weights'] as Array<any>).map(VectorSearchWeightFromJSON)),
+        'vector_options': json['vector_options'] == null ? undefined : ((json['vector_options'] as Array<any>).map(VectorSearchOptionFromJSON)),
         'custom_vectors': json['custom_vectors'] == null ? undefined : ((json['custom_vectors'] as Array<any>).map(CustomVectorFromJSON)),
         'limit': json['limit'] == null ? undefined : json['limit'],
         'score_threshold': json['score_threshold'] == null ? undefined : json['score_threshold'],
@@ -149,7 +143,6 @@ export function SearchQueryFromJSONTyped(json: any, ignoreDiscriminator: boolean
         'document_tags_match_all': json['document_tags_match_all'] == null ? undefined : json['document_tags_match_all'],
         'metadata_filter': json['metadata_filter'] == null ? undefined : MetadataFilterFromJSON(json['metadata_filter']),
         'raw_scores': json['raw_scores'] == null ? undefined : json['raw_scores'],
-        'wmtr_trigram_weight': json['wmtr_trigram_weight'] == null ? undefined : json['wmtr_trigram_weight'],
         'fusion_mode': json['fusion_mode'] == null ? undefined : json['fusion_mode'],
     };
 }
@@ -166,7 +159,7 @@ export function SearchQueryToJSONTyped(value?: SearchQuery | null, ignoreDiscrim
     return {
         
         'query': value['query'],
-        'vector_weights': value['vector_weights'] == null ? undefined : ((value['vector_weights'] as Array<any>).map(VectorSearchWeightToJSON)),
+        'vector_options': value['vector_options'] == null ? undefined : ((value['vector_options'] as Array<any>).map(VectorSearchOptionToJSON)),
         'custom_vectors': value['custom_vectors'] == null ? undefined : ((value['custom_vectors'] as Array<any>).map(CustomVectorToJSON)),
         'limit': value['limit'],
         'score_threshold': value['score_threshold'],
@@ -174,7 +167,6 @@ export function SearchQueryToJSONTyped(value?: SearchQuery | null, ignoreDiscrim
         'document_tags_match_all': value['document_tags_match_all'],
         'metadata_filter': MetadataFilterToJSON(value['metadata_filter']),
         'raw_scores': value['raw_scores'],
-        'wmtr_trigram_weight': value['wmtr_trigram_weight'],
         'fusion_mode': value['fusion_mode'],
     };
 }

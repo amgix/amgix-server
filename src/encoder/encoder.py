@@ -18,7 +18,7 @@ from src.core.common import CACHE_BASE_DIR, HF_CACHE_DIR, CUDA_CACHE_DIR, get_us
 from .encoder_base import EncoderBase, EncoderServiceRunner
 from .embed_router_service import EmbedRouterService
 
-from src.core.models.vector import CollectionConfigInternal, SearchQuery, VectorConfigInternal, VectorSearchWeight, ModelValidationResponse, ModelValidationResult
+from src.core.models.vector import CollectionConfigInternal, SearchQuery, VectorConfigInternal, VectorSearchOption, ModelValidationResponse, ModelValidationResult
 from src.core.common.metrics_definitions import MetricKey
 from src.core.common.metrics_service import MetricsService
 from src.core.common import VectorType, QueuedDocumentStatus, QueueOperationType, MAX_QUEUE_DELIVERY_ATTEMPTS, MAX_DB_RETRIES
@@ -709,11 +709,11 @@ class RpcService(EncoderBase):
             self.bunny_talk.log_trace_context(f"RpcService: validate_models")
             
             # Create a dummy search query with all vector configs
-            # Create VectorSearchWeight objects for each config
-            vector_weights = []
+            # Create VectorSearchOption objects for each config
+            vector_options = []
             for config in vector_configs:
                 for field in config.index_fields:
-                    vector_weights.append(VectorSearchWeight(
+                    vector_options.append(VectorSearchOption(
                         vector_name=config.name,
                         weight=1.0,
                         field=field
@@ -721,7 +721,7 @@ class RpcService(EncoderBase):
             
             dummy_query = SearchQuery(
                 query="x",  # Minimal dummy text
-                vector_weights=vector_weights
+                vector_options=vector_options
             )
             
             query_with_vectors = await Vectorizer.vectorize_search_query(self.router, dummy_query, vector_configs, validation_mode=True)

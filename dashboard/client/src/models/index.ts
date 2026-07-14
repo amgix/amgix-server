@@ -30,6 +30,6 @@ export * from './ValidationErrorLocItem';
 export * from './Vector';
 export * from './VectorConfig';
 export * from './VectorScore';
-export * from './VectorSearchWeight';
+export * from './VectorSearchOption';
 export * from './VersionResponse';
 export * from './WindowSample';

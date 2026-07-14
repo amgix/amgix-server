@@ -31,7 +31,7 @@ models/ValidationErrorLocItem.ts
 models/Vector.ts
 models/VectorConfig.ts
 models/VectorScore.ts
-models/VectorSearchWeight.ts
+models/VectorSearchOption.ts
 models/VersionResponse.ts
 models/WindowSample.ts
 models/index.ts

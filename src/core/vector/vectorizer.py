@@ -2,7 +2,7 @@ from typing import List, Dict, Type, Union, Optional
 import asyncio
 
 from ..models.document import Document, DocumentWithVectors
-from ..models.vector import VectorConfigInternal, SearchQuery, SearchQueryWithVectors, VectorData, VectorSearchWeight
+from ..models.vector import VectorConfigInternal, SearchQuery, SearchQueryWithVectors, VectorData, VectorSearchOption
 from ..common import VectorType, WMTR_DEFAULT_TRIGRAM_WEIGHT
 from ..common.embed_router import EmbedRouter
 from .dense_custom import CustomDenseVector
@@ -162,7 +162,7 @@ class Vectorizer:
         Generate vectors for a search query based on the provided vector configurations.
         
         Only generates vectors for the specific vector_name + field combinations
-        specified in query.vector_weights. If no vector_weights are specified,
+        specified in query.vector_options. If no vector_options are specified,
         generates vectors for all available vector configurations.
         
         Args:
@@ -192,14 +192,14 @@ class Vectorizer:
         
         vectors = []
         
-        # Determine which vectors to generate based on query.vector_weights
-        if query.vector_weights:
+        # Determine which vectors to generate based on query.vector_options
+        if query.vector_options:
             # Generate only the vectors specified in the query, excluding weight 0 vectors
             vectors_to_generate = set()
-            for weight in query.vector_weights:
+            for option in query.vector_options:
                 # Skip vectors with weight 0 - they contribute nothing
-                if weight.weight != 0:
-                    vectors_to_generate.add((weight.vector_name, weight.field))
+                if option.weight != 0:
+                    vectors_to_generate.add((option.vector_name, option.field))
         else:
             # No specific weights specified, generate all available vectors
             vectors_to_generate = set()
@@ -210,44 +210,63 @@ class Vectorizer:
             # Create equal weights for all generated vectors
             if vectors_to_generate:
                 equal_weight = 1.0 / len(vectors_to_generate)
-                query.vector_weights = [
-                    VectorSearchWeight(
+                query.vector_options = [
+                    VectorSearchOption(
                         vector_name=name,
                         field=field,
-                        weight=equal_weight
+                        weight=equal_weight,
+                        wmtr_trigram_weight=WMTR_DEFAULT_TRIGRAM_WEIGHT,
                     )
                     for name, field in vectors_to_generate
                 ]
         
+        option_map = {(option.vector_name, option.field): option for option in query.vector_options}
+        
         # Create a map of configs by name for quick lookup
         config_map = {config.name: config for config in vector_configs}
         
-        # Group by vector_name to avoid encoding the same text multiple times with same config
-        vector_groups = {}
+        # Group non-WMTR vectors by name; WMTR gets one task per field (trigram weight is per option).
+        normal_groups: dict[str, list[str]] = {}
+        wmtr_work: list[tuple[VectorConfigInternal, str, float]] = []
         for vector_name, field in vectors_to_generate:
-            if vector_name not in vector_groups:
-                vector_groups[vector_name] = []
-            vector_groups[vector_name].append(field)
+            config = config_map.get(vector_name)
+            if not config:
+                raise ValueError(
+                    f"Vector configuration '{vector_name}' not found. Available vectors: {list(config_map.keys())}"
+                )
+            if field not in config.index_fields:
+                raise ValueError(
+                    f"Field '{field}' is not configured for vector '{vector_name}'. Available fields: {config.index_fields}"
+                )
+            if config.type == VectorType.WMTR:
+                option = option_map.get((vector_name, field))
+                trigram_weight = option.wmtr_trigram_weight if option is not None else WMTR_DEFAULT_TRIGRAM_WEIGHT
+                wmtr_work.append((config, field, trigram_weight))
+            else:
+                normal_groups.setdefault(vector_name, []).append(field)
         
         # Process vector configs in parallel using asyncio.gather
         tasks = []
         vector_name_to_task = {}
         
-        for vector_name, fields in vector_groups.items():
-            config = config_map.get(vector_name)
-            if not config:
-                # Fail if vector config not found - this is a configuration error
-                raise ValueError(f"Vector configuration '{vector_name}' not found. Available vectors: {list(config_map.keys())}")
-            
-            # Validate that all fields are configured for this vector
-            for field in fields:
-                if field not in config.index_fields:
-                    raise ValueError(f"Field '{field}' is not configured for vector '{vector_name}'. Available fields: {config.index_fields}")
-            
-            # Create async task for vector generation
-            task = asyncio.create_task(Vectorizer._generate_vector_for_query(router, config, query, fields, validation_mode))
+        for vector_name, fields in normal_groups.items():
+            config = config_map[vector_name]
+            task = asyncio.create_task(
+                Vectorizer._generate_vector_for_query(
+                    router, config, query, fields, validation_mode, WMTR_DEFAULT_TRIGRAM_WEIGHT
+                )
+            )
             tasks.append(task)
             vector_name_to_task[task] = vector_name
+        
+        for config, field, trigram_weight in wmtr_work:
+            task = asyncio.create_task(
+                Vectorizer._generate_vector_for_query(
+                    router, config, query, [field], validation_mode, trigram_weight
+                )
+            )
+            tasks.append(task)
+            vector_name_to_task[task] = config.name
         
         # Wait for all tasks to complete - if ANY task fails, the whole operation fails
         try:
@@ -280,7 +299,8 @@ class Vectorizer:
         config: VectorConfigInternal, 
         query: SearchQuery, 
         fields: List[str], 
-        validation_mode: bool
+        validation_mode: bool,
+        trigram_weight: float,
     ) -> List[VectorData]:
         """
         Generate vectors for a single vector config and query.
@@ -371,13 +391,13 @@ class Vectorizer:
                     effective_config,
                     [query.query],
                     avgdls=[5.0],
-                    trigram_weight=query.wmtr_trigram_weight,
+                    trigram_weight=trigram_weight,
                 )
             else:
                 result = await router(
                     effective_config,
                     [query.query],
-                    trigram_weight=query.wmtr_trigram_weight,
+                    trigram_weight=trigram_weight,
                 )
             indices, values = result[0]
             

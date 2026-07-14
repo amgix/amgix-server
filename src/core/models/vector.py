@@ -403,9 +403,9 @@ def internal_to_user_config(internal_config: CollectionConfigInternal) -> Collec
     return user_config
 
 
-class VectorSearchWeight(BaseModel):
+class VectorSearchOption(BaseModel):
     """
-    Configuration for a vector search weight.
+    Configuration for a vector search option.
     Used in search queries to specify which vectors to search with and their weights.
     """
     model_config = {"extra": "forbid"}
@@ -413,6 +413,10 @@ class VectorSearchWeight(BaseModel):
     weight: float = Field(default=1.0, description="Weight to apply to this vector's search results")
     field: DocumentFieldLiteral = Field(
         ..., description="Field to search with this vector (name, description, content)"
+    )
+    wmtr_trigram_weight: float = Field(
+        default=WMTR_DEFAULT_TRIGRAM_WEIGHT,
+        description="WMTR trigram channel multiplier for this vector option (used when vector_name is a WMTR vector).",
     )
     
     @field_validator('vector_name')
@@ -483,12 +487,12 @@ MetadataFilter.model_rebuild()
 class SearchQuery(BaseModel):
     """
     Configuration for a search query.
-    Defines the query string and vector weights.
+    Defines the query string and vector options.
     This is the model that will be sent by end users to the search API endpoint.
     """
     model_config = {"extra": "forbid"}
     query: str = Field(..., max_length=MAX_SEARCH_QUERY_LENGTH, description=f"The search query string (max {MAX_SEARCH_QUERY_LENGTH} characters)")
-    vector_weights: List[VectorSearchWeight] = Field(
+    vector_options: List[VectorSearchOption] = Field(
         default=[], description="List of vectors, fields, and weights to use for searching. If empty, equal weights will be auto-generated for all available vectors."
     )
     custom_vectors: Optional[List[CustomVector]] = Field(
@@ -530,10 +534,6 @@ class SearchQuery(BaseModel):
 
     raw_scores: bool = Field(
         default=False, description="Whether to include individual vector scores in results"
-    )
-    wmtr_trigram_weight: float = Field(
-        default=WMTR_DEFAULT_TRIGRAM_WEIGHT,
-        description="WMTR trigram channel multiplier for this search query.",
     )
     fusion_mode: SearchFusionModeLiteral = Field(
         default="rrf",

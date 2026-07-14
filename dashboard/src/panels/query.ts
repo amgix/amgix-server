@@ -2,13 +2,13 @@ import {
   CollectionConfigToJSON,
   DocumentToJSON,
   SearchQueryFusionModeEnum,
-  VectorSearchWeightFieldEnum,
+  VectorSearchOptionFieldEnum,
   type AmgixApi,
   type CollectionConfig,
   type SearchQuery,
   type SearchResult,
   type VectorConfig,
-  type VectorSearchWeight,
+  type VectorSearchOption,
 } from '@amgix/amgix-client'
 import $ from 'jquery'
 
@@ -72,20 +72,20 @@ function vectorNameWithOptionalModel(v: VectorConfig): string {
 
 type QueryVectorArm = {
   vectorName: string
-  field: VectorSearchWeightFieldEnum
+  field: VectorSearchOptionFieldEnum
   label: string
 }
 
-function parseSearchField(raw: string): VectorSearchWeightFieldEnum | null {
+function parseSearchField(raw: string): VectorSearchOptionFieldEnum | null {
   const s = String(raw).trim().toLowerCase()
   if (s === 'name') {
-    return VectorSearchWeightFieldEnum.Name
+    return VectorSearchOptionFieldEnum.Name
   }
   if (s === 'description') {
-    return VectorSearchWeightFieldEnum.Description
+    return VectorSearchOptionFieldEnum.Description
   }
   if (s === 'content') {
-    return VectorSearchWeightFieldEnum.Content
+    return VectorSearchOptionFieldEnum.Content
   }
   return null
 }
@@ -530,7 +530,7 @@ export class QueryPanel extends DashboardPanel {
     }
   }
 
-  private vectorWeightsFromCheckedBoxes($root: JQuery<HTMLElement>): 'default' | 'none' | VectorSearchWeight[] {
+  private vectorOptionsFromCheckedBoxes($root: JQuery<HTMLElement>): 'default' | 'none' | VectorSearchOption[] {
     const $boxes = $root.find('input.dashboard-query-vectors-checkbox')
     if (!$boxes.length) {
       return 'default'
@@ -539,18 +539,18 @@ export class QueryPanel extends DashboardPanel {
     if (!$checked.length) {
       return 'none'
     }
-    const weights: VectorSearchWeight[] = []
+    const options: VectorSearchOption[] = []
     $checked.each((_, el) => {
       const $e = $(el)
       const vector_name = String($e.attr('data-vector-name') ?? '')
       const fieldAttr = String($e.attr('data-vector-field') ?? '')
       const field =
-        fieldAttr === VectorSearchWeightFieldEnum.Name
-          ? VectorSearchWeightFieldEnum.Name
-          : fieldAttr === VectorSearchWeightFieldEnum.Description
-            ? VectorSearchWeightFieldEnum.Description
-            : fieldAttr === VectorSearchWeightFieldEnum.Content
-              ? VectorSearchWeightFieldEnum.Content
+        fieldAttr === VectorSearchOptionFieldEnum.Name
+          ? VectorSearchOptionFieldEnum.Name
+          : fieldAttr === VectorSearchOptionFieldEnum.Description
+            ? VectorSearchOptionFieldEnum.Description
+            : fieldAttr === VectorSearchOptionFieldEnum.Content
+              ? VectorSearchOptionFieldEnum.Content
               : null
       if (!vector_name || field == null) {
         return
@@ -561,9 +561,9 @@ export class QueryPanel extends DashboardPanel {
         weight = VECTOR_WEIGHT_SLIDER_DEFAULT
       }
       weight = Math.min(VECTOR_WEIGHT_SLIDER_MAX, Math.max(VECTOR_WEIGHT_SLIDER_MIN, weight))
-      weights.push({ vector_name, field, weight })
+      options.push({ vector_name, field, weight })
     })
-    return weights.length > 0 ? weights : 'none'
+    return options.length > 0 ? options : 'none'
   }
 
   private async refreshVectorsForSelection(api: AmgixApi, $root: JQuery<HTMLElement>): Promise<void> {
@@ -675,8 +675,8 @@ export class QueryPanel extends DashboardPanel {
       return
     }
 
-    const vectorWeights = this.vectorWeightsFromCheckedBoxes($root)
-    if (vectorWeights === 'none') {
+    const vectorOptions = this.vectorOptionsFromCheckedBoxes($root)
+    if (vectorOptions === 'none') {
       showDashboardError('Select at least one indexed vector to search.')
       return
     }
@@ -713,8 +713,8 @@ export class QueryPanel extends DashboardPanel {
         raw_scores: true,
         fusion_mode,
       }
-      if (vectorWeights !== 'default') {
-        searchQuery.vector_weights = vectorWeights
+      if (vectorOptions !== 'default') {
+        searchQuery.vector_options = vectorOptions
       }
       // console.log(searchQuery)
       const searchResponse = await api.search({

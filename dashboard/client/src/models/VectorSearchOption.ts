@@ -14,58 +14,64 @@
 
 import { mapValues } from '../runtime';
 /**
- * Configuration for a vector search weight.
+ * Configuration for a vector search option.
  * Used in search queries to specify which vectors to search with and their weights.
  * @export
- * @interface VectorSearchWeight
+ * @interface VectorSearchOption
  */
-export interface VectorSearchWeight {
+export interface VectorSearchOption {
     /**
      * Name of the vector to search with
      * @type {string}
-     * @memberof VectorSearchWeight
+     * @memberof VectorSearchOption
      */
     vector_name: string;
     /**
      * Weight to apply to this vector's search results
      * @type {number}
-     * @memberof VectorSearchWeight
+     * @memberof VectorSearchOption
      */
     weight?: number;
     /**
      * Field to search with this vector (name, description, content)
-     * @type {VectorSearchWeightFieldEnum}
-     * @memberof VectorSearchWeight
+     * @type {VectorSearchOptionFieldEnum}
+     * @memberof VectorSearchOption
      */
-    field: VectorSearchWeightFieldEnum;
+    field: VectorSearchOptionFieldEnum;
+    /**
+     * WMTR trigram channel multiplier for this vector option (used when vector_name is a WMTR vector).
+     * @type {number}
+     * @memberof VectorSearchOption
+     */
+    wmtr_trigram_weight?: number;
 }
 
 
 /**
  * @export
  */
-export const VectorSearchWeightFieldEnum = {
+export const VectorSearchOptionFieldEnum = {
     Name: 'name',
     Description: 'description',
     Content: 'content'
 } as const;
-export type VectorSearchWeightFieldEnum = typeof VectorSearchWeightFieldEnum[keyof typeof VectorSearchWeightFieldEnum];
+export type VectorSearchOptionFieldEnum = typeof VectorSearchOptionFieldEnum[keyof typeof VectorSearchOptionFieldEnum];
 
 
 /**
- * Check if a given object implements the VectorSearchWeight interface.
+ * Check if a given object implements the VectorSearchOption interface.
  */
-export function instanceOfVectorSearchWeight(value: object): value is VectorSearchWeight {
+export function instanceOfVectorSearchOption(value: object): value is VectorSearchOption {
     if (!('vector_name' in value) || value['vector_name'] === undefined) return false;
     if (!('field' in value) || value['field'] === undefined) return false;
     return true;
 }
 
-export function VectorSearchWeightFromJSON(json: any): VectorSearchWeight {
-    return VectorSearchWeightFromJSONTyped(json, false);
+export function VectorSearchOptionFromJSON(json: any): VectorSearchOption {
+    return VectorSearchOptionFromJSONTyped(json, false);
 }
 
-export function VectorSearchWeightFromJSONTyped(json: any, ignoreDiscriminator: boolean): VectorSearchWeight {
+export function VectorSearchOptionFromJSONTyped(json: any, ignoreDiscriminator: boolean): VectorSearchOption {
     if (json == null) {
         return json;
     }
@@ -74,14 +80,15 @@ export function VectorSearchWeightFromJSONTyped(json: any, ignoreDiscriminator: 
         'vector_name': json['vector_name'],
         'weight': json['weight'] == null ? undefined : json['weight'],
         'field': json['field'],
+        'wmtr_trigram_weight': json['wmtr_trigram_weight'] == null ? undefined : json['wmtr_trigram_weight'],
     };
 }
 
-export function VectorSearchWeightToJSON(json: any): VectorSearchWeight {
-    return VectorSearchWeightToJSONTyped(json, false);
+export function VectorSearchOptionToJSON(json: any): VectorSearchOption {
+    return VectorSearchOptionToJSONTyped(json, false);
 }
 
-export function VectorSearchWeightToJSONTyped(value?: VectorSearchWeight | null, ignoreDiscriminator: boolean = false): any {
+export function VectorSearchOptionToJSONTyped(value?: VectorSearchOption | null, ignoreDiscriminator: boolean = false): any {
     if (value == null) {
         return value;
     }
@@ -91,6 +98,6 @@ export function VectorSearchWeightToJSONTyped(value?: VectorSearchWeight | null,
         'vector_name': value['vector_name'],
         'weight': value['weight'],
         'field': value['field'],
+        'wmtr_trigram_weight': value['wmtr_trigram_weight'],
     };
 }
-

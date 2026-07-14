@@ -2,7 +2,7 @@ from .document import Document, DocumentWithVectors, SearchResult
 from .vector import (
     VectorConfig, 
     CollectionConfig, 
-    VectorSearchWeight, 
+    VectorSearchOption, 
     MetadataFilter,
     SearchQuery,
     VectorData,
@@ -17,7 +17,7 @@ __all__ = [
     # Vector configuration models
     "VectorConfig",
     "CollectionConfig",
-    "VectorSearchWeight",
+    "VectorSearchOption",
     "MetadataFilter",
     "SearchQuery",
     "VectorData",
