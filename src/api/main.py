@@ -215,9 +215,9 @@ async def lifespan(app: FastAPI):
         await _bunny_talk.close()
 
 app = FastAPI(
-    title=f"{APP_NAME} API", 
+    title=f"Amgix ({APP_NAME}) API", 
     version=AMGIX_VERSION, 
-    description=f"{APP_NAME} (Amgix). Open-Source Hybrid Search System",
+    description=f"Amgix ({APP_NAME}) - Open-Source Hybrid Search System",
     lifespan=lifespan)
 
 
