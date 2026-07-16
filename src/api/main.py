@@ -11,10 +11,11 @@ from contextlib import asynccontextmanager
 import uuid
 
 from fastapi import FastAPI, HTTPException, Path, Query, Request, APIRouter
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from typing import Annotated
 import traceback
+import zlib
 
 
 from src.api import api_metrics as api_metrics_module
@@ -43,6 +44,7 @@ from src.core.models.vector import VectorData
 from src.core.common import (
     VectorType, get_real_collection_name, get_user_collection_name,
     APP_NAME, MAX_BULK_UPLOAD, MAX_COLLECTION_NAME_LENGTH,
+    MAX_DOCUMENT_FETCH_PAGE_SIZE,
     RPC_TIMEOUT_SECONDS,APP_PREFIX, QueueOperationType
 )
 from src.core.database.common import (
@@ -837,6 +839,59 @@ async def upsert_documents_bulk(
         QueueOperationType.UPSERT,
     )
     return OkResponse(ok=True)
+
+
+@shared_router.get(
+    "/collections/{collection_name}/documents/export",
+    operation_id="export_documents",
+    response_class=StreamingResponse,
+)
+async def export_documents(
+    collection_name: CollectionName,
+    with_vectors: bool = Query(False, description="When true, include stored vector values on each exported document."),
+) -> StreamingResponse:
+    """Export all documents in a collection as a downloadable gzip-compressed JSON array.
+
+    Streams ``[{...},{...},...]`` without loading the full collection into memory.
+    """
+    real_collection_name = get_real_collection_name(collection_name)
+    collection_config = await _database.get_collection_info_internal(real_collection_name)
+
+    user_name = get_user_collection_name(real_collection_name)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    filename = f"{user_name}-{timestamp}.json.gz"
+
+    async def gzip_json_array_stream():
+        compressor = zlib.compressobj(wbits=31)
+        yield compressor.compress(b"[")
+        first = True
+        after: Optional[str] = None
+        while True:
+            page = await _database.fetch_documents(
+                real_collection_name,
+                DocumentFetchRequest(
+                    page_size=MAX_DOCUMENT_FETCH_PAGE_SIZE,
+                    after=after,
+                    with_vectors=with_vectors,
+                ),
+                collection_config,
+            )
+            for doc in page.documents:
+                prefix = b"" if first else b","
+                first = False
+                chunk = prefix + doc.model_dump_json(exclude_none=True).encode("utf-8")
+                yield compressor.compress(chunk)
+            if page.after is None:
+                break
+            after = page.after
+        yield compressor.compress(b"]")
+        yield compressor.flush()
+
+    return StreamingResponse(
+        gzip_json_array_stream(),
+        media_type="application/gzip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @shared_router.get("/collections/{collection_name}/documents/{document_id}", 

@@ -2,6 +2,8 @@ import pytest
 import requests
 import time
 import uuid
+import gzip
+import json
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Callable, List
 from tests.conftest import skip_if_not_supported, parse_search_response
@@ -3753,6 +3755,46 @@ def test_provided_vectors_validation_rejected_at_api():
         r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents", json=async_doc)
         assert r.status_code == 400, f"Expected 400 for async empty vectors: {r.text}"
         assert "complete non-custom vector set" in _response_detail_lower(r)
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_export_documents_gzip_json_array():
+    """GET export streams a valid .json.gz file containing a JSON array of all documents."""
+    collection_name = f"test_export_{str(uuid.uuid4())[:8]}"
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=_trigrams_name_collection_config())
+    assert r.status_code == 200, f"Collection creation failed: {r.text}"
+
+    try:
+        for i in range(2):
+            doc = create_test_document(f"export_doc_{i}", f"Export Title {i}", f"Export content {i}")
+            r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+            _assert_http_200(r, f"POST /documents/sync export_doc_{i}")
+
+        r = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/export")
+        assert r.status_code == 200, f"GET export failed: {r.text}"
+        assert "gzip" in r.headers.get("Content-Type", "")
+        disposition = r.headers.get("Content-Disposition", "")
+        assert "attachment" in disposition
+        assert f"{collection_name}-" in disposition
+        assert disposition.endswith('.json.gz"')
+
+        docs = json.loads(gzip.decompress(r.content).decode("utf-8"))
+        assert isinstance(docs, list)
+        assert len(docs) == 2
+        ids = {d["id"] for d in docs}
+        assert ids == {"export_doc_0", "export_doc_1"}
+        assert all(d.get("vectors") is None for d in docs)
+
+        r = requests.get(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/export",
+            params={"with_vectors": "true"},
+        )
+        assert r.status_code == 200, f"GET export with_vectors failed: {r.text}"
+        docs_with_vectors = json.loads(gzip.decompress(r.content).decode("utf-8"))
+        assert len(docs_with_vectors) == 2
+        _assert_document_has_stored_trigrams_vectors(docs_with_vectors[0])
     finally:
         requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
 
