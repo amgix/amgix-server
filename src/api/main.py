@@ -845,6 +845,29 @@ async def upsert_documents_bulk(
     "/collections/{collection_name}/documents/export",
     operation_id="export_documents",
     response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": (
+                "Gzip-compressed UTF-8 JSON file. After gunzip, the payload is a JSON array "
+                "of Document objects (Document[]). Suggested filename is in Content-Disposition."
+            ),
+            "content": {
+                "application/gzip": {
+                    "schema": {
+                        "type": "string",
+                        "format": "binary",
+                    }
+                }
+            },
+            "headers": {
+                "Content-Disposition": {
+                    "description": 'attachment; filename="{collection_name}-{timestamp}.json.gz"',
+                    "schema": {"type": "string"},
+                }
+            },
+        },
+        404: {"description": "Collection not found"},
+    },
 )
 async def export_documents(
     collection_name: CollectionName,
