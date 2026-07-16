@@ -1,7 +1,7 @@
-from typing import List, Dict, Type, Union, Optional
+from typing import List, Dict, Type, Union, Optional, Tuple
 import asyncio
 
-from ..models.document import Document, DocumentWithVectors
+from ..models.document import Document
 from ..models.vector import VectorConfigInternal, SearchQuery, SearchQueryWithVectors, VectorData, VectorSearchOption
 from ..common import VectorType, WMTR_DEFAULT_TRIGRAM_WEIGHT
 from ..common.embed_router import EmbedRouter
@@ -18,12 +18,33 @@ class Vectorizer:
     """
     
     @staticmethod
+    def _build_provided_maps(
+        documents: List[Document],
+    ) -> List[Dict[Tuple[str, str], VectorData]]:
+        return [
+            {(vd.vector_name, vd.field): vd for vd in doc.vectors}
+            if doc.vectors is not None
+            else {}
+            for doc in documents
+        ]
+
+    @staticmethod
+    def _record_sparse_token_length(
+        token_lengths_per_doc: List[Dict[str, int]],
+        doc_idx: int,
+        vd: VectorData,
+    ) -> None:
+        if vd.vector_type in VectorType.sparse_types() and vd.sparse_indices is not None:
+            field_vector_name = f"{vd.field}_{vd.vector_name}"
+            token_lengths_per_doc[doc_idx][field_vector_name] = len(vd.sparse_indices)
+    
+    @staticmethod
     async def vectorize_documents(
         router: EmbedRouter,
         documents: List[Document],
         vector_configs: List[VectorConfigInternal],
         avgdl_dict: Optional[Dict[str, Dict[str, Union[int, float]]]] = None
-    ) -> List[DocumentWithVectors]:
+    ) -> List[Document]:
         """
         Generate vectors for a document based on the provided vector configurations.
         
@@ -32,41 +53,49 @@ class Vectorizer:
             vector_configs: List of vector configurations to apply
             
         Returns:
-            DocumentWithVectors: Document with pre-calculated vectors
+            Document: Document with pre-calculated vectors
             
         Raises:
             ValueError: If a vector type is not supported or configuration is invalid
         """
         vectors_per_doc: List[List[VectorData]] = [[] for _ in range(len(documents))]
         token_lengths_per_doc: List[Dict[str, int]] = [{} for _ in range(len(documents))]
+        provided_maps = Vectorizer._build_provided_maps(documents)
 
         for config in vector_configs:
             try:
                 if config.type == VectorType.DENSE_MODEL:
+                    embed_slots: List[Tuple[int, str]] = []
                     texts: List[str] = []
-                    for doc in documents:
+                    for doc_idx, doc in enumerate(documents):
                         for field in config.index_fields:
-                            texts.append(Vectorizer._get_field_text(doc, field))
+                            key = (config.name, field)
+                            if key in provided_maps[doc_idx]:
+                                vd = provided_maps[doc_idx][key]
+                                vectors_per_doc[doc_idx].append(vd)
+                            else:
+                                embed_slots.append((doc_idx, field))
+                                texts.append(Vectorizer._get_field_text(doc, field))
 
-                    dense_vectors = await router(
-                        config,
-                        texts,
-                        trigram_weight=WMTR_DEFAULT_TRIGRAM_WEIGHT,
-                    )
-
-                    idx = 0
-                    for doc_idx, _doc in enumerate(documents):
-                        for field in config.index_fields:
-                            dense_vector = dense_vectors[idx]
+                    if texts:
+                        dense_vectors = await router(
+                            config,
+                            texts,
+                            trigram_weight=WMTR_DEFAULT_TRIGRAM_WEIGHT,
+                        )
+                        for i, (doc_idx, field) in enumerate(embed_slots):
+                            dense_vector = dense_vectors[i]
                             if config.dimensions is not None and len(dense_vector) != config.dimensions:
-                                raise ValueError(f"Specified dimensions {config.dimensions} don't match generated dimensions {len(dense_vector)} for vector '{config.name}' field '{field}'")
+                                raise ValueError(
+                                    f"Specified dimensions {config.dimensions} don't match generated "
+                                    f"dimensions {len(dense_vector)} for vector '{config.name}' field '{field}'"
+                                )
                             vectors_per_doc[doc_idx].append(VectorData(
                                 vector_name=config.name,
                                 field=field,
                                 vector_type=config.type,
                                 dense_vector=dense_vector
                             ))
-                            idx += 1
 
                 elif config.type == VectorType.DENSE_CUSTOM:
                     per_doc = CustomDenseVector.extract_for_documents(config, documents)
@@ -102,27 +131,34 @@ class Vectorizer:
                             token_lengths_per_doc[doc_idx][field_vector_name] = token_length
 
                 else:  # All other sparse vector types (SPARSE_MODEL, TRIGRAMS, FULL_TEXT, WHITESPACE, WMTR, NOOP)
+                    embed_slots: List[Tuple[int, str]] = []
                     texts: List[str] = []
                     avgdls: List[float] = []
                     is_custom = config.type in VectorType.custom_tokenization()
-                    for doc in documents:
+                    for doc_idx, doc in enumerate(documents):
                         for field in config.index_fields:
-                            texts.append(Vectorizer._get_field_text(doc, field))
-                            if is_custom:
-                                field_vector_name = f"{field}_{config.name}"
-                                avgdls.append(avgdl_dict[field_vector_name])
+                            key = (config.name, field)
+                            if key in provided_maps[doc_idx]:
+                                vd = provided_maps[doc_idx][key]
+                                vectors_per_doc[doc_idx].append(vd)
+                                Vectorizer._record_sparse_token_length(token_lengths_per_doc, doc_idx, vd)
+                            else:
+                                embed_slots.append((doc_idx, field))
+                                texts.append(Vectorizer._get_field_text(doc, field))
+                                if is_custom:
+                                    field_vector_name = f"{field}_{config.name}"
+                                    avgdls.append(avgdl_dict[field_vector_name])
 
-                    sparse_vectors = await router(
-                        config,
-                        texts,
-                        avgdls=avgdls,
-                        trigram_weight=WMTR_DEFAULT_TRIGRAM_WEIGHT,
-                    )
+                    if texts:
+                        sparse_vectors = await router(
+                            config,
+                            texts,
+                            avgdls=avgdls if is_custom else None,
+                            trigram_weight=WMTR_DEFAULT_TRIGRAM_WEIGHT,
+                        )
 
-                    idx = 0
-                    for doc_idx, _doc in enumerate(documents):
-                        for field in config.index_fields:
-                            indices, values = sparse_vectors[idx]
+                        for i, (doc_idx, field) in enumerate(embed_slots):
+                            indices, values = sparse_vectors[i]
                             field_vector_name = f"{field}_{config.name}"
                             token_length = len(indices)
                             vectors_per_doc[doc_idx].append(VectorData(
@@ -134,7 +170,6 @@ class Vectorizer:
                             ))
                             if config.type in VectorType.sparse_types():
                                 token_lengths_per_doc[doc_idx][field_vector_name] = token_length
-                            idx += 1
             except Exception as e:
                 # Preserve helpful error context by vector config
                 if config.type in (VectorType.DENSE_CUSTOM, VectorType.SPARSE_CUSTOM):
@@ -142,14 +177,10 @@ class Vectorizer:
                     raise
                 raise ValueError(f"Failed to generate vector '{config.name}' for fields {config.index_fields}: {str(e)}") from e
 
-        return [
-            DocumentWithVectors.model_construct(
-                **doc.model_dump(),
-                vectors=vectors_per_doc[i],
-                token_lengths=token_lengths_per_doc[i]
-            )
-            for i, doc in enumerate(documents)
-        ]
+        for i, doc in enumerate(documents):
+            doc.vectors = vectors_per_doc[i]
+            doc.token_lengths = token_lengths_per_doc[i]
+        return documents
     
     @staticmethod
     async def vectorize_search_query(

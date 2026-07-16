@@ -2,14 +2,13 @@
 Common database utilities for getting connected database instances.
 """
 
-from typing import Any, Optional
+from typing import Any, Optional, Dict, Tuple
 from urllib.parse import urlparse, urlunparse
 from datetime import datetime
 from src.core.database.base_factory import DatabaseFactory
-from src.core.models.vector import CollectionConfigInternal
 from src.core.models.document import Document
-from src.core.models.vector import MetadataFilter
-from src.core.common import MetadataValueType, MAX_INDEXED_METADATA_VALUE_LENGTH
+from src.core.models.vector import CollectionConfigInternal, VectorData, VectorConfigInternal, MetadataFilter
+from src.core.common import MetadataValueType, MAX_INDEXED_METADATA_VALUE_LENGTH, VectorType
 from src.core.common.enums import DocumentField
 
 
@@ -114,6 +113,107 @@ def validate_metadata_types(collection_config: CollectionConfigInternal, documen
                 )
 
 
+def _expected_non_custom_vector_slots(
+    vector_configs: list[VectorConfigInternal],
+) -> Dict[Tuple[str, str], VectorConfigInternal]:
+    expected: Dict[Tuple[str, str], VectorConfigInternal] = {}
+    for config in vector_configs:
+        if config.type in VectorType.custom_vectors():
+            continue
+        for field in config.index_fields:
+            expected[(config.name, field)] = config
+    return expected
+
+
+def _validate_provided_vector_shape(vd: VectorData, config: VectorConfigInternal) -> None:
+    if VectorType.is_dense(config.type):
+        if not vd.dense_vector:
+            raise AmgixValidationError(
+                f"Vector '{vd.vector_name}' field '{vd.field}' requires dense_vector"
+            )
+        if config.dimensions is not None and len(vd.dense_vector) != config.dimensions:
+            raise AmgixValidationError(
+                f"Vector '{vd.vector_name}' field '{vd.field}' has {len(vd.dense_vector)} "
+                f"dimensions, expected {config.dimensions}"
+            )
+        return
+    if not vd.sparse_indices or not vd.sparse_values:
+        raise AmgixValidationError(
+            f"Vector '{vd.vector_name}' field '{vd.field}' requires sparse_indices and sparse_values"
+        )
+    if len(vd.sparse_indices) != len(vd.sparse_values):
+        raise AmgixValidationError(
+            f"Vector '{vd.vector_name}' field '{vd.field}': sparse_indices and sparse_values length mismatch"
+        )
+    if len(vd.sparse_indices) > config.top_k:
+        raise AmgixValidationError(
+            f"Vector '{vd.vector_name}' field '{vd.field}' has {len(vd.sparse_indices)} entries, "
+            f"max allowed: {config.top_k}"
+        )
+
+
+def validate_document_vectors(
+    collection_config: CollectionConfigInternal,
+    document: Document,
+) -> None:
+    """
+    Validate precomputed document vectors when provided on upsert.
+
+    When ``vectors`` is omitted, validation is skipped. When present, every
+    non-custom collection vector slot must be included exactly once with matching
+    type and shape.
+    """
+    if document.vectors is None:
+        return
+    if not document.vectors:
+        raise AmgixValidationError(
+            "vectors must be omitted or contain the complete non-custom vector set"
+        )
+
+    expected = _expected_non_custom_vector_slots(collection_config.vectors)
+    provided: Dict[Tuple[str, str], VectorData] = {}
+    for vd in document.vectors:
+        if vd.vector_type in VectorType.custom_vectors():
+            raise AmgixValidationError(
+                f"Vector '{vd.vector_name}' field '{vd.field}' has type '{vd.vector_type}'; "
+                "custom vector types must use custom_vectors"
+            )
+        key = (vd.vector_name, vd.field)
+        if key in provided:
+            raise AmgixValidationError(
+                f"Duplicate vector entry for '{vd.vector_name}' field '{vd.field}'"
+            )
+        config = expected.get(key)
+        if config is None:
+            raise AmgixValidationError(
+                f"Unexpected vector '{vd.vector_name}' field '{vd.field}' "
+                "(not a non-custom collection vector slot)"
+            )
+        if vd.vector_type != config.type:
+            raise AmgixValidationError(
+                f"Vector '{vd.vector_name}' field '{vd.field}' has type '{vd.vector_type}', "
+                f"expected '{config.type}'"
+            )
+        _validate_provided_vector_shape(vd, config)
+        provided[key] = vd
+
+    missing = set(expected.keys()) - set(provided.keys())
+    if missing:
+        missing_labels = ", ".join(f"{name}/{field}" for name, field in sorted(missing))
+        raise AmgixValidationError(
+            f"Incomplete vectors: missing non-custom slots: {missing_labels}"
+        )
+
+    if document.custom_vectors:
+        custom_keys = {(cv.vector_name, cv.field) for cv in document.custom_vectors}
+        overlap = custom_keys & set(provided.keys())
+        if overlap:
+            overlap_labels = ", ".join(f"{name}/{field}" for name, field in sorted(overlap))
+            raise AmgixValidationError(
+                f"Duplicate vector slots in vectors and custom_vectors: {overlap_labels}"
+            )
+
+
 def _is_iso_datetime_string(value: str) -> bool:
     try:
         datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -197,6 +297,8 @@ def needs_revectorization(
     store_content: bool,
 ) -> bool:
     if existing is None:
+        return True
+    if incoming.vectors is not None:
         return True
     if incoming.custom_vectors:
         return True

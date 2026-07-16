@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 import pymysql.constants
 
 from .sql_base import SQLBase, TransactionRollback
-from ..models.document import Document, DocumentWithVectors, SearchResult
+from ..models.document import Document, SearchResult
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, VectorData
 from ..common import (
     SEARCH_PREFETCH_MULTIPLIER, DatabaseFeatures, DatabaseInfo, APP_PREFIX,

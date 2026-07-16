@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Union
 from src.core.common.functions import get_real_collection_name
 from src.core.database.base import AmgixNotFound, DatabaseBase
 from src.core.database.common import AmgixValidationError, validate_metadata_filter
-from src.core.models.document import Document, DocumentWithVectors
+from src.core.models.document import Document
 from src.core.models.join_parser import JoinSideRef, JoinSpec, parse_joins
 from src.core.models.vector import CollectionConfigInternal, MetadataFilter
 
@@ -39,13 +39,6 @@ def _values_equal(a: Any, b: Any) -> bool:
     if a is None or b is None:
         return a is b
     return a == b
-
-
-def _document_from_with_vectors(dwv: DocumentWithVectors) -> Document:
-    data = dwv.model_dump()
-    data.pop("vectors", None)
-    data.pop("token_lengths", None)
-    return Document.model_construct(**data)
 
 
 def document_matches_metadata_filter(
@@ -124,12 +117,11 @@ async def _fetch_children_for_join(
         for dwv in fetched:
             if dwv is None:
                 continue
-            doc = _document_from_with_vectors(dwv)
             if spec.metadata_filter and not document_matches_metadata_filter(
-                doc, spec.metadata_filter, child_config
+                dwv, spec.metadata_filter, child_config
             ):
                 continue
-            docs.append(doc)
+            docs.append(dwv)
         return docs
 
     key = spec.child_ref.meta_key

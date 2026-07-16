@@ -49,6 +49,7 @@ from src.core.database.common import (
     get_connected_database,
     validate_metadata_filter,
     validate_metadata_types,
+    validate_document_vectors,
     AmgixValidationError,
 )
 from src.core.database.base import AmgixNotFound
@@ -757,6 +758,7 @@ async def upsert_document(collection_name: CollectionName, document: Document = 
     real_collection_name = get_real_collection_name(collection_name)
     collection_config = await _database.get_collection_info_internal(real_collection_name)
     validate_metadata_types(collection_config, document)
+    validate_document_vectors(collection_config, document)
     await upload_documents_to_queue(
         real_collection_name,
         collection_config.collection_id,
@@ -787,6 +789,7 @@ async def upsert_document_sync(collection_name: CollectionName, document: Docume
     real_collection_name = get_real_collection_name(collection_name)
     collection_config = await _database.get_collection_info_internal(real_collection_name)
     validate_metadata_types(collection_config, document)
+    validate_document_vectors(collection_config, document)
     try:
         await _bunny_talk.rpc(
             "document-sync",
@@ -826,6 +829,7 @@ async def upsert_documents_bulk(
     collection_config = await _database.get_collection_info_internal(real_collection_name)
     for document in request.documents:
         validate_metadata_types(collection_config, document)
+        validate_document_vectors(collection_config, document)
     await upload_documents_to_queue(
         real_collection_name,
         collection_config.collection_id,
@@ -840,7 +844,11 @@ async def upsert_documents_bulk(
         response_model=None,
         responses={200: { "model": Document}},
     )
-async def get_document(collection_name: CollectionName, document_id: str = Path(...)) -> Document:
+async def get_document(
+    collection_name: CollectionName,
+    document_id: str = Path(...),
+    with_vectors: bool = Query(False, description="When true, include stored vector values on the document."),
+) -> Document:
     """Retrieve a single document.
 
     Retrieves a specific document by its ID from the specified collection.
@@ -848,6 +856,7 @@ async def get_document(collection_name: CollectionName, document_id: str = Path(
     Args:
         collection_name: The name of the collection.
         document_id: The unique identifier of the document to retrieve.
+        with_vectors: When true, include stored vector values on the document.
 
     Returns:
         The retrieved `Document` object.
@@ -856,10 +865,13 @@ async def get_document(collection_name: CollectionName, document_id: str = Path(
         HTTPException: 404 if the document is not found in the collection.
     """
     real_collection_name = get_real_collection_name(collection_name)
-    doc_with_vectors = (await _database.get_documents(real_collection_name, [document_id]))[0]
-    return Document.model_construct(
-        **doc_with_vectors.model_dump(exclude={'vectors', 'token_lengths'}),
-    )
+    collection_config = await _database.get_collection_info_internal(real_collection_name)
+    return (await _database.get_documents(
+        real_collection_name,
+        [document_id],
+        with_vectors=with_vectors,
+        collection_config=collection_config,
+    ))[0]
 
 
 @shared_router.post("/collections/{collection_name}/documents/fetch", operation_id="fetch_documents")

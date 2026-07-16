@@ -14,8 +14,8 @@ from qdrant_client.models import FormulaQuery, SumExpression, MultExpression, Pr
 
 from .base import DatabaseBase, AmgixNotFound
 from ..models.cluster import MetricsBucket
-from ..models.document import Document, DocumentWithVectors, SearchResult, QueueDocument, QueueInfo, DocumentStatus, DocumentStatusResponse, VectorScore, DocumentFetchRequest, DocumentFetchResponse
-from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config
+from ..models.document import Document, SearchResult, QueueDocument, QueueInfo, DocumentStatus, DocumentStatusResponse, VectorScore, DocumentFetchRequest, DocumentFetchResponse
+from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config, VectorData
 from ..common import APP_PREFIX, VectorType, DatabaseInfo, DatabaseFeatures, DenseDistance, QueuedDocumentStatus, QueueOperationType, QueueOperationTypeLiteral, get_user_collection_name, MetadataValueType, search_prefetch_limit
 from ..common.lock_manager import LockClient
 
@@ -397,7 +397,7 @@ class QdrantDatabase(DatabaseBase):
         
         return True
     
-    async def add_documents(self, collection_name: str, documents_with_vectors: List[DocumentWithVectors], is_new: bool, store_content: bool, collection_config: CollectionConfigInternal, lock_client: LockClient) -> None:
+    async def add_documents(self, collection_name: str, documents_with_vectors: List[Document], is_new: bool, store_content: bool, collection_config: CollectionConfigInternal, lock_client: LockClient) -> None:
         """
         Add or update documents in a collection.
 
@@ -417,7 +417,7 @@ class QdrantDatabase(DatabaseBase):
             vectors = document_with_vectors.vectors
             
             # Convert document to a format Qdrant can understand
-            exclude_fields = {'vectors'}
+            exclude_fields = {'vectors', 'token_lengths'}
             if not store_content:
                 exclude_fields.add('content')
             doc_dict = document_with_vectors.model_dump(exclude=exclude_fields)
@@ -454,7 +454,7 @@ class QdrantDatabase(DatabaseBase):
     async def patch_documents(self, collection_name: str, documents: List[Document], store_content: bool, collection_config: CollectionConfigInternal, lock_client: LockClient) -> None:
         operations = []
         for document in documents:
-            exclude_fields = {'vectors'}
+            exclude_fields = {'vectors', 'token_lengths'}
             if not store_content:
                 exclude_fields.add('content')
             doc_dict = document.model_dump(exclude=exclude_fields)
@@ -470,8 +470,46 @@ class QdrantDatabase(DatabaseBase):
             collection_name=collection_name,
             update_operations=operations,
         )
+
+    def _vectors_from_point_vectors(
+        self,
+        point_vectors: Dict[str, Any],
+        collection_config: CollectionConfigInternal,
+    ) -> List[VectorData]:
+        vectors: List[VectorData] = []
+        for vector in collection_config.vectors:
+            for field in vector.index_fields:
+                field_vector_name = f"{field}_{vector.name}"
+                raw = point_vectors[field_vector_name]
+                if VectorType.is_dense(vector.type):
+                    vectors.append(
+                        VectorData(
+                            vector_name=vector.name,
+                            field=field,
+                            vector_type=vector.type,
+                            dense_vector=[float(x) for x in raw],
+                        )
+                    )
+                else:
+                    vectors.append(
+                        VectorData(
+                            vector_name=vector.name,
+                            field=field,
+                            vector_type=vector.type,
+                            sparse_indices=list(raw.indices),
+                            sparse_values=[float(v) for v in raw.values],
+                        )
+                    )
+        return vectors
     
-    async def get_documents(self, collection_name: str, document_ids: List[str], suppress_not_found: bool = False) -> List[Optional[DocumentWithVectors]]:
+    async def get_documents(
+        self,
+        collection_name: str,
+        document_ids: List[str],
+        suppress_not_found: bool = False,
+        with_vectors: bool = False,
+        collection_config: Optional[CollectionConfigInternal] = None,
+    ) -> List[Optional[Document]]:
         """
         Retrieve multiple documents by IDs.
         
@@ -481,11 +519,14 @@ class QdrantDatabase(DatabaseBase):
             suppress_not_found: If True, don't raise AmgixNotFound when documents are missing (default: False)
             
         Returns:
-            List[Optional[DocumentWithVectors]]: List of documents in the same order as document_ids, None for missing documents
+            List[Optional[Document]]: List of documents in the same order as document_ids, None for missing documents
             
         Raises:
             AmgixNotFound: If suppress_not_found is False and not all documents are found
         """
+        if with_vectors and collection_config is None:
+            raise ValueError("collection_config is required when with_vectors is True")
+
         # Convert document IDs to UUIDs and create mapping
         uuid_to_doc_id = {}
         uuids = []
@@ -497,7 +538,8 @@ class QdrantDatabase(DatabaseBase):
         # Get all documents in one call
         result = await self.client.retrieve(
             collection_name=collection_name,
-            ids=uuids
+            ids=uuids,
+            with_vectors=with_vectors,
         )
         
         # Check if we got the expected number of results
@@ -506,15 +548,18 @@ class QdrantDatabase(DatabaseBase):
             missing_ids = set(document_ids) - found_ids
             raise AmgixNotFound(f"Documents not found for document_ids: {', '.join(missing_ids)}")
         
-        # Create a map of document_id to DocumentWithVectors
+        # Create a map of document_id to Document
         doc_map = {}
         for point in result:
             doc_id = uuid_to_doc_id[point.id]
-            doc_map[doc_id] = DocumentWithVectors.from_dict(
-                {**point.payload, "vectors": []},
+            doc = Document.from_dict(
+                dict(point.payload or {}),
                 store_content=True,
-                skip_validation=True
+                skip_validation=True,
             )
+            if with_vectors:
+                doc.vectors = self._vectors_from_point_vectors(point.vector, collection_config)
+            doc_map[doc_id] = doc
         
         # Return documents in the same order as document_ids, None for missing ones
         return [doc_map.get(doc_id) for doc_id in document_ids]
@@ -593,12 +638,14 @@ class QdrantDatabase(DatabaseBase):
             limit=request.page_size,
             offset=offset,
             with_payload=True,
-            with_vectors=False,
+            with_vectors=request.with_vectors,
         )
 
         documents = []
         for point in points:
             doc = Document.from_dict(point.payload, skip_validation=True)
+            if request.with_vectors:
+                doc.vectors = self._vectors_from_point_vectors(point.vector, collection_config)
             documents.append(doc)
 
         return DocumentFetchResponse(

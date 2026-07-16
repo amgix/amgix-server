@@ -1,4 +1,4 @@
-from .document import Document, DocumentWithVectors, SearchResult
+from .document import Document, SearchResult
 from .vector import (
     VectorConfig, 
     CollectionConfig, 
@@ -23,7 +23,6 @@ __all__ = [
     "VectorData",
     "SearchQueryWithVectors",
     "SearchResult",
-    "DocumentWithVectors",
     
     # Constants
     "VectorType"

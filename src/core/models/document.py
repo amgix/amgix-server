@@ -61,6 +61,15 @@ class Document(BaseModel):
         default=None,
         description="Documents from joined collections, keyed by collection name",
     )
+    vectors: Optional[List[VectorData]] = Field(
+        default=None,
+        description="Precalculated vectors for the document (internal)",
+    )
+    token_lengths: Dict[str, int] = Field(
+        default_factory=dict,
+        exclude=True,
+        description="Token lengths per field_vector_name for sparse vectors (internal)",
+    )
 
     model_config = {
         "populate_by_name": True,
@@ -228,10 +237,25 @@ class Document(BaseModel):
                 flattened[key] = value
         return flattened
 
+    @staticmethod
+    def _coerce_nested_models(data: Dict[str, Any]) -> None:
+        vectors = data.get("vectors")
+        if vectors:
+            data["vectors"] = [
+                v if isinstance(v, VectorData) else VectorData.model_construct(**v)
+                for v in vectors
+            ]
+        custom_vectors = data.get("custom_vectors")
+        if custom_vectors:
+            data["custom_vectors"] = [
+                cv if isinstance(cv, CustomDocumentVector) else CustomDocumentVector.model_construct(**cv)
+                for cv in custom_vectors
+            ]
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any], store_content: bool = False, skip_validation: bool = False) -> "Document":
         """Create a Document instance from a dictionary"""
-        # Convert metadata to dict format if present
+        data = dict(data)
         if "metadata" in data:
             meta_raw = data["metadata"]
             if isinstance(meta_raw, str):
@@ -265,23 +289,10 @@ class Document(BaseModel):
         if skip_validation:
             if data.get("metadata"):
                 data["metadata"] = cls._flatten_stored_metadata(data["metadata"])
+            cls._coerce_nested_models(data)
             return cls.model_construct(**data)
         else:
             return cls(**data)
-
-
-class DocumentWithVectors(Document):
-    """
-    Document with precalculated vectors.
-    This is an internal model used between the API layer and database layer.
-    API layer calculates vectors and passes this enriched document to the database layer.
-    """
-    vectors: List[VectorData] = Field(
-        ..., description="Precalculated vectors for the document"
-    )
-    token_lengths: Dict[str, int] = Field(
-        default_factory=dict, description="Token lengths per field_vector_name for sparse vectors"
-    )
 
 
 class QueueDocument(BaseModel):
@@ -355,6 +366,8 @@ class SearchResult(Document):
     vector_scores: List[VectorScore] = Field(default_factory=list, description="Raw per-vector scores with field, vector, score, and rank information")
 
     content: Optional[str] = Field(None, exclude=True)
+    vectors: Optional[List[VectorData]] = Field(default=None, exclude=True)
+    token_lengths: Dict[str, int] = Field(default_factory=dict, exclude=True)
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any], skip_validation: bool = False) -> "SearchResult":
@@ -480,6 +493,10 @@ class DocumentFetchRequest(BaseModel):
             "Parent refs: $id, $.meta.<key>. Child refs: $$id, $$.meta.<key>. "
             "Omitted '[]' defaults to [$id=$$id]. Joined documents appear under joined[collection_name]."
         ),
+    )
+    with_vectors: bool = Field(
+        default=False,
+        description="When true, include stored vector values on each returned document.",
     )
 
     @field_validator("metadata_filter", mode="before")

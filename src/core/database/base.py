@@ -8,7 +8,7 @@ import uuid
 import asyncio
 
 from ..models.cluster import MetricsBucket
-from ..models.document import Document, DocumentWithVectors, SearchResult, QueueDocument, QueueInfo, DocumentStatusResponse, DocumentFetchRequest, DocumentFetchResponse
+from ..models.document import Document, SearchResult, QueueDocument, QueueInfo, DocumentStatusResponse, DocumentFetchRequest, DocumentFetchResponse
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, MetadataFilter
 from ..common import (
     APP_PREFIX, DOC_NAMESPACE, DatabaseInfo, DatabaseFeatures, QueueOperationTypeLiteral,
@@ -235,7 +235,7 @@ class DatabaseBase(ABC):
         pass
     
     @abstractmethod
-    async def add_documents(self, collection_name: str, documents_with_vectors: List[DocumentWithVectors], is_new: bool, store_content: bool, collection_config: CollectionConfigInternal, lock_client: LockClient) -> None:
+    async def add_documents(self, collection_name: str, documents_with_vectors: List[Document], is_new: bool, store_content: bool, collection_config: CollectionConfigInternal, lock_client: LockClient) -> None:
         """
         Add or update documents in a collection.
 
@@ -263,7 +263,14 @@ class DatabaseBase(ABC):
         pass
     
     @abstractmethod
-    async def get_documents(self, collection_name: str, document_ids: List[str], suppress_not_found: bool = False) -> List[Optional[DocumentWithVectors]]:
+    async def get_documents(
+        self,
+        collection_name: str,
+        document_ids: List[str],
+        suppress_not_found: bool = False,
+        with_vectors: bool = False,
+        collection_config: Optional["CollectionConfigInternal"] = None,
+    ) -> List[Optional[Document]]:
         """
         Retrieve multiple documents by IDs.
         
@@ -271,10 +278,11 @@ class DatabaseBase(ABC):
             collection_name: Name of the collection to retrieve from
             document_ids: List of document IDs to retrieve
             suppress_not_found: If True, don't raise AmgixNotFound when documents are missing (default: False)
+            with_vectors: When True, populate Document.vectors from storage
+            collection_config: Required when with_vectors is True
             
         Returns:
-            List[Optional[DocumentWithVectors]]: List of documents (with token_lengths from payload, vectors=[]) 
-                                                  in the same order as document_ids, None for missing documents
+            List[Optional[Document]]: List of documents in the same order as document_ids, None for missing documents
             
         Raises:
             AmgixNotFound: If suppress_not_found is False and not all documents are found

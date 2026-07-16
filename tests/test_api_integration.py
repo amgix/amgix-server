@@ -93,6 +93,43 @@ def _assert_http_200(resp: requests.Response, label: str) -> None:
     assert resp.status_code == 200, f"{label}: HTTP {resp.status_code}, body={resp.text!r}"
 
 
+def _trigrams_name_collection_config() -> Dict[str, Any]:
+    return {
+        "vectors": [{"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["name"]}],
+    }
+
+
+def _assert_document_has_stored_trigrams_vectors(doc: Dict[str, Any]) -> None:
+    vectors = doc.get("vectors")
+    assert vectors is not None, f"Expected vectors on document, got keys: {list(doc.keys())}"
+    assert len(vectors) == 1, f"Expected 1 vector entry, got {len(vectors)}: {vectors!r}"
+    v = vectors[0]
+    assert v["vector_name"] == "trigrams"
+    assert v["field"] == "name"
+    assert v["vector_type"] == "trigrams"
+    sparse_indices = v.get("sparse_indices")
+    sparse_values = v.get("sparse_values")
+    assert sparse_indices, "Expected non-empty sparse_indices"
+    assert sparse_values, "Expected non-empty sparse_values"
+    assert len(sparse_indices) == len(sparse_values)
+
+
+def _trigrams_vectors_payload(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Copy stored trigrams vectors from a fetched document for upsert."""
+    vectors = doc.get("vectors")
+    assert vectors, f"Expected vectors on document, got keys: {list(doc.keys())}"
+    return [
+        {
+            "vector_name": v["vector_name"],
+            "field": v["field"],
+            "vector_type": v["vector_type"],
+            "sparse_indices": v["sparse_indices"],
+            "sparse_values": v["sparse_values"],
+        }
+        for v in vectors
+    ]
+
+
 def create_test_document(doc_id: str, name: str, content: str, doc_type: str = "article") -> Dict[str, Any]:
     """Helper function to create test documents with required timestamp field."""
     doc: Dict[str, Any] = {
@@ -3518,6 +3555,204 @@ def test_fetch_documents_basic():
         # 7 docs at page_size=3 means 3 pages (3+3+1)
         assert pages == 3
 
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_get_document_with_vectors():
+    """GET with with_vectors=true returns stored vector values on the document."""
+    collection_name = f"test_get_with_vectors_{str(uuid.uuid4())[:8]}"
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=_trigrams_name_collection_config())
+    assert r.status_code == 200, f"Collection creation failed: {r.text}"
+
+    try:
+        doc = create_test_document("vec_get_doc", "Vector Get Test Title", "Content for vector get test")
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+        _assert_http_200(r, "POST /documents/sync")
+
+        r = requests.get(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/{doc['id']}",
+            params={"with_vectors": "true"},
+        )
+        _assert_http_200(r, "GET /documents/{id}?with_vectors=true")
+        _assert_document_has_stored_trigrams_vectors(r.json())
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_fetch_documents_with_vectors():
+    """Fetch with with_vectors=true returns stored vector values on each document."""
+    collection_name = f"test_fetch_with_vectors_{str(uuid.uuid4())[:8]}"
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=_trigrams_name_collection_config())
+    assert r.status_code == 200, f"Collection creation failed: {r.text}"
+
+    try:
+        doc = create_test_document("vec_fetch_doc", "Vector Fetch Test Title", "Content for vector fetch test")
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+        _assert_http_200(r, "POST /documents/sync")
+
+        r = requests.post(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/fetch",
+            json={"with_vectors": True},
+        )
+        _assert_http_200(r, "POST /documents/fetch with_vectors=true")
+        data = r.json()
+        assert len(data["documents"]) == 1
+        assert data["documents"][0]["id"] == doc["id"]
+        _assert_document_has_stored_trigrams_vectors(data["documents"][0])
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_sync_upsert_with_provided_vectors():
+    """Sync upsert with precomputed vectors skips embedding and stores the provided values."""
+    collection_name = f"test_provided_vectors_sync_{str(uuid.uuid4())[:8]}"
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=_trigrams_name_collection_config())
+    assert r.status_code == 200, f"Collection creation failed: {r.text}"
+
+    try:
+        source = create_test_document("provided_src", "Provided Vector Source Title", "Source content")
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=source)
+        _assert_http_200(r, "POST /documents/sync source doc")
+
+        r = requests.get(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/{source['id']}",
+            params={"with_vectors": "true"},
+        )
+        _assert_http_200(r, "GET source doc with_vectors")
+        source_vectors = _trigrams_vectors_payload(r.json())
+
+        target = create_test_document("provided_tgt", "Different Title For Target", "Different content")
+        target["vectors"] = source_vectors
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=target)
+        _assert_http_200(r, "POST /documents/sync with provided vectors")
+
+        r = requests.get(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/{target['id']}",
+            params={"with_vectors": "true"},
+        )
+        _assert_http_200(r, "GET target doc with_vectors")
+        target_doc = r.json()
+        _assert_document_has_stored_trigrams_vectors(target_doc)
+        assert target_doc["vectors"][0]["sparse_indices"] == source_vectors[0]["sparse_indices"]
+        assert target_doc["vectors"][0]["sparse_values"] == source_vectors[0]["sparse_values"]
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_sync_reupsert_provided_vectors_unchanged_text():
+    """Re-upserting unchanged text with provided vectors still re-indexes vectors (not metadata-only patch)."""
+    collection_name = f"test_provided_reupsert_{str(uuid.uuid4())[:8]}"
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=_trigrams_name_collection_config())
+    assert r.status_code == 200, f"Collection creation failed: {r.text}"
+
+    try:
+        doc = create_test_document("provided_reupsert", "Reupsert Vector Title", "Reupsert content")
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+        _assert_http_200(r, "POST /documents/sync initial")
+
+        r = requests.get(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/{doc['id']}",
+            params={"with_vectors": "true"},
+        )
+        _assert_http_200(r, "GET initial with_vectors")
+        provided_vectors = _trigrams_vectors_payload(r.json())
+
+        reupsert = dict(doc)
+        reupsert["timestamp"] = datetime.now(timezone.utc).isoformat()
+        reupsert["description"] = "metadata-only change"
+        reupsert["vectors"] = provided_vectors
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=reupsert)
+        _assert_http_200(r, "POST /documents/sync reupsert with vectors")
+
+        r = requests.get(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/{doc['id']}",
+            params={"with_vectors": "true"},
+        )
+        _assert_http_200(r, "GET after reupsert with_vectors")
+        updated = r.json()
+        assert updated.get("description") == "metadata-only change"
+        _assert_document_has_stored_trigrams_vectors(updated)
+        assert updated["vectors"][0]["sparse_indices"] == provided_vectors[0]["sparse_indices"]
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_async_upsert_with_provided_vectors():
+    """Async upsert accepts precomputed vectors and indexes them."""
+    collection_name = f"test_provided_vectors_async_{str(uuid.uuid4())[:8]}"
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=_trigrams_name_collection_config())
+    assert r.status_code == 200, f"Collection creation failed: {r.text}"
+
+    try:
+        source = create_test_document("async_provided_src", "Async Provided Source", "Async source content")
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=source)
+        _assert_http_200(r, "POST /documents/sync source doc")
+
+        r = requests.get(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/{source['id']}",
+            params={"with_vectors": "true"},
+        )
+        _assert_http_200(r, "GET source doc with_vectors")
+        source_vectors = _trigrams_vectors_payload(r.json())
+
+        target = create_test_document("async_provided_tgt", "Async Provided Target", "Async target content")
+        target["vectors"] = source_vectors
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents", json=target)
+        _assert_http_200(r, "POST /documents async with provided vectors")
+
+        wait_for_document(collection_name, target["id"])
+        r = requests.get(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/{target['id']}",
+            params={"with_vectors": "true"},
+        )
+        _assert_http_200(r, "GET async target with_vectors")
+        target_doc = r.json()
+        _assert_document_has_stored_trigrams_vectors(target_doc)
+        assert target_doc["vectors"][0]["sparse_indices"] == source_vectors[0]["sparse_indices"]
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_provided_vectors_validation_rejected_at_api():
+    """Incomplete or empty provided vectors are rejected at the API before queue/indexing."""
+    collection_name = f"test_provided_vectors_validation_{str(uuid.uuid4())[:8]}"
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=_trigrams_name_collection_config())
+    assert r.status_code == 200, f"Collection creation failed: {r.text}"
+
+    try:
+        incomplete = create_test_document("provided_incomplete", "Incomplete Vectors", "Incomplete content")
+        incomplete["vectors"] = []
+
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=incomplete)
+        assert r.status_code == 400, f"Expected 400 for empty vectors: {r.text}"
+        assert "complete non-custom vector set" in _response_detail_lower(r)
+
+        missing_slot = create_test_document("provided_missing_slot", "Missing Slot", "Missing slot content")
+        missing_slot["vectors"] = [
+            {
+                "vector_name": "wrong",
+                "field": "name",
+                "vector_type": "trigrams",
+                "sparse_indices": [1, 2],
+                "sparse_values": [1.0, 0.5],
+            }
+        ]
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=missing_slot)
+        assert r.status_code == 400, f"Expected 400 for unexpected vector slot: {r.text}"
+        assert "unexpected vector" in _response_detail_lower(r)
+
+        async_doc = create_test_document("provided_async_invalid", "Async Invalid", "Async invalid content")
+        async_doc["vectors"] = []
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents", json=async_doc)
+        assert r.status_code == 400, f"Expected 400 for async empty vectors: {r.text}"
+        assert "complete non-custom vector set" in _response_detail_lower(r)
     finally:
         requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
 

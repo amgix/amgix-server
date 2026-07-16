@@ -13,8 +13,8 @@ from contextlib import asynccontextmanager
 from .base import DatabaseBase, AmgixNotFound
 from .common import AmgixValidationError
 from ..models.cluster import MetricsBucket
-from ..models.document import Document, DocumentWithVectors, QueueDocument, QueueInfo, SearchResult, DocumentStatus, DocumentStatusResponse, VectorScore, DocumentFetchRequest, DocumentFetchResponse
-from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config
+from ..models.document import Document, QueueDocument, QueueInfo, SearchResult, DocumentStatus, DocumentStatusResponse, VectorScore, DocumentFetchRequest, DocumentFetchResponse
+from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config, VectorData
 from ..common import (
     VectorType, DenseDistance, APP_PREFIX, DatabaseInfo, DatabaseFeatures, 
     search_prefetch_limit, IDF_THRESHOLD_MULTIPLIER, DEFAULT_SQL_BATCH_SIZE,
@@ -620,6 +620,91 @@ class SQLBase(DatabaseBase):
             field_vector_name: field_vector_id
             for field_vector_id, field_vector_name in enumerate(field_vector_names)
         }
+
+    def _dense_field_vector_columns(self, collection_config: CollectionConfigInternal) -> List[str]:
+        columns: List[str] = []
+        for vector in collection_config.vectors:
+            if VectorType.is_dense(vector.type):
+                for field in vector.index_fields:
+                    columns.append(f"{field}_{vector.name}")
+        return columns
+
+    @staticmethod
+    def _parse_dense_vector_value(raw: Any) -> Optional[List[float]]:
+        if raw is None:
+            return None
+        if isinstance(raw, list):
+            return [float(x) for x in raw]
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode()
+        if isinstance(raw, str):
+            s = raw.strip()
+            if not s:
+                return None
+            if s.startswith("["):
+                parsed = json.loads(s)
+                return [float(x) for x in parsed]
+            return [float(x) for x in s.split(",") if x.strip()]
+        return None
+
+    def _vectors_from_sql_row(
+        self,
+        row: Dict[str, Any],
+        sparse_by_field_vector_id: Dict[int, List[Tuple[int, float]]],
+        collection_config: CollectionConfigInternal,
+        field_vector_ids: Dict[str, int],
+    ) -> List[VectorData]:
+        vectors: List[VectorData] = []
+        for vector in collection_config.vectors:
+            for field in vector.index_fields:
+                field_vector_name = f"{field}_{vector.name}"
+                if VectorType.is_dense(vector.type):
+                    dense = self._parse_dense_vector_value(row[field_vector_name])
+                    vectors.append(
+                        VectorData(
+                            vector_name=vector.name,
+                            field=field,
+                            vector_type=vector.type,
+                            dense_vector=dense,
+                        )
+                    )
+                else:
+                    field_vector_id = field_vector_ids[field_vector_name]
+                    sparse_rows = sparse_by_field_vector_id.get(field_vector_id, [])
+                    vectors.append(
+                        VectorData(
+                            vector_name=vector.name,
+                            field=field,
+                            vector_type=vector.type,
+                            sparse_indices=[token_id for token_id, _ in sparse_rows],
+                            sparse_values=[float(weight) for _, weight in sparse_rows],
+                        )
+                    )
+        return vectors
+
+    async def _fetch_sparse_vectors_by_pk_ids(
+        self,
+        collection_name: str,
+        pk_ids: List[int],
+    ) -> Dict[int, Dict[int, List[Tuple[int, float]]]]:
+        if not pk_ids:
+            return {}
+        placeholders = ", ".join(["%s"] * len(pk_ids))
+        sql = self.format_sql(
+            "select",
+            table=self.get_table_name(collection_name, self.TableType.VECTOR_DATA),
+            columns=self.quote_column_list(["doc_pk_id", "field_vector_id", "token_id", "weight"]),
+            where=f" WHERE {self.quote_identifier('doc_pk_id')} IN ({placeholders})",
+        )
+        rows = await self.execute_sql(sql, tuple(pk_ids))
+        result: Dict[int, Dict[int, List[Tuple[int, float]]]] = defaultdict(dict)
+        for row in rows:
+            pk_id = row["doc_pk_id"]
+            field_vector_id = row["field_vector_id"]
+            result[pk_id].setdefault(field_vector_id, []).append(
+                (row["token_id"], row["weight"])
+            )
+        return result
     
     # ==========================================
     # Helper Methods for Query Management
@@ -1088,7 +1173,7 @@ class SQLBase(DatabaseBase):
         await self.create_collection(collection_name, internal_config)
         return True
     
-    async def add_documents(self, collection_name: str, documents_with_vectors: List[DocumentWithVectors], is_new: bool, store_content: bool, collection_config: CollectionConfigInternal, lock_client: LockClient) -> None:
+    async def add_documents(self, collection_name: str, documents_with_vectors: List[Document], is_new: bool, store_content: bool, collection_config: CollectionConfigInternal, lock_client: LockClient) -> None:
         """Add documents with their vectors to the collection."""
         lock_name = f"collection-ingest-{self._string_to_uuid(collection_name)}"
         async with lock_client.acquire(lock_name, timeout=COLLECTION_INGEST_LOCK_TIMEOUT):
@@ -1099,20 +1184,19 @@ class SQLBase(DatabaseBase):
             return
         lock_name = f"collection-ingest-{self._string_to_uuid(collection_name)}"
         async with lock_client.acquire(lock_name, timeout=COLLECTION_INGEST_LOCK_TIMEOUT):
-            documents_with_vectors = [
-                DocumentWithVectors(**document.model_dump(), vectors=[], token_lengths={})
-                for document in documents
-            ]
+            for document in documents:
+                document.vectors = []
+                document.token_lengths = {}
             await self._add_documents_impl(
-                collection_name, documents_with_vectors, is_new=False, store_content=store_content,
+                collection_name, documents, is_new=False, store_content=store_content,
                 collection_config=collection_config, patch_only=True,
             )
 
-    async def _add_documents_impl(self, collection_name: str, documents_with_vectors: List[DocumentWithVectors], is_new: bool, store_content: bool, collection_config: CollectionConfigInternal, patch_only: bool = False) -> None:
+    async def _add_documents_impl(self, collection_name: str, documents_with_vectors: List[Document], is_new: bool, store_content: bool, collection_config: CollectionConfigInternal, patch_only: bool = False) -> None:
         metadata_indexes = collection_config.metadata_indexes or []
         field_vector_ids = self._get_field_vector_ids(collection_config)
         
-        async def insert_document(document_with_vectors: DocumentWithVectors, conn=None):
+        async def insert_document(document_with_vectors: Document, conn=None):
             # Prepare metadata JSON
             if document_with_vectors.metadata:
                 metadata_json = json.dumps(document_with_vectors.metadata)
@@ -1193,7 +1277,7 @@ class SQLBase(DatabaseBase):
             # The result will contain the inserted pk_id
             return result[0]["pk_id"] if result else None
 
-        async def update_document(document_with_vectors: DocumentWithVectors, conn=None):
+        async def update_document(document_with_vectors: Document, conn=None):
             # Prepare metadata JSON
             if document_with_vectors.metadata:
                 metadata_json = json.dumps(document_with_vectors.metadata)
@@ -1320,7 +1404,7 @@ class SQLBase(DatabaseBase):
             # Execute the IDF cleanup query
             await self.execute_sql_no_result(idf_cleanup_sql, (doc_pk_id,), conn=conn)
         
-        async def insert_vector_data(document_with_vectors: DocumentWithVectors, doc_pk_id: int, conn=None):
+        async def insert_vector_data(document_with_vectors: Document, doc_pk_id: int, conn=None):
             # Insert sparse vector data if present
             if document_with_vectors.vectors:
                 # Build rows for all sparse vectors from provided VectorData
@@ -1391,7 +1475,7 @@ class SQLBase(DatabaseBase):
             )
             await self.execute_sql_no_result(delete_sql, (doc_pk_id,), conn=conn)
 
-        async def insert_tags(document_with_vectors: DocumentWithVectors, doc_pk_id: int, conn=None):
+        async def insert_tags(document_with_vectors: Document, doc_pk_id: int, conn=None):
             tags = document_with_vectors.tags
             if not tags:
                 return
@@ -1439,7 +1523,14 @@ class SQLBase(DatabaseBase):
                     await delete_existing_tags(doc_pk_id, conn)
                     await insert_tags(document_with_vectors, doc_pk_id, conn)
     
-    async def get_documents(self, collection_name: str, document_ids: List[str], suppress_not_found: bool = False) -> List[Optional[DocumentWithVectors]]:
+    async def get_documents(
+        self,
+        collection_name: str,
+        document_ids: List[str],
+        suppress_not_found: bool = False,
+        with_vectors: bool = False,
+        collection_config: Optional[CollectionConfigInternal] = None,
+    ) -> List[Optional[Document]]:
         """
         Retrieve multiple documents by IDs.
         
@@ -1447,18 +1538,24 @@ class SQLBase(DatabaseBase):
             collection_name: Name of the collection to retrieve from
             document_ids: List of document IDs to retrieve
             suppress_not_found: If True, don't raise AmgixNotFound when documents are missing (default: False)
+            with_vectors: When True, populate Document.vectors from storage
+            collection_config: Required when with_vectors is True
             
         Returns:
-            List[Optional[DocumentWithVectors]]: List of documents in the same order as document_ids, None for missing documents
+            List[Optional[Document]]: List of documents in the same order as document_ids, None for missing documents
             
         Raises:
             AmgixNotFound: If suppress_not_found is False and not all documents are found
         """
+        if with_vectors and collection_config is None:
+            raise ValueError("collection_config is required when with_vectors is True")
         
         try:
             # Get all documents in one query
             placeholders = ', '.join(['%s'] * len(document_ids))
             columns = ["pk_id", "id", "timestamp", "name", "description", "metadata", "content"]
+            if with_vectors:
+                columns.extend(self._dense_field_vector_columns(collection_config))
             sql = self.format_sql("select", 
                 table=self.get_table_name(collection_name, self.TableType.DOCUMENTS),
                 columns=self.quote_column_list(columns),
@@ -1475,6 +1572,14 @@ class SQLBase(DatabaseBase):
             # Create a map of doc_id to row data
             doc_rows = {row["id"]: row for row in result}
             doc_pk_ids = {row["id"]: row["pk_id"] for row in result}
+            
+            sparse_by_pk: Dict[int, Dict[int, List[Tuple[int, float]]]] = {}
+            field_vector_ids: Dict[str, int] = {}
+            if with_vectors:
+                field_vector_ids = self._get_field_vector_ids(collection_config)
+                sparse_by_pk = await self._fetch_sparse_vectors_by_pk_ids(
+                    collection_name, list(doc_pk_ids.values())
+                )
             
             # Get all tags in one query
             if doc_pk_ids:
@@ -1519,13 +1624,20 @@ class SQLBase(DatabaseBase):
                     "description": row.get("description"),
                     "content": row.get("content"),
                     "metadata": metadata,
-                    "vectors": []
                 }
                 
                 if tags:
                     doc_data["tags"] = tags
                 
-                documents.append(DocumentWithVectors.from_dict(doc_data, store_content=True, skip_validation=True))
+                doc = Document.from_dict(doc_data, store_content=True, skip_validation=True)
+                if with_vectors:
+                    doc.vectors = self._vectors_from_sql_row(
+                        row,
+                        sparse_by_pk.get(pk_id, {}),
+                        collection_config,
+                        field_vector_ids,
+                    )
+                documents.append(doc)
             
             return documents
             
@@ -1615,6 +1727,8 @@ class SQLBase(DatabaseBase):
         d_pk = self.quote_identifier("pk_id")
 
         doc_columns = ["pk_id", "id", "timestamp", "name", "description", "metadata", "content"]
+        if request.with_vectors:
+            doc_columns.extend(self._dense_field_vector_columns(collection_config))
         select_cols = ", ".join(f"d.{self.quote_identifier(c)}" for c in doc_columns)
 
         conditions: List[str] = []
@@ -1687,6 +1801,12 @@ class SQLBase(DatabaseBase):
         for tr in tags_rows:
             tags_by_pk.setdefault(tr["doc_pk_id"], []).append(tr["tag"])
 
+        sparse_by_pk: Dict[int, Dict[int, List[Tuple[int, float]]]] = {}
+        field_vector_ids: Dict[str, int] = {}
+        if request.with_vectors:
+            field_vector_ids = self._get_field_vector_ids(collection_config)
+            sparse_by_pk = await self._fetch_sparse_vectors_by_pk_ids(collection_name, pk_ids)
+
         documents: List[Document] = []
         for row in rows:
             doc = Document.from_dict({
@@ -1698,6 +1818,13 @@ class SQLBase(DatabaseBase):
                 "metadata": row.get("metadata"),
                 "tags": tags_by_pk.get(row["pk_id"]),
             }, store_content=True)
+            if request.with_vectors:
+                doc.vectors = self._vectors_from_sql_row(
+                    row,
+                    sparse_by_pk.get(row["pk_id"], {}),
+                    collection_config,
+                    field_vector_ids,
+                )
             documents.append(doc)
 
         next_after = rows[-1]["id"] if has_more else None
