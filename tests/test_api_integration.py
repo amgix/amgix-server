@@ -3760,6 +3760,60 @@ def test_provided_vectors_validation_rejected_at_api():
 
 
 @pytest.mark.all_backends
+def test_provided_vectors_allow_empty_sparse():
+    """Provided sparse vectors may be empty (stopwords, whitespace-only text) for migration roundtrips."""
+    collection_name = f"test_provided_empty_sparse_{str(uuid.uuid4())[:8]}"
+    config = {
+        "vectors": [{"name": "keyword", "type": "keyword", "index_fields": ["name"]}],
+    }
+    r = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config)
+    assert r.status_code == 200, f"Collection creation failed: {r.text}"
+
+    try:
+        doc = create_test_document("empty_sparse_src", "I Do", "Description with enough tokens")
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc)
+        _assert_http_200(r, "POST /documents/sync initial index")
+
+        r = requests.get(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/{doc['id']}",
+            params={"with_vectors": "true"},
+        )
+        _assert_http_200(r, "GET source doc with_vectors")
+        source_vectors = r.json()["vectors"]
+        assert len(source_vectors) == 1
+        name_vec = source_vectors[0]
+        assert name_vec["vector_name"] == "keyword"
+        assert name_vec["field"] == "name"
+        assert name_vec["sparse_indices"] == []
+        assert name_vec["sparse_values"] == []
+
+        target = create_test_document("empty_sparse_tgt", "I Do", "Description with enough tokens")
+        target["vectors"] = [
+            {
+                "vector_name": v["vector_name"],
+                "field": v["field"],
+                "vector_type": v["vector_type"],
+                "sparse_indices": v["sparse_indices"],
+                "sparse_values": v["sparse_values"],
+            }
+            for v in source_vectors
+        ]
+        r = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=target)
+        _assert_http_200(r, "POST /documents/sync with empty provided sparse vectors")
+
+        r = requests.get(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/{target['id']}",
+            params={"with_vectors": "true"},
+        )
+        _assert_http_200(r, "GET target doc with_vectors")
+        stored = r.json()["vectors"][0]
+        assert stored["sparse_indices"] == []
+        assert stored["sparse_values"] == []
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
 def test_export_documents_gzip_json_array():
     """GET export streams a valid .json.gz file containing a JSON array of all documents."""
     collection_name = f"test_export_{str(uuid.uuid4())[:8]}"

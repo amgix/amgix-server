@@ -137,7 +137,7 @@ def _validate_provided_vector_shape(vd: VectorData, config: VectorConfigInternal
                 f"dimensions, expected {config.dimensions}"
             )
         return
-    if not vd.sparse_indices or not vd.sparse_values:
+    if vd.sparse_indices is None or vd.sparse_values is None:
         raise AmgixValidationError(
             f"Vector '{vd.vector_name}' field '{vd.field}' requires sparse_indices and sparse_values"
         )
