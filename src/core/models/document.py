@@ -430,23 +430,40 @@ class SearchResult(Document):
                 return cls(**result_data)
 
 
-def apply_search_exclude(result: Dict[str, Any], exclude: List[str]) -> Dict[str, Any]:
+def apply_search_exclude(results: List["Document"], exclude: List[str]) -> None:
+    """Null out excluded fields on each result and on nested joined docs, in place.
+
+    Fields are set to None rather than removed so the response model can be returned
+    and serialized by FastAPI normally. Only fields declared on a given document are
+    touched (joined children are Document instances sharing the same field set).
     """
-    Return a copy of a search hit dict with excluded fields removed.
-    Applies recursively to documents nested under joined[<collection>][*].
+    if not exclude:
+        return
+    excl = set(exclude)
+
+    def _null(doc: "Document") -> None:
+        for field in excl:
+            if hasattr(doc, field):
+                setattr(doc, field, None)
+        joined = getattr(doc, "joined", None)
+        if joined:
+            for docs in joined.values():
+                if isinstance(docs, list):
+                    for child in docs:
+                        _null(child)
+
+    for result in results:
+        _null(result)
+
+
+class SearchOutcome(BaseModel):
+    """Internal search result bundle: hits plus optional facet counts.
+
+    The DB search layer returns this so facet counts (computed over the candidate
+    pool) travel alongside the ranked hits to the API layer.
     """
-    out = dict(result)
-    for field in exclude:
-        out.pop(field, None)
-    joined = out.get("joined")
-    if isinstance(joined, dict):
-        out["joined"] = {
-            coll: [apply_search_exclude(doc, exclude) for doc in docs]
-            if isinstance(docs, list)
-            else docs
-            for coll, docs in joined.items()
-        }
-    return out
+    results: List[SearchResult]
+    facet_counts: Optional[Dict[str, Dict[str, int]]] = None
 
 
 class SearchResponse(BaseModel):
@@ -454,6 +471,14 @@ class SearchResponse(BaseModel):
     model_config = {"extra": "forbid"}
 
     results: List[SearchResult] = Field(..., description="Search hits, ordered by relevance")
+    facet_counts: Optional[Dict[str, Dict[str, int]]] = Field(
+        default=None,
+        description=(
+            "Per-facet-field value counts over the search candidate pool. Only present when "
+            "facets was True in the request. Keys are metadata field names; inner keys are "
+            "stringified facet values; inner values are candidate counts."
+        ),
+    )
     query_time_ms: float = Field(..., ge=0, description="Server-side time to execute this search, in milliseconds")
 
 

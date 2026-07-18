@@ -13,6 +13,13 @@ SEARCH_PREFETCH_MULTIPLIER = 1.5  # Multiply search limit by this factor for pre
 SEARCH_PREFETCH_MIN = 5  # Minimum candidates to fetch per vector arm before fusion
 IDF_THRESHOLD_MULTIPLIER = 3  # Multiply search limit by this factor for IDF filtering threshold
 
+# Faceting configuration
+DEFAULT_FACET_PREFETCH_MULTIPLIER = 2  # Multiplier applied to query.limit for the facet candidate window
+MAX_FACET_PREFETCH_MULTIPLIER = 10  # Upper bound on the facet prefetch multiplier (abuse prevention)
+MIN_FACET_PREFETCH = 50  # Floor for the facet per-arm candidate window, regardless of multiplier/limit
+DEFAULT_FACET_MAX_VALUES = 10  # Default max distinct values returned per facet field
+MAX_FACET_MAX_VALUES = 100  # Upper bound on max_values per facet field
+
 # Bulk upload limits
 MAX_BULK_UPLOAD = 100  # Maximum number of documents that can be uploaded in a single bulk request
 

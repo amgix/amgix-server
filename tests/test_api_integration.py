@@ -153,11 +153,11 @@ def _trigrams_name_content_collection_config() -> Dict[str, Any]:
     }
 
 
-def _assert_fields_absent(doc: Dict[str, Any], fields: List[str]) -> None:
+def _assert_fields_null(doc: Dict[str, Any], fields: List[str]) -> None:
     for field in fields:
-        assert field not in doc, (
-            f"Expected field '{field}' to be omitted from response, "
-            f"but it was present (value={doc.get(field)!r}); keys={list(doc.keys())}"
+        assert field in doc and doc[field] is None, (
+            f"Expected field '{field}' to be present and null in response, "
+            f"but it was {doc.get(field)!r}; keys={list(doc.keys())}"
         )
 
 
@@ -4717,7 +4717,7 @@ def test_search_exclude_omits_fields_from_response():
             timeout_s=30.0,
         )
         hit = next(r for r in results if r.get("id") == "exclude-doc-1")
-        _assert_fields_absent(hit, excluded)
+        _assert_fields_null(hit, excluded)
         _assert_fields_present(hit, ["id", "timestamp", "score"])
 
     finally:
@@ -4755,7 +4755,7 @@ def test_search_exclude_single_field():
             timeout_s=30.0,
         )
         hit = next(r for r in results if r.get("id") == "exclude-single-1")
-        _assert_fields_absent(hit, ["content"])
+        _assert_fields_null(hit, ["content"])
         _assert_fields_present(hit, ["name", "description", "tags"])
 
     finally:
@@ -4814,7 +4814,7 @@ def test_search_exclude_duplicate_values_accepted():
             timeout_s=30.0,
         )
         hit = next(r for r in results if r.get("id") == "exclude-dup-1")
-        _assert_fields_absent(hit, ["content", "name"])
+        _assert_fields_null(hit, ["content", "name"])
         _assert_fields_present(hit, ["tags"])
 
     finally:
@@ -4877,13 +4877,13 @@ def test_search_exclude_with_join_strips_joined_documents():
         )
 
         hit = next(r for r in results if r.get("id") == "exclude-parent-1")
-        _assert_fields_absent(hit, ["content", "description", "metadata"])
+        _assert_fields_null(hit, ["content", "description", "metadata"])
         _assert_fields_present(hit, ["name", "tags", "joined"])
 
         joined = hit["joined"][child_collection]
         assert len(joined) == 1
         assert joined[0]["id"] == "exclude-child-1"
-        _assert_fields_absent(joined[0], ["content", "description", "metadata"])
+        _assert_fields_null(joined[0], ["content", "description", "metadata"])
         _assert_fields_present(joined[0], ["name", "tags"])
 
     finally:
@@ -4945,11 +4945,11 @@ def test_search_exclude_metadata_with_parent_meta_join():
         )
 
         hit = next(r for r in results if r.get("id") == "exclude-meta-parent-1")
-        _assert_fields_absent(hit, ["metadata", "content"])
+        _assert_fields_null(hit, ["metadata", "content"])
         joined = hit["joined"][child_collection]
         assert len(joined) == 1
         assert joined[0]["id"] == "exclude-meta-child-1"
-        _assert_fields_absent(joined[0], ["metadata", "content"])
+        _assert_fields_null(joined[0], ["metadata", "content"])
 
     finally:
         requests.delete(f"{API_BASE_URL}/collections/{parent_collection}")
@@ -5206,6 +5206,236 @@ def test_metadata_filter_is_null_operator():
         ids = {r["id"] for r in results}
         assert ids == {"is-null-present-1"}, f"Expected only the doc with category set, got {ids}"
 
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+def _facet_collection_config() -> Dict[str, Any]:
+    return {
+        "vectors": [
+            {"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["name"]},
+        ],
+        "metadata_indexes": [
+            {"key": "category", "type": "string"},
+            {"key": "year", "type": "integer"},
+        ],
+    }
+
+
+def _facet_doc(doc_id: str, name: str, category: Any = "__unset__", year: Any = "__unset__") -> Dict[str, Any]:
+    doc = create_test_document(doc_id, name, name, doc_type=None)
+    metadata: Dict[str, Any] = {}
+    if category != "__unset__":
+        metadata["category"] = category
+    if year != "__unset__":
+        metadata["year"] = year
+    doc["metadata"] = metadata or None
+    return doc
+
+
+def _wait_for_search_body(
+    collection_name: str,
+    query: Dict[str, Any],
+    expect: Callable[[Dict[str, Any]], bool],
+    timeout_s: float = 30.0,
+) -> Dict[str, Any]:
+    url = f"{API_BASE_URL}/collections/{collection_name}/search"
+    last_body: Dict[str, Any] = {}
+    def _try() -> bool:
+        nonlocal last_body
+        resp = requests.post(url, json=query)
+        if resp.status_code != 200:
+            return False
+        last_body = resp.json()
+        return expect(last_body)
+    ok = wait_until(_try, timeout_s)
+    assert ok, f"Timed out waiting for search body; last_body={last_body}"
+    return last_body
+
+
+@pytest.mark.all_backends
+def test_search_facets_returns_counts():
+    """facets=true returns per-field value counts over the candidate pool for every indexed field."""
+    collection_name = f"test_search_facets_counts_{str(uuid.uuid4())[:8]}"
+    config = _facet_collection_config()
+    assert requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config).status_code == 200
+
+    try:
+        docs = [
+            _facet_doc("facet-a1", "Facet Count Item", "a", 2020),
+            _facet_doc("facet-a2", "Facet Count Item", "a", 2021),
+            _facet_doc("facet-b1", "Facet Count Item", "b", 2020),
+        ]
+        for doc in docs:
+            assert requests.post(
+                f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc
+            ).status_code == 200
+
+        body = _wait_for_search_body(
+            collection_name,
+            {"query": "Facet Count Item", "limit": 10, "facets": True},
+            lambda b: "facet_counts" in b and "category" in (b.get("facet_counts") or {}),
+        )
+
+        facet_counts = body["facet_counts"]
+        assert facet_counts["category"] == {"a": 2, "b": 1}, f"category counts: {facet_counts['category']}"
+        assert facet_counts["year"] == {"2020": 2, "2021": 1}, f"year counts: {facet_counts['year']}"
+        # hits are still returned as usual
+        assert len(body["results"]) == 3
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_search_facets_disabled_by_default():
+    """Without facets, facet_counts is absent from the response."""
+    collection_name = f"test_search_facets_default_{str(uuid.uuid4())[:8]}"
+    config = _facet_collection_config()
+    assert requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config).status_code == 200
+
+    try:
+        assert requests.post(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/sync",
+            json=_facet_doc("facet-default-1", "Facet Default Item", "a", 2020),
+        ).status_code == 200
+
+        body = _wait_for_search_body(
+            collection_name,
+            {"query": "Facet Default Item", "limit": 10},
+            lambda b: len(b.get("results", [])) >= 1,
+        )
+        assert body.get("facet_counts") is None, f"facet_counts should be null without facets=true, got: {body.get('facet_counts')!r}"
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_search_facets_respect_metadata_filter():
+    """Facet counts reflect the metadata_filter applied to the search."""
+    collection_name = f"test_search_facets_filter_{str(uuid.uuid4())[:8]}"
+    config = _facet_collection_config()
+    assert requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config).status_code == 200
+
+    try:
+        docs = [
+            _facet_doc("facet-f-a1", "Facet Filter Item", "a", 2020),
+            _facet_doc("facet-f-a2", "Facet Filter Item", "a", 2021),
+            _facet_doc("facet-f-b1", "Facet Filter Item", "b", 2022),
+        ]
+        for doc in docs:
+            assert requests.post(
+                f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc
+            ).status_code == 200
+
+        body = _wait_for_search_body(
+            collection_name,
+            {
+                "query": "Facet Filter Item",
+                "limit": 10,
+                "facets": True,
+                "metadata_filter": "category = \"a\"",
+            },
+            lambda b: "category" in (b.get("facet_counts") or {}),
+        )
+        # Only category=a docs pass the filter, so year distribution is over those two docs.
+        assert body["facet_counts"]["category"] == {"a": 2}
+        assert body["facet_counts"]["year"] == {"2020": 1, "2021": 1}
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_search_facets_max_values_cap():
+    """facet_options.max_values truncates each field to the top-N values by count."""
+    collection_name = f"test_search_facets_cap_{str(uuid.uuid4())[:8]}"
+    config = _facet_collection_config()
+    assert requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config).status_code == 200
+
+    try:
+        docs = [_facet_doc(f"facet-cap-a{i}", "Facet Cap Item", f"a{i}", 2020) for i in range(1, 6)] + [
+            _facet_doc("facet-cap-dup", "Facet Cap Item", "a1", 2020),
+            _facet_doc("facet-cap-dup2", "Facet Cap Item", "a1", 2020),
+        ]
+        for doc in docs:
+            assert requests.post(
+                f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc
+            ).status_code == 200
+
+        body = _wait_for_search_body(
+            collection_name,
+            {
+                "query": "Facet Cap Item",
+                "limit": 10,
+                "facets": True,
+                "facet_options": {"prefetch_multiplier": 2, "max_values": 2},
+            },
+            lambda b: "category" in (b.get("facet_counts") or {}),
+        )
+        # a1 appears 3 times (most frequent); max_values=2 keeps only the top 2 categories.
+        category_counts = body["facet_counts"]["category"]
+        assert len(category_counts) <= 2, f"Expected <= 2 category values, got: {category_counts}"
+        assert category_counts["a1"] == 3, f"Expected a1 count 3, got: {category_counts}"
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_search_facets_with_group_field():
+    """facets + group_field work together; facets count over the accumulated candidate pool."""
+    collection_name = f"test_search_facets_group_{str(uuid.uuid4())[:8]}"
+    config = _facet_collection_config()
+    assert requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config).status_code == 200
+
+    try:
+        docs = [
+            _facet_doc("facet-grp-a1", "Facet Group Item", "a", 2020),
+            _facet_doc("facet-grp-a2", "Facet Group Item", "a", 2021),
+            _facet_doc("facet-grp-b1", "Facet Group Item", "b", 2020),
+        ]
+        for doc in docs:
+            assert requests.post(
+                f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc
+            ).status_code == 200
+
+        body = _wait_for_search_body(
+            collection_name,
+            {
+                "query": "Facet Group Item",
+                "limit": 2,
+                "facets": True,
+                "group_field": "category",
+                "group_max": 1,
+            },
+            lambda b: "category" in (b.get("facet_counts") or {}) and len(b.get("results", [])) >= 1,
+        )
+        # Facets count over the whole candidate pool (all 3 docs), not the capped hits.
+        assert body["facet_counts"]["category"] == {"a": 2, "b": 1}
+        # group_max=1 caps hits to at most one per category.
+        categories_in_hits = {(r.get("metadata") or {}).get("category") for r in body["results"]}
+        assert len(categories_in_hits) == len(body["results"]), "group_max=1 should cap hits to one per category"
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_search_facets_no_metadata_indexes():
+    """facets=true on a collection with no metadata_indexes returns an empty facet_counts."""
+    collection_name = f"test_search_facets_noidx_{str(uuid.uuid4())[:8]}"
+    config = _trigrams_name_collection_config()
+    assert requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config).status_code == 200
+
+    try:
+        assert requests.post(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/sync",
+            json=create_test_document("facet-noidx-1", "Facet No Index Item", "content here"),
+        ).status_code == 200
+
+        body = _wait_for_search_body(
+            collection_name,
+            {"query": "Facet No Index Item", "limit": 10, "facets": True},
+            lambda b: "facet_counts" in b,
+        )
+        assert body["facet_counts"] == {}, f"Expected empty facet_counts, got: {body['facet_counts']}"
     finally:
         requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
 

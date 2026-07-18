@@ -15,10 +15,11 @@ from qdrant_client.models import FormulaQuery, SumExpression, MultExpression, Pr
 from .base import DatabaseBase, AmgixNotFound
 from .common import resolve_skippable_fields
 from .search_group import apply_group_cap, build_group_exclusion_filter
+from .search_facet import compute_facet_counts
 from ..models.cluster import MetricsBucket
-from ..models.document import Document, SearchResult, QueueDocument, QueueInfo, DocumentStatus, DocumentStatusResponse, VectorScore, DocumentFetchRequest, DocumentFetchResponse
+from ..models.document import Document, SearchResult, SearchOutcome, QueueDocument, QueueInfo, DocumentStatus, DocumentStatusResponse, VectorScore, DocumentFetchRequest, DocumentFetchResponse
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config, VectorData
-from ..common import APP_PREFIX, VectorType, DatabaseInfo, DatabaseFeatures, DenseDistance, QueuedDocumentStatus, QueueOperationType, QueueOperationTypeLiteral, get_user_collection_name, MetadataValueType, search_prefetch_limit
+from ..common import APP_PREFIX, VectorType, DatabaseInfo, DatabaseFeatures, DenseDistance, QueuedDocumentStatus, QueueOperationType, QueueOperationTypeLiteral, get_user_collection_name, MetadataValueType, search_prefetch_limit, DEFAULT_FACET_PREFETCH_MULTIPLIER, MIN_FACET_PREFETCH, DEFAULT_FACET_MAX_VALUES
 from ..common.enums import SearchExcludeField
 from ..common.lock_manager import LockClient
 
@@ -693,7 +694,7 @@ class QdrantDatabase(DatabaseBase):
         query: SearchQueryWithVectors,
         collection_config: CollectionConfigInternal,
         required_fields: "set | frozenset" = frozenset()
-    ) -> List[SearchResult]:
+    ) -> SearchOutcome:
         """
         Perform a hybrid search on the collection using precalculated vectors.
         
@@ -703,7 +704,8 @@ class QdrantDatabase(DatabaseBase):
             collection_config: Collection configuration for distance function selection
             
         Returns:
-            List[SearchResult]: List of search results with document data and scores
+            SearchOutcome: ranked search results plus optional facet counts
+                (facet_counts is None unless query.facets is True).
         """
         if query.group_field:
             return await self._search_grouped(collection_name, query, collection_config, required_fields)
@@ -712,7 +714,7 @@ class QdrantDatabase(DatabaseBase):
             collection_name, query, collection_config, required_fields, query.metadata_filter
         )
         if arms is None:
-            return []
+            return SearchOutcome(results=[], facet_counts={} if query.facets else None)
         _, arm_weights, id_lists, scored_lists, point_lookup, raw_scores_map, _ = arms
 
         if query.fusion_mode == "linear":
@@ -731,7 +733,16 @@ class QdrantDatabase(DatabaseBase):
                 k=2
             )
 
-        return self._build_search_results(fused_results, point_lookup, raw_scores_map)
+        results = self._build_search_results(fused_results, point_lookup, raw_scores_map)
+        facet_counts = self._compute_facet_counts(query, collection_config, point_lookup.values()) if query.facets else None
+        return SearchOutcome(results=results, facet_counts=facet_counts)
+
+    def _compute_facet_counts(self, query, collection_config, points) -> Optional[Dict[str, Dict[str, int]]]:
+        """Count per-field facet values over the candidate pool (Qdrant payloads)."""
+        max_values = query.facet_options.max_values if query.facet_options else DEFAULT_FACET_MAX_VALUES
+        indexed_fields = [(idx.key, idx.type) for idx in (collection_config.metadata_indexes or [])]
+        metadata_iter = ((p.payload.get("metadata") or {}) for p in points)
+        return compute_facet_counts(metadata_iter, indexed_fields, max_values)
 
     async def _execute_search_arms(
         self,
@@ -805,6 +816,9 @@ class QdrantDatabase(DatabaseBase):
         batch_requests = []
         batch_vector_names: List[str] = []
         prefetch_limit = search_prefetch_limit(query.limit)
+        if query.facets:
+            mult = query.facet_options.prefetch_multiplier if query.facet_options else DEFAULT_FACET_PREFETCH_MULTIPLIER
+            prefetch_limit = max(prefetch_limit, MIN_FACET_PREFETCH, mult * query.limit)
         for vector_data in query.vectors:
             vector_name = vector_data.vector_name
             field = vector_data.field
@@ -916,20 +930,21 @@ class QdrantDatabase(DatabaseBase):
         point_lookup: Optional[Dict[Any, Any]] = None,
         raw_scores_map: Optional[Dict[Any, List[VectorScore]]] = None,
         fetch_count: int = 1,
-    ) -> List[SearchResult]:
+    ) -> SearchOutcome:
         """
         Recursive grouped search: fetch one round of per-arm candidates, merge
         them into the accumulated candidate pool across all rounds so far,
         re-fuse the entire pool, then apply the group cap. If the cap doesn't
         yet satisfy query.limit and another fetch could plausibly help,
         recurse with a filter that excludes already-saturated group_field
-        values.
+        values. Facet counts (if requested) are computed over the accumulated
+        candidate pool.
         """
         arms = await self._execute_search_arms(
             collection_name, query, collection_config, required_fields, query.metadata_filter
         )
         if arms is None:
-            return []
+            return SearchOutcome(results=[], facet_counts={} if query.facets else None)
         batch_vector_names, arm_weights, new_id_lists, new_scored_lists, new_point_lookup, new_raw_scores_map, prefetch_limit = arms
 
         if accumulated_id_lists is None:
@@ -983,7 +998,12 @@ class QdrantDatabase(DatabaseBase):
             or (not saturated_values and not null_saturated)
         )
         if done:
-            return self._build_search_results(selected, point_lookup, raw_scores_map)
+            results = self._build_search_results(selected, point_lookup, raw_scores_map)
+            facet_counts = (
+                self._compute_facet_counts(query, collection_config, point_lookup.values())
+                if query.facets else None
+            )
+            return SearchOutcome(results=results, facet_counts=facet_counts)
 
         new_metadata_filter = build_group_exclusion_filter(
             query.metadata_filter, query.group_field, saturated_values, null_saturated

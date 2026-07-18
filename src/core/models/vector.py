@@ -14,7 +14,9 @@ from ..common import (
     WMTR_WORD_WEIGHT_PERCENTAGE,
     WMTR_DEFAULT_TRIGRAM_WEIGHT,
     MetadataValueTypeLiteral, MetadataIndexValueTypeLiteral,
-    MetadataFilterOpLiteral, MAX_METADATA_KEY_LENGTH
+    MetadataFilterOpLiteral, MAX_METADATA_KEY_LENGTH,
+    DEFAULT_FACET_PREFETCH_MULTIPLIER, MAX_FACET_PREFETCH_MULTIPLIER,
+    DEFAULT_FACET_MAX_VALUES, MAX_FACET_MAX_VALUES,
 )
 
 
@@ -485,6 +487,26 @@ class MetadataFilter(BaseModel):
 MetadataFilter.model_rebuild()
 
 
+class FacetOptions(BaseModel):
+    """Tuning for faceting; used only when SearchQuery.facets is True."""
+    model_config = {"extra": "forbid"}
+    prefetch_multiplier: int = Field(
+        DEFAULT_FACET_PREFETCH_MULTIPLIER, ge=1, le=MAX_FACET_PREFETCH_MULTIPLIER,
+        description=(
+            "Multiplier on query.limit setting the per-arm candidate window for facet computation. "
+            f"The window is floored to at least 50 candidates. Larger multipliers yield more accurate "
+            f"distributions at higher cost (1 to {MAX_FACET_PREFETCH_MULTIPLIER})."
+        ),
+    )
+    max_values: int = Field(
+        DEFAULT_FACET_MAX_VALUES, ge=1, le=MAX_FACET_MAX_VALUES,
+        description=(
+            "Maximum distinct values returned per facet field, kept as the top-N by count "
+            f"(1 to {MAX_FACET_MAX_VALUES})."
+        ),
+    )
+
+
 class SearchQuery(BaseModel):
     """
     Configuration for a search query.
@@ -555,6 +577,18 @@ class SearchQuery(BaseModel):
     )
     group_max_fetches: int = Field(
         2, ge=1, description="Total number of fetches (including the first) allowed while grouping"
+    )
+
+    facets: bool = Field(
+        default=False,
+        description=(
+            "If True, compute facet counts over the candidate pool for every field declared in the "
+            "collection's metadata_indexes. Counts are returned in SearchResponse.facet_counts."
+        ),
+    )
+    facet_options: Optional[FacetOptions] = Field(
+        default=None,
+        description="Tuning for faceting (prefetch window and max values per field). Used only when facets is True.",
     )
 
     raw_scores: bool = Field(

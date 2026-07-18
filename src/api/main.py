@@ -36,8 +36,8 @@ from src.core.models.document import (
     DocumentStatusResponse,
     QueueDocument,
     QueueInfo,
-    SearchResult,
     SearchResponse,
+    SearchOutcome,
     apply_search_exclude,
 )
 from src.core.models.vector import CollectionConfig, CollectionConfigInternal, VectorConfigInternal, SearchQuery, SearchQueryWithVectors, ModelValidationResponse
@@ -1147,22 +1147,23 @@ async def search(collection_name: CollectionName, query: SearchQuery = ...) -> S
     """
     real_collection_name = get_real_collection_name(collection_name)
     t0 = time.perf_counter_ns()
-    results = await _bunny_talk.rpc(
+    outcome = await _bunny_talk.rpc(
         "search",
         collection_name=real_collection_name,
         start_trace=True,
         query=query,
         trace_meta={"collection": real_collection_name},
-        return_type=List[SearchResult]
+        return_type=SearchOutcome
     )
     query_time_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
 
+    results = outcome.results
+    facet_counts = outcome.facet_counts
+
     if query.exclude:
-        return JSONResponse(content={
-            "results": [apply_search_exclude(r, query.exclude) for r in results],
-            "query_time_ms": query_time_ms,
-        })
-    return SearchResponse(results=results, query_time_ms=query_time_ms)
+        apply_search_exclude(results, query.exclude)
+
+    return SearchResponse(results=results, facet_counts=facet_counts, query_time_ms=query_time_ms)
 
 
 # -------------------------

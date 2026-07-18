@@ -13,8 +13,9 @@ from contextlib import asynccontextmanager
 from .base import DatabaseBase, AmgixNotFound
 from .common import AmgixValidationError, resolve_skippable_fields
 from .search_group import apply_group_cap, build_group_exclusion_filter
+from .search_facet import compute_facet_counts, facet_value_key
 from ..models.cluster import MetricsBucket
-from ..models.document import Document, QueueDocument, QueueInfo, SearchResult, DocumentStatus, DocumentStatusResponse, VectorScore, DocumentFetchRequest, DocumentFetchResponse
+from ..models.document import Document, QueueDocument, QueueInfo, SearchResult, SearchOutcome, DocumentStatus, DocumentStatusResponse, VectorScore, DocumentFetchRequest, DocumentFetchResponse
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config, VectorData
 from ..common import (
     VectorType, DenseDistance, APP_PREFIX, DatabaseInfo, DatabaseFeatures, 
@@ -24,6 +25,7 @@ from ..common import (
     MAX_DOCUMENT_ID_LENGTH, QueuedDocumentStatus, QueueOperationType, QueueOperationTypeLiteral, MAX_STATUS_LENGTH, MAX_SEARCH_LIMIT,
     get_user_collection_name, MetadataValueType, COLLECTION_INGEST_LOCK_TIMEOUT,
     MAX_HOSTNAME_LENGTH, MAX_METRIC_SOURCE_LENGTH, MAX_METRIC_KEY_LENGTH,
+    DEFAULT_FACET_PREFETCH_MULTIPLIER, MIN_FACET_PREFETCH, DEFAULT_FACET_MAX_VALUES,
 )
 from ..common.enums import SearchExcludeField
 from ..common.lock_manager import LockClient
@@ -31,6 +33,18 @@ from ..common.lock_manager import LockClient
 
 class TransactionRollback(Exception):
     pass
+
+
+def _union_pk_ids(id_lists: List[List[int]]) -> List[int]:
+    """Unique pk_ids across per-arm id lists (the faceting candidate pool)."""
+    seen: set = set()
+    out: List[int] = []
+    for ids in id_lists:
+        for pk in ids:
+            if pk not in seen:
+                seen.add(pk)
+                out.append(pk)
+    return out
 
 
 class SQLBase(DatabaseBase):
@@ -1881,7 +1895,7 @@ class SQLBase(DatabaseBase):
         query: SearchQueryWithVectors,
         collection_config: CollectionConfigInternal,
         required_fields: "set | frozenset" = frozenset()
-    ) -> List[SearchResult]:
+    ) -> SearchOutcome:
         """
         Perform a hybrid search on the collection using precalculated vectors.
         """
@@ -2024,7 +2038,7 @@ class SQLBase(DatabaseBase):
         collection_config: CollectionConfigInternal,
         field_vector_ids: Dict[str, int],
         required_fields: "set | frozenset" = frozenset(),
-    ) -> List[SearchResult]:
+    ) -> SearchOutcome:
         """
         Internal search method that executes vector arms in parallel and fuses the results.
         """
@@ -2052,11 +2066,54 @@ class SQLBase(DatabaseBase):
             )
 
         if not fused_results:
-            return []
+            facet_counts = await self._compute_facet_counts_sql(
+                collection_name, collection_config, _union_pk_ids(id_lists_values), query
+            ) if query.facets else None
+            return SearchOutcome(results=[], facet_counts=facet_counts)
 
-        return await self._hydrate_search_results(
+        results = await self._hydrate_search_results(
             collection_name, query, collection_config, required_fields, fused_results, raw_scores_map
         )
+        facet_counts = await self._compute_facet_counts_sql(
+            collection_name, collection_config, _union_pk_ids(id_lists_values), query
+        ) if query.facets else None
+        return SearchOutcome(results=results, facet_counts=facet_counts)
+
+    async def _compute_facet_counts_sql(
+        self,
+        collection_name: str,
+        collection_config: CollectionConfigInternal,
+        candidate_pk_ids: List[int],
+        query: SearchQueryWithVectors,
+    ) -> Dict[str, Dict[str, int]]:
+        """Count per-indexed-field facet values over the candidate pk_id pool via GROUP BY.
+
+        The candidate pool already passed the search's tags + metadata filters at the
+        vector-arm stage, so no filter SQL is re-applied here. NULLs (docs missing the
+        field) are excluded. Each field is truncated to the top-N values by count.
+        """
+        if not candidate_pk_ids:
+            return {}
+        max_values = query.facet_options.max_values if query.facet_options else DEFAULT_FACET_MAX_VALUES
+        docs_table = self.get_table_name(collection_name, self.TableType.DOCUMENTS)
+        pk_col = self.quote_identifier("pk_id")
+        placeholders = ", ".join(["%s"] * len(candidate_pk_ids))
+        params = tuple(candidate_pk_ids)
+        indexed_fields = [(idx.key, idx.type) for idx in (collection_config.metadata_indexes or [])]
+        facet_counts: Dict[str, Dict[str, int]] = {}
+        for field, idx_type in indexed_fields:
+            meta_col = self.quote_identifier(f"meta_{field}")
+            sql = self.format_sql(
+                "select",
+                table=docs_table,
+                columns=f"{meta_col} AS v, COUNT(*) AS c",
+                where=f" WHERE {pk_col} IN ({placeholders}) AND {meta_col} IS NOT NULL",
+                group_by=f" GROUP BY {meta_col}",
+            )
+            rows = await self.execute_sql(sql, params)
+            counts = {facet_value_key(row["v"], idx_type): int(row["c"]) for row in rows}
+            facet_counts[field] = dict(sorted(counts.items(), key=lambda kv: -kv[1])[:max_values])
+        return facet_counts
 
     async def _execute_search_arms_sql(
         self,
@@ -2121,6 +2178,9 @@ class SQLBase(DatabaseBase):
         )
         raw_scores_map: Dict[int, List[VectorScore]] = {}
         prefetch_limit = search_prefetch_limit(query.limit)
+        if query.facets:
+            mult = query.facet_options.prefetch_multiplier if query.facet_options else DEFAULT_FACET_PREFETCH_MULTIPLIER
+            prefetch_limit = max(prefetch_limit, MIN_FACET_PREFETCH, mult * query.limit)
         temp_cols = [
             self.format_sql("column_smallint", name="field_vector_id", null_constraint=" NOT NULL"),
             self.format_sql("column_bigint", name="token_id", null_constraint=" NOT NULL"),
@@ -2338,7 +2398,7 @@ class SQLBase(DatabaseBase):
         group_values_by_pk: Optional[Dict[int, Any]] = None,
         raw_scores_map: Optional[Dict[int, List[VectorScore]]] = None,
         fetch_count: int = 1,
-    ) -> List[SearchResult]:
+    ) -> SearchOutcome:
         """
         Recursive grouped search: fetch one round of stage-1 per-arm candidates,
         merge them into the accumulated candidate pool across all rounds so
@@ -2408,11 +2468,15 @@ class SQLBase(DatabaseBase):
             or (not saturated_values and not null_saturated)
         )
         if done:
+            facet_counts = await self._compute_facet_counts_sql(
+                collection_name, collection_config, _union_pk_ids(accumulated_id_lists), query
+            ) if query.facets else None
             if not selected:
-                return []
-            return await self._hydrate_search_results(
+                return SearchOutcome(results=[], facet_counts=facet_counts)
+            results = await self._hydrate_search_results(
                 collection_name, query, collection_config, required_fields, selected, raw_scores_map
             )
+            return SearchOutcome(results=results, facet_counts=facet_counts)
 
         new_metadata_filter = build_group_exclusion_filter(
             query.metadata_filter, query.group_field, saturated_values, null_saturated

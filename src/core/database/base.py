@@ -8,7 +8,7 @@ import uuid
 import asyncio
 
 from ..models.cluster import MetricsBucket
-from ..models.document import Document, SearchResult, QueueDocument, QueueInfo, DocumentStatusResponse, DocumentFetchRequest, DocumentFetchResponse
+from ..models.document import Document, SearchResult, SearchOutcome, QueueDocument, QueueInfo, DocumentStatusResponse, DocumentFetchRequest, DocumentFetchResponse
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, MetadataFilter
 from ..common import (
     APP_PREFIX, DOC_NAMESPACE, DatabaseInfo, DatabaseFeatures, QueueOperationTypeLiteral,
@@ -348,7 +348,7 @@ class DatabaseBase(ABC):
         query: SearchQueryWithVectors,
         collection_config: CollectionConfigInternal,
         required_fields: "set | frozenset" = frozenset()
-    ) -> List[SearchResult]:
+    ) -> SearchOutcome:
         """
         Perform a hybrid search on the collection using precalculated vectors.
         
@@ -359,9 +359,10 @@ class DatabaseBase(ABC):
             required_fields: Fields from query.exclude that must still be fetched
                 because they're needed internally (e.g. for a metadata-keyed join);
                 computed once by the caller via search_join.required_fields_for_joins.
-            
+        
         Returns:
-            List[SearchResult]: List of search results with document data and scores
+            SearchOutcome: ranked search results plus optional facet counts
+                (facet_counts is None unless query.facets is True).
         """
         pass
     
