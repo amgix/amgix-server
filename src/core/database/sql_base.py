@@ -12,6 +12,7 @@ from abc import abstractmethod
 from contextlib import asynccontextmanager
 from .base import DatabaseBase, AmgixNotFound
 from .common import AmgixValidationError, resolve_skippable_fields
+from .search_group import apply_group_cap, build_group_exclusion_filter
 from ..models.cluster import MetricsBucket
 from ..models.document import Document, QueueDocument, QueueInfo, SearchResult, DocumentStatus, DocumentStatusResponse, VectorScore, DocumentFetchRequest, DocumentFetchResponse
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config, VectorData
@@ -1904,6 +1905,16 @@ class SQLBase(DatabaseBase):
 
             search_arms.append((vector_data, field_vector_id, weight, sparse_tokens, requires_idf))
 
+        if query.group_field:
+            return await self._perform_search_grouped(
+                collection_name,
+                query,
+                search_arms,
+                collection_config,
+                field_vector_ids,
+                required_fields
+            )
+
         return await self._perform_search(
             collection_name,
             query,
@@ -1946,6 +1957,10 @@ class SQLBase(DatabaseBase):
         def convert_node(node: MetadataFilter, counter: int) -> Tuple[str, int]:
             if node.key:
                 column_name = f"d.{self.quote_identifier(f'meta_{node.key}')}"
+
+                if node.op == "is_null":
+                    return f"{column_name} IS NULL", counter
+
                 param_name = f"metadata_filter_{counter}"
                 filter_params[param_name] = self._normalize_metadata_filter_value(
                     node.key,
@@ -2015,7 +2030,49 @@ class SQLBase(DatabaseBase):
         """
         if not search_arms:
             raise AmgixValidationError("Search query has no active vectors to search with")
-        
+
+        id_lists_values, scored_lists, weights, raw_scores_map, _ = await self._execute_search_arms_sql(
+            collection_name, query, search_arms, collection_config, field_vector_ids, query.metadata_filter
+        )
+
+        if query.fusion_mode == "linear":
+            fused_results = self.linear_weighted_score_fuse(
+                scored_lists=scored_lists,
+                weights=weights,
+                limit=query.limit,
+                score_threshold=query.score_threshold,
+            )
+        else:
+            fused_results = self.rrf_fuse(
+                id_lists=id_lists_values,
+                weights=weights,
+                limit=query.limit,
+                score_threshold=query.score_threshold,
+                k=2
+            )
+
+        if not fused_results:
+            return []
+
+        return await self._hydrate_search_results(
+            collection_name, query, collection_config, required_fields, fused_results, raw_scores_map
+        )
+
+    async def _execute_search_arms_sql(
+        self,
+        collection_name: str,
+        query: SearchQueryWithVectors,
+        search_arms: List[Tuple[Any, int, float, Optional[List[Tuple[int, float]]], int]],
+        collection_config: CollectionConfigInternal,
+        field_vector_ids: Dict[str, int],
+        metadata_filter: Optional[MetadataFilter],
+    ) -> Tuple[List[List[int]], List[List[Tuple[int, float]]], List[float], Dict[int, List[VectorScore]], int]:
+        """
+        Run one round of stage-1 vector arm execution (pk_id + score only, no
+        document hydration) using the given metadata filter (which may differ
+        from query.metadata_filter when a grouped search excludes
+        already-saturated group_field values on a refetch).
+        """
         docs_table = self.get_table_name(collection_name, self.TableType.DOCUMENTS)
         vector_table = self.get_table_name(collection_name, self.TableType.VECTOR_DATA)
         query_vectors_table = self.get_table_name("", self.TableType.QUERY_VECTORS)
@@ -2024,9 +2081,9 @@ class SQLBase(DatabaseBase):
         has_document_tags_filter = bool(query.document_tags)
         metadata_filter_sql = ""
         filter_params: Dict[str, Any] = {}
-        if query.metadata_filter:
+        if metadata_filter:
             metadata_filter_sql, filter_params = self._convert_metadata_filter_to_sql(
-                query.metadata_filter,
+                metadata_filter,
                 collection_config,
             )
         has_document_filter = has_document_tags_filter or bool(metadata_filter_sql)
@@ -2158,29 +2215,30 @@ class SQLBase(DatabaseBase):
                         raw_scores_map[doc_pk_id] = []
                     raw_scores_map[doc_pk_id].append(vector_score)
 
-        if query.fusion_mode == "linear":
-            fused_results = self.linear_weighted_score_fuse(
-                scored_lists=scored_lists,
-                weights=weights,
-                limit=query.limit,
-                score_threshold=query.score_threshold,
-            )
-        else:
-            fused_results = self.rrf_fuse(
-                id_lists=id_lists_values,
-                weights=weights,
-                limit=query.limit,
-                score_threshold=query.score_threshold,
-                k=2
-            )
+        return id_lists_values, scored_lists, weights, raw_scores_map, prefetch_limit
+
+    async def _hydrate_search_results(
+        self,
+        collection_name: str,
+        query: SearchQueryWithVectors,
+        collection_config: CollectionConfigInternal,
+        required_fields: "set | frozenset",
+        fused_results: List[Tuple[int, float]],
+        raw_scores_map: Dict[int, List[VectorScore]],
+    ) -> List[SearchResult]:
+        """
+        Second stage: fetch documents for the final fused (and, if grouping,
+        already-capped) pk_ids only, skipping columns the caller excluded
+        (and that aren't required internally, e.g. for a metadata-keyed
+        join). id/timestamp are always fetched.
+        """
+        docs_table = self.get_table_name(collection_name, self.TableType.DOCUMENTS)
+        tags_table = self.get_table_name(collection_name, self.TableType.TAGS)
 
         top_pk_ids = [pk for pk, _ in fused_results]
         if not top_pk_ids:
             return []
 
-        # Second stage: fetch documents for top pk_ids only, skipping columns the
-        # caller excluded (and that aren't required internally, e.g. for a
-        # metadata-keyed join). id/timestamp are always fetched.
         skippable_fields = resolve_skippable_fields(query, required_fields)
         optional_columns = [
             f for f in (
@@ -2245,6 +2303,134 @@ class SQLBase(DatabaseBase):
             results.append(SearchResult.from_dict(search_result_data, skip_validation=True))
 
         return results
+
+    async def _fetch_group_values(
+        self,
+        collection_name: str,
+        group_field: str,
+        pk_ids: List[int],
+    ) -> Dict[int, Any]:
+        """Fetch the group_field metadata value for the given pk_ids (for group capping)."""
+        if not pk_ids:
+            return {}
+        docs_table = self.get_table_name(collection_name, self.TableType.DOCUMENTS)
+        group_col = self.quote_identifier(f"meta_{group_field}")
+        placeholders = ", ".join(["%s"] * len(pk_ids))
+        sql = self.format_sql(
+            "select",
+            table=docs_table,
+            columns=f"{self.quote_identifier('pk_id')}, {group_col}",
+            where=f" WHERE {self.quote_identifier('pk_id')} IN ({placeholders})"
+        )
+        rows = await self.execute_sql(sql, tuple(pk_ids))
+        return {row["pk_id"]: row[f"meta_{group_field}"] for row in rows}
+
+    async def _perform_search_grouped(
+        self,
+        collection_name: str,
+        query: SearchQueryWithVectors,
+        search_arms: List[Tuple[Any, int, float, Optional[List[Tuple[int, float]]], int]],
+        collection_config: CollectionConfigInternal,
+        field_vector_ids: Dict[str, int],
+        required_fields: "set | frozenset" = frozenset(),
+        accumulated_id_lists: Optional[List[List[int]]] = None,
+        accumulated_scored_lists: Optional[List[List[Tuple[int, float]]]] = None,
+        group_values_by_pk: Optional[Dict[int, Any]] = None,
+        raw_scores_map: Optional[Dict[int, List[VectorScore]]] = None,
+        fetch_count: int = 1,
+    ) -> List[SearchResult]:
+        """
+        Recursive grouped search: fetch one round of stage-1 per-arm candidates,
+        merge them into the accumulated candidate pool across all rounds so
+        far, re-fuse the entire pool, then apply the group cap. If the cap
+        doesn't yet satisfy query.limit and another fetch could plausibly
+        help, recurse with a filter that excludes already-saturated
+        group_field values.
+        """
+        if not search_arms:
+            raise AmgixValidationError("Search query has no active vectors to search with")
+
+        new_id_lists, new_scored_lists, weights, new_raw_scores_map, prefetch_limit = await self._execute_search_arms_sql(
+            collection_name, query, search_arms, collection_config, field_vector_ids, query.metadata_filter
+        )
+
+        if accumulated_id_lists is None:
+            accumulated_id_lists = [[] for _ in search_arms]
+            accumulated_scored_lists = [[] for _ in search_arms]
+            group_values_by_pk = {}
+            raw_scores_map = {}
+
+        arms_exhausted = True
+        new_pk_ids: set = set()
+        for i in range(len(search_arms)):
+            if len(new_id_lists[i]) >= prefetch_limit:
+                arms_exhausted = False
+            seen = set(accumulated_id_lists[i])
+            for pk_id, score in new_scored_lists[i]:
+                if pk_id not in seen:
+                    seen.add(pk_id)
+                    accumulated_id_lists[i].append(pk_id)
+                    accumulated_scored_lists[i].append((pk_id, score))
+                if pk_id not in group_values_by_pk:
+                    new_pk_ids.add(pk_id)
+        raw_scores_map.update(new_raw_scores_map)
+
+        if new_pk_ids:
+            group_values_by_pk.update(
+                await self._fetch_group_values(collection_name, query.group_field, list(new_pk_ids))
+            )
+
+        pool_size = sum(len(ids) for ids in accumulated_id_lists) or 1
+        if query.fusion_mode == "linear":
+            fused_results = self.linear_weighted_score_fuse(
+                scored_lists=accumulated_scored_lists,
+                weights=weights,
+                limit=pool_size,
+                score_threshold=query.score_threshold,
+            )
+        else:
+            fused_results = self.rrf_fuse(
+                id_lists=accumulated_id_lists,
+                weights=weights,
+                limit=pool_size,
+                score_threshold=query.score_threshold,
+                k=2
+            )
+
+        selected, saturated_values, null_saturated, _ = apply_group_cap(
+            fused_results, lambda pk_id: group_values_by_pk.get(pk_id), query.group_max, query.limit
+        )
+
+        done = (
+            len(selected) >= query.limit
+            or fetch_count >= query.group_max_fetches
+            or arms_exhausted
+            or (not saturated_values and not null_saturated)
+        )
+        if done:
+            if not selected:
+                return []
+            return await self._hydrate_search_results(
+                collection_name, query, collection_config, required_fields, selected, raw_scores_map
+            )
+
+        new_metadata_filter = build_group_exclusion_filter(
+            query.metadata_filter, query.group_field, saturated_values, null_saturated
+        )
+        next_query = query.model_copy(update={"metadata_filter": new_metadata_filter})
+        return await self._perform_search_grouped(
+            collection_name,
+            next_query,
+            search_arms,
+            collection_config,
+            field_vector_ids,
+            required_fields,
+            accumulated_id_lists,
+            accumulated_scored_lists,
+            group_values_by_pk,
+            raw_scores_map,
+            fetch_count + 1,
+        )
 
     async def get_collection_info_internal(self, collection_name: str) -> CollectionConfigInternal:        
         """Get internal information about a collection."""

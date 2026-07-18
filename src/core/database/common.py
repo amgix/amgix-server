@@ -249,6 +249,9 @@ def validate_metadata_filter(collection_config: CollectionConfigInternal, metada
         if key not in indexed_types:
             raise AmgixValidationError(f"Metadata filter key '{key}' is not indexed in collection metadata_indexes")
 
+        if op == "is_null":
+            return
+
         expected_type = indexed_types[key]
 
         if expected_type == MetadataValueType.STRING:

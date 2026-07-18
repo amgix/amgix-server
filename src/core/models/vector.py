@@ -474,7 +474,7 @@ class MetadataFilter(BaseModel):
                 raise ValueError("Field condition must specify 'key'")
             if not self.op:
                 raise ValueError("Field condition must specify 'op' (operator)")
-            if self.value is None:
+            if self.op != "is_null" and self.value is None:
                 raise ValueError("Field condition must specify 'value'")
 
         return self
@@ -540,6 +540,21 @@ class SearchQuery(BaseModel):
             "(and from documents attached via 'joined'). Allowed values: "
             "name, description, content, tags, metadata."
         ),
+    )
+
+    group_field: Optional[str] = Field(
+        None,
+        description=(
+            "Optional indexed metadata field to group results by. When set, results are "
+            "capped at group_max per distinct value of this field, refetching up to "
+            "group_max_fetches times if needed to fill the requested limit."
+        ),
+    )
+    group_max: int = Field(
+        3, ge=1, description="Maximum number of results allowed per group_field value"
+    )
+    group_max_fetches: int = Field(
+        2, ge=1, description="Total number of fetches (including the first) allowed while grouping"
     )
 
     raw_scores: bool = Field(

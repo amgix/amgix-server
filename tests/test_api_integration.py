@@ -4956,6 +4956,260 @@ def test_search_exclude_metadata_with_parent_meta_join():
         requests.delete(f"{API_BASE_URL}/collections/{child_collection}")
 
 
+def _group_field_collection_config() -> Dict[str, Any]:
+    return {
+        "vectors": [
+            {"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["name"]},
+        ],
+        "metadata_indexes": [{"key": "category", "type": "string"}],
+    }
+
+
+def _group_doc(doc_id: str, name: str, category: Any = "__unset__") -> Dict[str, Any]:
+    doc = create_test_document(doc_id, name, name, doc_type=None)
+    if category != "__unset__":
+        doc["metadata"] = {"category": category}
+    return doc
+
+
+@pytest.mark.all_backends
+def test_search_group_caps_within_single_fetch():
+    """group_max caps results per group_field value when the first fetch already has enough candidates."""
+    collection_name = f"test_search_group_single_{str(uuid.uuid4())[:8]}"
+    config = _group_field_collection_config()
+    assert requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config).status_code == 200
+
+    try:
+        docs = [
+            _group_doc("group-single-x1", "Group Single Fetch Item", "x"),
+            _group_doc("group-single-x2", "Group Single Fetch Item", "x"),
+            _group_doc("group-single-y1", "Group Single Fetch Item", "y"),
+            _group_doc("group-single-y2", "Group Single Fetch Item", "y"),
+        ]
+        for doc in docs:
+            assert requests.post(
+                f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc
+            ).status_code == 200
+
+        query = {
+            "query": "Group Single Fetch Item",
+            "limit": 4,
+            "group_field": "category",
+            "group_max": 1,
+        }
+        results = wait_for_search(
+            collection_name,
+            query,
+            lambda rs: len(rs) >= 1,
+            timeout_s=30.0,
+        )
+
+        counts: Dict[str, int] = {}
+        for r in results:
+            category = (r.get("metadata") or {}).get("category")
+            counts[category] = counts.get(category, 0) + 1
+        for category, count in counts.items():
+            assert count <= 1, f"Expected at most 1 result for category={category!r}, got {count}"
+        assert set(counts.keys()) == {"x", "y"}, f"Expected both groups represented, got {counts}"
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_search_group_triggers_refetch():
+    """A dominant group_field value fills the first fetch's prefetch window; grouping must refetch to surface other groups."""
+    collection_name = f"test_search_group_refetch_{str(uuid.uuid4())[:8]}"
+    config = _group_field_collection_config()
+    assert requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config).status_code == 200
+
+    try:
+        docs = [
+            _group_doc(f"group-refetch-a{i}", "Group Refetch Alpha Document", "a")
+            for i in range(1, 6)
+        ] + [
+            _group_doc("group-refetch-b1", "Group Refetch Alpha Different", "b"),
+            _group_doc("group-refetch-c1", "Group Refetch Beta Sample", "c"),
+        ]
+        for doc in docs:
+            assert requests.post(
+                f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc
+            ).status_code == 200
+
+        query = {
+            "query": "Group Refetch Alpha Document",
+            "limit": 3,
+            "group_field": "category",
+            "group_max": 1,
+            "group_max_fetches": 2,
+        }
+        results = wait_for_search(
+            collection_name,
+            query,
+            lambda rs: len({(r.get("metadata") or {}).get("category") for r in rs}) >= 3,
+            timeout_s=30.0,
+        )
+
+        categories = [(r.get("metadata") or {}).get("category") for r in results]
+        assert sorted(categories) == ["a", "b", "c"], (
+            f"Expected exactly one result per group after refetch, got categories={categories}"
+        )
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_search_group_early_exit_when_refetch_would_not_help():
+    """If the candidate pool is exhausted, grouping returns early without using all group_max_fetches."""
+    collection_name = f"test_search_group_early_exit_{str(uuid.uuid4())[:8]}"
+    config = _group_field_collection_config()
+    assert requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config).status_code == 200
+
+    try:
+        docs = [
+            _group_doc("group-exit-only-1", "Group Early Exit Only Item", "only"),
+        ]
+        assert requests.post(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=docs[0]
+        ).status_code == 200
+
+        query = {
+            "query": "Group Early Exit Only Item",
+            "limit": 5,
+            "group_field": "category",
+            "group_max": 1,
+            "group_max_fetches": 5,
+        }
+        # With only one document/group in the whole collection, the response must
+        # come back quickly (bounded number of internal refetches) rather than
+        # exhausting group_max_fetches or hanging.
+        results = wait_for_search(
+            collection_name,
+            query,
+            lambda rs: len(rs) == 1,
+            timeout_s=30.0,
+        )
+        assert len(results) == 1
+        assert results[0]["id"] == "group-exit-only-1"
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_search_group_field_not_indexed_rejected():
+    """group_field must be declared in collection metadata_indexes."""
+    collection_name = f"test_search_group_not_indexed_{str(uuid.uuid4())[:8]}"
+    config = _trigrams_name_content_collection_config()
+    assert requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config).status_code == 200
+
+    try:
+        doc = create_test_document("group-not-indexed-1", "Title", "not indexed group field test content")
+        assert requests.post(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc
+        ).status_code == 200
+
+        r = requests.post(
+            f"{API_BASE_URL}/collections/{collection_name}/search",
+            json={"query": "not indexed group field test content", "group_field": "category"},
+        )
+        assert r.status_code == 400, f"Expected 400 for non-indexed group_field, got {r.status_code}: {r.text}"
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_search_group_null_bucket_capped():
+    """Documents missing group_field are bucketed together and capped like any other value."""
+    collection_name = f"test_search_group_null_{str(uuid.uuid4())[:8]}"
+    config = _group_field_collection_config()
+    assert requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config).status_code == 200
+
+    try:
+        docs = [
+            _group_doc("group-null-1", "Group Null Bucket Item"),  # no metadata at all
+            _group_doc("group-null-2", "Group Null Bucket Item"),  # no metadata at all
+            _group_doc("group-null-a1", "Group Null Bucket Item", "a"),
+            _group_doc("group-null-a2", "Group Null Bucket Item", "a"),
+        ]
+        for doc in docs:
+            assert requests.post(
+                f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc
+            ).status_code == 200
+
+        query = {
+            "query": "Group Null Bucket Item",
+            "limit": 3,
+            "group_field": "category",
+            "group_max": 1,
+        }
+        results = wait_for_search(
+            collection_name,
+            query,
+            lambda rs: len(rs) >= 1,
+            timeout_s=30.0,
+        )
+
+        null_count = sum(1 for r in results if not (r.get("metadata") or {}).get("category"))
+        a_count = sum(1 for r in results if (r.get("metadata") or {}).get("category") == "a")
+        assert null_count <= 1, f"Expected at most 1 null-bucket result, got {null_count}"
+        assert a_count <= 1, f"Expected at most 1 category=a result, got {a_count}"
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_metadata_filter_is_null_operator():
+    """The is_null metadata filter operator works standalone (object form and string form), independent of grouping."""
+    collection_name = f"test_metadata_filter_is_null_{str(uuid.uuid4())[:8]}"
+    config = _group_field_collection_config()
+    assert requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config).status_code == 200
+
+    try:
+        docs = [
+            _group_doc("is-null-missing-1", "Is Null Filter Item"),  # no category
+            _group_doc("is-null-present-1", "Is Null Filter Item", "present"),
+        ]
+        for doc in docs:
+            assert requests.post(
+                f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc
+            ).status_code == 200
+
+        # Object form: category IS NULL
+        results = wait_for_search(
+            collection_name,
+            {
+                "query": "Is Null Filter Item",
+                "limit": 10,
+                "metadata_filter": {"key": "category", "op": "is_null"},
+            },
+            lambda rs: len(rs) >= 1,
+            timeout_s=30.0,
+        )
+        ids = {r["id"] for r in results}
+        assert ids == {"is-null-missing-1"}, f"Expected only the doc missing category, got {ids}"
+
+        # String form: category IS NOT NULL
+        results = wait_for_search(
+            collection_name,
+            {
+                "query": "Is Null Filter Item",
+                "limit": 10,
+                "metadata_filter": "category IS NOT NULL",
+            },
+            lambda rs: len(rs) >= 1,
+            timeout_s=30.0,
+        )
+        ids = {r["id"] for r in results}
+        assert ids == {"is-null-present-1"}, f"Expected only the doc with category set, got {ids}"
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
 if __name__ == "__main__":
     # For manual testing
     pytest.main([__file__, "-v"])

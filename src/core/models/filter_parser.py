@@ -3,6 +3,8 @@ Parse a filter expression string into a MetadataFilter-compatible dict tree.
 
 Supported syntax:
     comparison  : FIELD OP value
+                | FIELD IS NULL
+                | FIELD IS NOT NULL
     OP          : "=" | "!=" | "<" | "<=" | ">" | ">="
     value       : string | integer | float | boolean | null
     boolean ops : AND, OR, NOT (case-insensitive)
@@ -14,6 +16,8 @@ Examples:
     (year > 2020 AND year < 2030) OR status = "draft"
     NOT deleted = true
     status != "archived"
+    category IS NULL
+    category IS NOT NULL
 
 Operators map to MetadataFilter ops:
     =   -> eq
@@ -22,6 +26,8 @@ Operators map to MetadataFilter ops:
     <=  -> lte
     >   -> gt
     >=  -> gte
+    IS NULL     -> is_null
+    IS NOT NULL -> not(is_null)
 """
 
 from __future__ import annotations
@@ -36,7 +42,9 @@ FILTER_EXPR_GRAMMAR = r"""
           | "(" expr ")"
           | comparison
 
-    comparison : FIELD OP value
+    comparison : FIELD OP value        -> comparison
+               | FIELD IS_NOT_NULL     -> is_not_null_comparison
+               | FIELD IS_NULL         -> is_null_comparison
 
     value : ESCAPED_STRING  -> string_val
           | SIGNED_FLOAT    -> float_val
@@ -50,6 +58,8 @@ FILTER_EXPR_GRAMMAR = r"""
     TRUE   : /true/i
     FALSE  : /false/i
     NULL   : /null/i
+    IS_NOT_NULL.2 : /IS\s+NOT\s+NULL/i
+    IS_NULL.1     : /IS\s+NULL/i
 
     _AND : /AND/i
     _OR  : /OR/i
@@ -92,6 +102,12 @@ class FilterExprTransformer(Transformer):
         if op_str not in _OP_MAP:
             raise ValueError(f"Unsupported operator '{op_str}'")
         return {"key": str(field), "op": _OP_MAP[op_str], "value": value}
+
+    def is_null_comparison(self, field: Token, _is_null: Token):
+        return {"key": str(field), "op": "is_null"}
+
+    def is_not_null_comparison(self, field: Token, _is_not_null: Token):
+        return {"not": {"key": str(field), "op": "is_null"}}
 
     def string_val(self, s: Token):
         return str(s)[1:-1].replace('\\"', '"')

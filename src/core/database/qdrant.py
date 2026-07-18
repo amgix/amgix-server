@@ -14,6 +14,7 @@ from qdrant_client.models import FormulaQuery, SumExpression, MultExpression, Pr
 
 from .base import DatabaseBase, AmgixNotFound
 from .common import resolve_skippable_fields
+from .search_group import apply_group_cap, build_group_exclusion_filter
 from ..models.cluster import MetricsBucket
 from ..models.document import Document, SearchResult, QueueDocument, QueueInfo, DocumentStatus, DocumentStatusResponse, VectorScore, DocumentFetchRequest, DocumentFetchResponse
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config, VectorData
@@ -704,6 +705,49 @@ class QdrantDatabase(DatabaseBase):
         Returns:
             List[SearchResult]: List of search results with document data and scores
         """
+        if query.group_field:
+            return await self._search_grouped(collection_name, query, collection_config, required_fields)
+
+        arms = await self._execute_search_arms(
+            collection_name, query, collection_config, required_fields, query.metadata_filter
+        )
+        if arms is None:
+            return []
+        _, arm_weights, id_lists, scored_lists, point_lookup, raw_scores_map, _ = arms
+
+        if query.fusion_mode == "linear":
+            fused_results = self.linear_weighted_score_fuse(
+                scored_lists=scored_lists,
+                weights=arm_weights,
+                limit=query.limit,
+                score_threshold=query.score_threshold,
+            )
+        else:
+            fused_results = self.rrf_fuse(
+                id_lists=id_lists,
+                weights=arm_weights,
+                limit=query.limit,
+                score_threshold=query.score_threshold,
+                k=2
+            )
+
+        return self._build_search_results(fused_results, point_lookup, raw_scores_map)
+
+    async def _execute_search_arms(
+        self,
+        collection_name: str,
+        query: SearchQueryWithVectors,
+        collection_config: CollectionConfigInternal,
+        required_fields: "set | frozenset",
+        metadata_filter: Optional[MetadataFilter],
+    ) -> Optional[Tuple[List[str], List[float], List[List], List[List[tuple]], Dict[Any, Any], Dict[Any, List[VectorScore]], int]]:
+        """
+        Run one round of per-arm vector search against Qdrant using the given
+        metadata filter (which may differ from query.metadata_filter when a
+        grouped search excludes already-saturated group_field values on a
+        refetch). Returns raw, un-fused per-arm candidate data, or None if
+        the query has no active vector arms.
+        """
         # Prepare search conditions
         search_conditions = []
         
@@ -727,15 +771,15 @@ class QdrantDatabase(DatabaseBase):
                     )
                 )
         
-        metadata_filter = self._convert_metadata_filter_to_qdrant(query.metadata_filter, collection_config) if query.metadata_filter else None
+        qdrant_metadata_filter = self._convert_metadata_filter_to_qdrant(metadata_filter, collection_config) if metadata_filter else None
         tags_filter = rest.Filter(must=search_conditions) if search_conditions else None
 
-        if tags_filter and metadata_filter:
-            final_filter = rest.Filter(must=[tags_filter, metadata_filter])
+        if tags_filter and qdrant_metadata_filter:
+            final_filter = rest.Filter(must=[tags_filter, qdrant_metadata_filter])
         elif tags_filter:
             final_filter = tags_filter
         else:
-            final_filter = metadata_filter
+            final_filter = qdrant_metadata_filter
 
         # Build weight map keyed by field_vector_name (consistent with SQL backends).
         # Default is 1.0, overridden by user-provided weights.
@@ -803,21 +847,14 @@ class QdrantDatabase(DatabaseBase):
             batch_vector_names.append(field_vector_name)
 
         if not batch_requests:
-            return []
+            return None
         
         # Execute batch search
-        # batch_start = time.time()
         batch_response = await self.client.query_batch_points(
             collection_name=collection_name,
             requests=batch_requests
         )
-        # batch_time = (time.time() - batch_start) * 1000
-        # print(f"Qdrant batch search time: {batch_time:.2f}ms")
 
-        # for res in batch_response:
-        #     for point in res.points:
-        #         print(f"{point.payload["id"]} {point.score}")
-        
         # Extract ranked ids, optional raw scores for response, and linear-fusion inputs in one pass
         id_lists: List[List] = []
         scored_lists: List[List[tuple]] = []
@@ -849,26 +886,14 @@ class QdrantDatabase(DatabaseBase):
             id_lists.append(ids)
             scored_lists.append(scored_arm)
 
-        if query.fusion_mode == "linear":
-            fused_results = self.linear_weighted_score_fuse(
-                scored_lists=scored_lists,
-                weights=arm_weights,
-                limit=query.limit,
-                score_threshold=query.score_threshold,
-            )
-        else:
-            fused_results = self.rrf_fuse(
-                id_lists=id_lists,
-                weights=arm_weights,
-                limit=query.limit,
-                score_threshold=query.score_threshold,
-                k=2
-            )
-        # fusion_time = (time.time() - fusion_start) * 1000
-        # print(f"RRF fusion post-processing time: {fusion_time:.2f}ms")
-        
-        # Convert fused results back to SearchResult format
-        # conversion_start = time.time()
+        return batch_vector_names, arm_weights, id_lists, scored_lists, point_lookup, raw_scores_map, prefetch_limit
+
+    def _build_search_results(
+        self,
+        fused_results: List[Tuple[Any, float]],
+        point_lookup: Dict[Any, Any],
+        raw_scores_map: Dict[Any, List[VectorScore]],
+    ) -> List[SearchResult]:
         results = []
         for item_id, fused_score in fused_results:
             point_data = point_lookup[item_id]
@@ -878,10 +903,103 @@ class QdrantDatabase(DatabaseBase):
             search_result_data['vector_scores'] = raw_scores_map.get(item_id, [])
             # Use from_dict to handle proper type conversion
             results.append(SearchResult.from_dict(search_result_data, skip_validation=True))
-        # conversion_time = (time.time() - conversion_start) * 1000
-        # print(f"Result conversion time: {conversion_time:.2f}ms")
-        
         return results
+
+    async def _search_grouped(
+        self,
+        collection_name: str,
+        query: SearchQueryWithVectors,
+        collection_config: CollectionConfigInternal,
+        required_fields: "set | frozenset",
+        accumulated_id_lists: Optional[List[List]] = None,
+        accumulated_scored_lists: Optional[List[List[tuple]]] = None,
+        point_lookup: Optional[Dict[Any, Any]] = None,
+        raw_scores_map: Optional[Dict[Any, List[VectorScore]]] = None,
+        fetch_count: int = 1,
+    ) -> List[SearchResult]:
+        """
+        Recursive grouped search: fetch one round of per-arm candidates, merge
+        them into the accumulated candidate pool across all rounds so far,
+        re-fuse the entire pool, then apply the group cap. If the cap doesn't
+        yet satisfy query.limit and another fetch could plausibly help,
+        recurse with a filter that excludes already-saturated group_field
+        values.
+        """
+        arms = await self._execute_search_arms(
+            collection_name, query, collection_config, required_fields, query.metadata_filter
+        )
+        if arms is None:
+            return []
+        batch_vector_names, arm_weights, new_id_lists, new_scored_lists, new_point_lookup, new_raw_scores_map, prefetch_limit = arms
+
+        if accumulated_id_lists is None:
+            accumulated_id_lists = [[] for _ in batch_vector_names]
+            accumulated_scored_lists = [[] for _ in batch_vector_names]
+            point_lookup = {}
+            raw_scores_map = {}
+
+        arms_exhausted = True
+        for i in range(len(batch_vector_names)):
+            if len(new_id_lists[i]) >= prefetch_limit:
+                arms_exhausted = False
+            seen = set(accumulated_id_lists[i])
+            for item_id, score in new_scored_lists[i]:
+                if item_id not in seen:
+                    seen.add(item_id)
+                    accumulated_id_lists[i].append(item_id)
+                    accumulated_scored_lists[i].append((item_id, score))
+        point_lookup.update(new_point_lookup)
+        raw_scores_map.update(new_raw_scores_map)
+
+        pool_size = len(point_lookup) or 1
+        if query.fusion_mode == "linear":
+            fused_results = self.linear_weighted_score_fuse(
+                scored_lists=accumulated_scored_lists,
+                weights=arm_weights,
+                limit=pool_size,
+                score_threshold=query.score_threshold,
+            )
+        else:
+            fused_results = self.rrf_fuse(
+                id_lists=accumulated_id_lists,
+                weights=arm_weights,
+                limit=pool_size,
+                score_threshold=query.score_threshold,
+                k=2
+            )
+
+        def group_value_fn(item_id):
+            metadata = point_lookup[item_id].payload.get("metadata") or {}
+            return metadata.get(query.group_field)
+
+        selected, saturated_values, null_saturated, _ = apply_group_cap(
+            fused_results, group_value_fn, query.group_max, query.limit
+        )
+
+        done = (
+            len(selected) >= query.limit
+            or fetch_count >= query.group_max_fetches
+            or arms_exhausted
+            or (not saturated_values and not null_saturated)
+        )
+        if done:
+            return self._build_search_results(selected, point_lookup, raw_scores_map)
+
+        new_metadata_filter = build_group_exclusion_filter(
+            query.metadata_filter, query.group_field, saturated_values, null_saturated
+        )
+        next_query = query.model_copy(update={"metadata_filter": new_metadata_filter})
+        return await self._search_grouped(
+            collection_name,
+            next_query,
+            collection_config,
+            required_fields,
+            accumulated_id_lists,
+            accumulated_scored_lists,
+            point_lookup,
+            raw_scores_map,
+            fetch_count + 1,
+        )
 
     def _convert_metadata_filter_to_qdrant(self, metadata_filter: MetadataFilter, collection_config: CollectionConfigInternal) -> Optional[rest.Filter]:
         """Convert recursive MetadataFilter to Qdrant Filter."""
@@ -893,6 +1011,9 @@ class QdrantDatabase(DatabaseBase):
         def convert_node(node: MetadataFilter) -> Any:
             if node.key:
                 field_path = f"metadata.{node.key}"
+                if node.op == "is_null":
+                    return rest.IsEmptyCondition(is_empty=rest.PayloadField(key=field_path))
+
                 if node.op == "eq":
                     return rest.FieldCondition(
                         key=field_path,
