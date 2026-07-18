@@ -117,6 +117,8 @@ def _database_kind_label(connection_string: str) -> str:
     scheme = connection_string.split("://", 1)[0].lower() if "://" in connection_string else ""
     known = {
         "qdrant": "Qdrant",
+        "http": "Qdrant",
+        "https": "Qdrant",
         "mariadb": "MariaDB",
         "postgresql": "PostgreSQL",
         "postgres": "PostgreSQL",

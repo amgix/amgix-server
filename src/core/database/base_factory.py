@@ -35,11 +35,14 @@ class DatabaseFactory:
         # elif url.startswith('mysql://'):
         #     from .mysql import MySQLDatabase
         #     return MySQLDatabase(url, logger=logger, **kwargs)
-        elif url.startswith('qdrant://'):
+        elif url.startswith(("qdrant://", "http://", "https://")):
             from .qdrant import QdrantDatabase
             return QdrantDatabase(url, logger=logger, **kwargs)
         elif url.startswith('postgresql://'):
             from .pgsql import PostgreSQLDatabase
             return PostgreSQLDatabase(url, logger=logger, **kwargs)
         else:
-            raise ValueError(f"Unsupported database URL scheme: {url.split('://')[0] if '://' in url else 'unknown'}. Supported: mariadb://, qdrant://, postgresql://")
+            raise ValueError(
+                f"Unsupported database URL scheme: {url.split('://')[0] if '://' in url else 'unknown'}. "
+                "Supported: mariadb://, qdrant://, http://, https://, postgresql://"
+            )

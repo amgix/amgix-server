@@ -39,6 +39,8 @@ services:
       - "6334:6334"  # gRPC
     volumes:
       - ../data/qdrant:/qdrant/storage
+    # environment:
+    #   - QDRANT__SERVICE__API_KEY=amgix
 
   rabbitmq:
     image: rabbitmq:4-management
@@ -58,6 +60,7 @@ services:
       - AMGIX_DATABASE_URL=qdrant://amgix-qdrant:6334
       - AMGIX_AMQP_URL=amqp://guest:guest@amgix-rabbitmq/
       # - AMGIX_LOG_LEVEL=INFO  # Optional: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: INFO)
+      # - AMGIX_QDRANT_TOKEN=amgix
 
   index:
     <<: *encoder-image
@@ -81,6 +84,7 @@ services:
       - AMGIX_ENCODER_ROLE=index
       # - AMGIX_LOG_LEVEL=INFO  # Optional: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: INFO)
       - AMGIX_LOAD_MODELS=false
+      # - AMGIX_QDRANT_TOKEN=amgix
 
   query:
     <<: *encoder-image
@@ -106,4 +110,5 @@ services:
       - AMGIX_ENCODER_ROLE=query
       # - AMGIX_LOG_LEVEL=INFO  # Optional: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: INFO)
       - HF_TOKEN=${HF_TOKEN}
+      # - AMGIX_QDRANT_TOKEN=amgix
 

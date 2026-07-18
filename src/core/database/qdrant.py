@@ -1,4 +1,5 @@
 import copy
+import os
 import time
 from typing import Dict, List, Any, Optional, Union, Tuple
 import asyncio
@@ -24,6 +25,31 @@ from ..common.enums import SearchExcludeField
 from ..common.lock_manager import LockClient
 
 
+def _qdrant_grpc_client_url(connection_string: str) -> str:
+    """Map AMGIX_DATABASE_URL to a gRPC endpoint URI for AsyncQdrantClient.
+
+    - qdrant://host:port  -> http://host:port  (plaintext gRPC)
+    - http://host:port    -> http://host:port
+    - https://host:port   -> https://host:port (TLS gRPC)
+    - host:port           -> http://host:port   (legacy)
+    """
+    parsed = urlparse(connection_string)
+    if parsed.scheme and parsed.hostname:
+        if parsed.scheme not in ("qdrant", "http", "https"):
+            raise ValueError(
+                f"Unsupported Qdrant connection URL scheme '{parsed.scheme}'; "
+                "expected qdrant://, http://, or https://"
+            )
+        scheme = "https" if parsed.scheme == "https" else "http"
+        port = parsed.port or 6334
+        return f"{scheme}://{parsed.hostname}:{port}"
+
+    parts = connection_string.split(":")
+    host = parts[0] or "localhost"
+    port = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 6334
+    return f"http://{host}:{port}"
+
+
 class QdrantDatabase(DatabaseBase):
     """
     Qdrant implementation of the DatabaseBase interface.
@@ -36,33 +62,23 @@ class QdrantDatabase(DatabaseBase):
         Initialize with Qdrant connection parameters and establish a persistent client.
         
         Args:
-            connection_string: URL to the Qdrant server (e.g., "http://localhost:6333" or "localhost:6334")
+            connection_string: Qdrant gRPC URL (qdrant://, http://, or https:// host:port)
             logger: Logger instance to use for this database
             **kwargs: Additional parameters for the Qdrant client
         """
         super().__init__(connection_string, logger=logger, **kwargs)
-        
-        # Parse the connection string to extract host and port
-        parsed_url = urlparse(connection_string)
-        
-        if parsed_url.scheme and parsed_url.hostname:
-            # URL format (e.g., "qdrant://localhost:6334")
-            host = parsed_url.hostname
-            port = parsed_url.port or 6334  # Default to 6334 if no port specified
-        else:
-            # Simple host:port format (e.g., "localhost:6334" or "qdrant:6334")
-            parts = connection_string.split(":")
-            host = parts[0] or "localhost"
-            port = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 6334
-            
-        # Create a persistent async client instance
-        self.client = AsyncQdrantClient(
-            host=host,
-            port=port,        # Use the port from connection string
-            prefer_grpc=True, # Use gRPC when possible
-            timeout=10,
-            **kwargs
-        )
+
+        grpc_url = _qdrant_grpc_client_url(connection_string)
+        client_kwargs: Dict[str, Any] = {
+            "url": grpc_url,
+            "prefer_grpc": True,
+            "timeout": 10,
+            **kwargs,
+        }
+        qdrant_token = os.getenv("AMGIX_QDRANT_TOKEN")
+        if qdrant_token:
+            client_kwargs["api_key"] = qdrant_token
+        self.client = AsyncQdrantClient(**client_kwargs)
     
     async def probe(self) -> None:
         # Get actual version info from Qdrant
