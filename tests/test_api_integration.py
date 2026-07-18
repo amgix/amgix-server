@@ -145,6 +145,29 @@ def create_test_document(doc_id: str, name: str, content: str, doc_type: str = "
     return doc
 
 
+def _trigrams_name_content_collection_config() -> Dict[str, Any]:
+    return {
+        "vectors": [
+            {"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["name", "content"]},
+        ],
+    }
+
+
+def _assert_fields_absent(doc: Dict[str, Any], fields: List[str]) -> None:
+    for field in fields:
+        assert field not in doc, (
+            f"Expected field '{field}' to be omitted from response, "
+            f"but it was present (value={doc.get(field)!r}); keys={list(doc.keys())}"
+        )
+
+
+def _assert_fields_present(doc: Dict[str, Any], fields: List[str]) -> None:
+    for field in fields:
+        assert field in doc, (
+            f"Expected field '{field}' in response; keys={list(doc.keys())}"
+        )
+
+
 @pytest.fixture(scope="function")
 def setup_collection(request, test_data_factory):
     """
@@ -4648,6 +4671,289 @@ def test_fetch_join_validation_errors():
 
     finally:
         requests.delete(f"{API_BASE_URL}/collections/{parent_collection}")
+
+
+@pytest.mark.all_backends
+def test_search_exclude_omits_fields_from_response():
+    """Search exclude drops named fields from JSON; without exclude they are present."""
+    collection_name = f"test_search_exclude_fields_{str(uuid.uuid4())[:8]}"
+    config = _trigrams_name_content_collection_config()
+    assert requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config).status_code == 200
+
+    try:
+        doc = create_test_document(
+            "exclude-doc-1",
+            "Exclude Test Title",
+            "Exclude test searchable content body here",
+        )
+        doc["description"] = "Exclude test description"
+        doc["metadata"] = {"genre": "integration"}
+
+        assert requests.post(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc
+        ).status_code == 200
+
+        base_query = {"query": "Exclude test searchable content", "limit": 10}
+        results = wait_for_search(
+            collection_name,
+            base_query,
+            lambda rs: any(r.get("id") == "exclude-doc-1" for r in rs),
+            timeout_s=30.0,
+        )
+        hit = next(r for r in results if r.get("id") == "exclude-doc-1")
+        _assert_fields_present(hit, ["name", "description", "content", "tags", "metadata"])
+        assert hit["name"] == "Exclude Test Title"
+        assert hit["content"] == "Exclude test searchable content body here"
+        assert hit["description"] == "Exclude test description"
+        assert hit["metadata"]["genre"] == "integration"
+        assert hit["tags"] == ["article"]
+
+        excluded = ["name", "description", "content", "tags", "metadata"]
+        exclude_query = {**base_query, "exclude": excluded}
+        results = wait_for_search(
+            collection_name,
+            exclude_query,
+            lambda rs: any(r.get("id") == "exclude-doc-1" for r in rs),
+            timeout_s=30.0,
+        )
+        hit = next(r for r in results if r.get("id") == "exclude-doc-1")
+        _assert_fields_absent(hit, excluded)
+        _assert_fields_present(hit, ["id", "timestamp", "score"])
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_search_exclude_single_field():
+    """Excluding one field leaves the others intact."""
+    collection_name = f"test_search_exclude_single_{str(uuid.uuid4())[:8]}"
+    config = _trigrams_name_content_collection_config()
+    assert requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config).status_code == 200
+
+    try:
+        doc = create_test_document(
+            "exclude-single-1",
+            "Single Exclude Title",
+            "Single exclude searchable content here",
+        )
+        doc["description"] = "Single exclude description"
+
+        assert requests.post(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc
+        ).status_code == 200
+
+        query = {
+            "query": "Single exclude searchable content",
+            "limit": 10,
+            "exclude": ["content"],
+        }
+        results = wait_for_search(
+            collection_name,
+            query,
+            lambda rs: any(r.get("id") == "exclude-single-1" for r in rs),
+            timeout_s=30.0,
+        )
+        hit = next(r for r in results if r.get("id") == "exclude-single-1")
+        _assert_fields_absent(hit, ["content"])
+        _assert_fields_present(hit, ["name", "description", "tags"])
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_search_exclude_invalid_field_rejected():
+    """Unknown exclude field values are rejected at validation."""
+    collection_name = f"test_search_exclude_invalid_{str(uuid.uuid4())[:8]}"
+    config = _trigrams_name_content_collection_config()
+    assert requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config).status_code == 200
+
+    try:
+        doc = create_test_document("exclude-invalid-1", "Title", "invalid exclude test content")
+        assert requests.post(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc
+        ).status_code == 200
+
+        r = requests.post(
+            f"{API_BASE_URL}/collections/{collection_name}/search",
+            json={"query": "invalid exclude test content", "exclude": ["vectors"]},
+        )
+        assert r.status_code == 422, f"Expected 422 for invalid exclude field, got {r.status_code}: {r.text}"
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_search_exclude_duplicate_values_accepted():
+    """Duplicate exclude entries are deduplicated and accepted."""
+    collection_name = f"test_search_exclude_dup_{str(uuid.uuid4())[:8]}"
+    config = _trigrams_name_content_collection_config()
+    assert requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config).status_code == 200
+
+    try:
+        doc = create_test_document(
+            "exclude-dup-1",
+            "Duplicate Exclude Title",
+            "Duplicate exclude searchable content here",
+        )
+        assert requests.post(
+            f"{API_BASE_URL}/collections/{collection_name}/documents/sync", json=doc
+        ).status_code == 200
+
+        query = {
+            "query": "Duplicate exclude searchable content",
+            "limit": 10,
+            "exclude": ["content", "content", "name"],
+        }
+        results = wait_for_search(
+            collection_name,
+            query,
+            lambda rs: any(r.get("id") == "exclude-dup-1" for r in rs),
+            timeout_s=30.0,
+        )
+        hit = next(r for r in results if r.get("id") == "exclude-dup-1")
+        _assert_fields_absent(hit, ["content", "name"])
+        _assert_fields_present(hit, ["tags"])
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+
+
+@pytest.mark.all_backends
+def test_search_exclude_with_join_strips_joined_documents():
+    """Exclude applies recursively to documents attached via join."""
+    parent_collection = f"test_search_exclude_join_parent_{str(uuid.uuid4())[:8]}"
+    child_collection = f"test_search_exclude_join_child_{str(uuid.uuid4())[:8]}"
+
+    parent_config = _trigrams_name_content_collection_config()
+    child_config = {
+        "vectors": [{"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["name"]}],
+        "metadata_indexes": [{"key": "parent_ref", "type": "string"}],
+    }
+    assert requests.post(f"{API_BASE_URL}/collections/{parent_collection}", json=parent_config).status_code == 200
+    assert requests.post(f"{API_BASE_URL}/collections/{child_collection}", json=child_config).status_code == 200
+
+    try:
+        parent_doc = create_test_document(
+            "exclude-parent-1",
+            "Exclude Join Parent",
+            "exclude join parent searchable content here",
+        )
+        parent_doc["description"] = "Parent description for exclude join test"
+        parent_doc["metadata"] = {"role": "parent"}
+
+        child_doc = create_test_document(
+            "exclude-child-1",
+            "Exclude Join Child",
+            "exclude join child body content here",
+        )
+        child_doc["description"] = "Child description for exclude join test"
+        child_doc["metadata"] = {"parent_ref": "exclude-parent-1", "role": "child"}
+
+        assert requests.post(
+            f"{API_BASE_URL}/collections/{parent_collection}/documents/sync", json=parent_doc
+        ).status_code == 200
+        assert requests.post(
+            f"{API_BASE_URL}/collections/{child_collection}/documents/sync", json=child_doc
+        ).status_code == 200
+
+        search_query = {
+            "query": "exclude join parent searchable content",
+            "limit": 10,
+            "join": f"{child_collection}[$id=$$.meta.parent_ref]",
+            "exclude": ["content", "description", "metadata"],
+        }
+        results = wait_for_search(
+            parent_collection,
+            search_query,
+            lambda rs: any(
+                r.get("id") == "exclude-parent-1"
+                and r.get("joined", {}).get(child_collection)
+                for r in rs
+            ),
+            timeout_s=30.0,
+        )
+
+        hit = next(r for r in results if r.get("id") == "exclude-parent-1")
+        _assert_fields_absent(hit, ["content", "description", "metadata"])
+        _assert_fields_present(hit, ["name", "tags", "joined"])
+
+        joined = hit["joined"][child_collection]
+        assert len(joined) == 1
+        assert joined[0]["id"] == "exclude-child-1"
+        _assert_fields_absent(joined[0], ["content", "description", "metadata"])
+        _assert_fields_present(joined[0], ["name", "tags"])
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{parent_collection}")
+        requests.delete(f"{API_BASE_URL}/collections/{child_collection}")
+
+
+@pytest.mark.all_backends
+def test_search_exclude_metadata_with_parent_meta_join():
+    """Excluding metadata still allows a join keyed on parent $.meta.* (fetched internally, stripped from response)."""
+    parent_collection = f"test_search_exclude_meta_join_parent_{str(uuid.uuid4())[:8]}"
+    child_collection = f"test_search_exclude_meta_join_child_{str(uuid.uuid4())[:8]}"
+
+    parent_config = _trigrams_name_content_collection_config()
+    child_config = {
+        "vectors": [{"name": "trigrams", "type": "trigrams", "top_k": 1000, "index_fields": ["name"]}],
+        "metadata_indexes": [{"key": "parent_ref", "type": "string"}],
+    }
+    assert requests.post(f"{API_BASE_URL}/collections/{parent_collection}", json=parent_config).status_code == 200
+    assert requests.post(f"{API_BASE_URL}/collections/{child_collection}", json=child_config).status_code == 200
+
+    try:
+        parent_doc = create_test_document(
+            "exclude-meta-parent-1",
+            "Meta Join Parent",
+            "exclude meta join parent searchable content here",
+        )
+        parent_doc["metadata"] = {"parent_key": "meta-join-key-1"}
+
+        child_doc = create_test_document(
+            "exclude-meta-child-1",
+            "Meta Join Child",
+            "exclude meta join child body content here",
+        )
+        child_doc["metadata"] = {"parent_ref": "meta-join-key-1"}
+
+        assert requests.post(
+            f"{API_BASE_URL}/collections/{parent_collection}/documents/sync", json=parent_doc
+        ).status_code == 200
+        assert requests.post(
+            f"{API_BASE_URL}/collections/{child_collection}/documents/sync", json=child_doc
+        ).status_code == 200
+
+        search_query = {
+            "query": "exclude meta join parent searchable content",
+            "limit": 10,
+            "join": f"{child_collection}[$.meta.parent_key=$$.meta.parent_ref]",
+            "exclude": ["metadata", "content"],
+        }
+        results = wait_for_search(
+            parent_collection,
+            search_query,
+            lambda rs: any(
+                r.get("id") == "exclude-meta-parent-1"
+                and r.get("joined", {}).get(child_collection)
+                for r in rs
+            ),
+            timeout_s=30.0,
+        )
+
+        hit = next(r for r in results if r.get("id") == "exclude-meta-parent-1")
+        _assert_fields_absent(hit, ["metadata", "content"])
+        joined = hit["joined"][child_collection]
+        assert len(joined) == 1
+        assert joined[0]["id"] == "exclude-meta-child-1"
+        _assert_fields_absent(joined[0], ["metadata", "content"])
+
+    finally:
+        requests.delete(f"{API_BASE_URL}/collections/{parent_collection}")
+        requests.delete(f"{API_BASE_URL}/collections/{child_collection}")
 
 
 if __name__ == "__main__":

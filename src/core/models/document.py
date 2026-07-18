@@ -365,7 +365,6 @@ class SearchResult(Document):
     score: float = Field(..., description="The relevance score for this document")
     vector_scores: List[VectorScore] = Field(default_factory=list, description="Raw per-vector scores with field, vector, score, and rank information")
 
-    content: Optional[str] = Field(None, exclude=True)
     vectors: Optional[List[VectorData]] = Field(default=None, exclude=True)
     token_lengths: Dict[str, int] = Field(default_factory=dict, exclude=True)
     
@@ -381,8 +380,8 @@ class SearchResult(Document):
         Returns:
             SearchResult: A properly constructed search result
         """
-        # Reuse Document's from_dict to handle timestamp conversion and other common fields
-        # We pass store_content=False since SearchResult doesn't need content
+        # Reuse Document's from_dict to handle timestamp conversion and other common fields.
+        # store_content=True: preserve whatever content the caller fetched (or None if absent).
         doc_data = data.copy()
         joined_raw = doc_data.pop('joined', None)
         if 'score' in doc_data:
@@ -405,7 +404,7 @@ class SearchResult(Document):
                     else:
                         vector_scores.append(item)
             
-            doc = Document.from_dict(doc_data, store_content=False, skip_validation=skip_validation)
+            doc = Document.from_dict(doc_data, store_content=True, skip_validation=skip_validation)
             # Create a new dict with Document fields + score
             result_data = doc.model_dump()
             result_data['score'] = score
@@ -419,7 +418,7 @@ class SearchResult(Document):
                 return cls(**result_data)
         else:
             # If no score, just convert to Document and add default score
-            doc = Document.from_dict(doc_data, store_content=False, skip_validation=skip_validation)
+            doc = Document.from_dict(doc_data, store_content=True, skip_validation=skip_validation)
             result_data = doc.model_dump()
             result_data['score'] = 0.0
             result_data['vector_scores'] = data.get('vector_scores', {})
@@ -429,6 +428,25 @@ class SearchResult(Document):
                 return cls.model_construct(**result_data)
             else:
                 return cls(**result_data)
+
+
+def apply_search_exclude(result: Dict[str, Any], exclude: List[str]) -> Dict[str, Any]:
+    """
+    Return a copy of a search hit dict with excluded fields removed.
+    Applies recursively to documents nested under joined[<collection>][*].
+    """
+    out = dict(result)
+    for field in exclude:
+        out.pop(field, None)
+    joined = out.get("joined")
+    if isinstance(joined, dict):
+        out["joined"] = {
+            coll: [apply_search_exclude(doc, exclude) for doc in docs]
+            if isinstance(docs, list)
+            else docs
+            for coll, docs in joined.items()
+        }
+    return out
 
 
 class SearchResponse(BaseModel):

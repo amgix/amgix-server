@@ -108,6 +108,30 @@ class DocumentField:
         """Return all available document fields."""
         return [cls.NAME, cls.DESCRIPTION, cls.CONTENT]
 
+
+# Document fields that can be omitted from search results via SearchQuery.exclude
+class SearchExcludeField:
+    NAME = "name"
+    DESCRIPTION = "description"
+    CONTENT = "content"
+    TAGS = "tags"
+    METADATA = "metadata"
+
+    @classmethod
+    def all(cls) -> list[str]:
+        """Return all fields that can be excluded from search results."""
+        return [cls.NAME, cls.DESCRIPTION, cls.CONTENT, cls.TAGS, cls.METADATA]
+
+
+# Type-safe literal for search result exclude fields
+SearchExcludeFieldLiteral = Literal[
+    SearchExcludeField.NAME,
+    SearchExcludeField.DESCRIPTION,
+    SearchExcludeField.CONTENT,
+    SearchExcludeField.TAGS,
+    SearchExcludeField.METADATA,
+]
+
 # Type-safe literal for document fields
 DocumentFieldLiteral = Literal[
     DocumentField.NAME,

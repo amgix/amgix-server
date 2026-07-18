@@ -27,7 +27,7 @@ from src.core.common.bunny_talk import BunnyTalk, trace_chain_var, trace_id_var
 from src.core.common.lock_manager import LockService, LockClient
 from src.core.database.base import AmgixNotFound
 from src.core.database.common import validate_metadata_filter, needs_revectorization
-from src.core.database.search_join import enrich_documents_with_joins
+from src.core.database.search_join import enrich_documents_with_joins, parse_joins_validated, required_fields_for_joins
 from datetime import datetime, timezone
 
 # Set HuggingFace Hub etag timeout to 2s for faster fallback to cache
@@ -664,7 +664,13 @@ class RpcService(EncoderBase):
             error_msg = f"Collection configuration not found for {get_user_collection_name(collection_name)}"
             self.logger.error(error_msg)
             raise AmgixNotFound(error_msg)
-        
+
+        # Parse the join expression once (independent of collection_config/cache) so it
+        # isn't re-parsed by resolve_skippable_fields and enrich_documents_with_joins,
+        # or a second time on cache-invalidation retry below.
+        join_specs = parse_joins_validated(query.join) if query.join else []
+        required_fields = required_fields_for_joins(join_specs)
+
         try:
             # Validate metadata filter against indexed metadata keys/types.
             if query.metadata_filter:
@@ -672,10 +678,10 @@ class RpcService(EncoderBase):
 
             # Run async operations safely using the background event loop
             query_with_vectors = await Vectorizer.vectorize_search_query(self.router, query, collection_config.vectors)
-            results = await self.database.search(collection_name, query_with_vectors, collection_config)
+            results = await self.database.search(collection_name, query_with_vectors, collection_config, required_fields)
             if query.join:
                 results = await enrich_documents_with_joins(
-                    self.database, results, query.join, query.limit
+                    self.database, results, query.join, query.limit, parsed_specs=join_specs
                 )
             return results
         except Exception as e:
@@ -693,10 +699,10 @@ class RpcService(EncoderBase):
                 if query.metadata_filter:
                     validate_metadata_filter(collection_config, query.metadata_filter)
                 query_with_vectors = await Vectorizer.vectorize_search_query(self.router, query, collection_config.vectors)
-                results = await self.database.search(collection_name, query_with_vectors, collection_config)
+                results = await self.database.search(collection_name, query_with_vectors, collection_config, required_fields)
                 if query.join:
                     results = await enrich_documents_with_joins(
-                    self.database, results, query.join, query.limit
+                    self.database, results, query.join, query.limit, parsed_specs=join_specs
                 )
                 return results
             # If config was fresh or retry already failed, re-raise

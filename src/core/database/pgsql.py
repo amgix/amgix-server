@@ -153,22 +153,6 @@ class PostgreSQLDatabase(SQLBase):
                 ) combined_vectors
             """,
             
-            # Select documents by pk_id list with aggregated tags (PostgreSQL uses string_agg)
-            "select_docs_in_with_tags": """
-                SELECT 
-                    d.{pk_col} AS pk_id,
-                    d.{id_col} AS id,
-                    d.{name_col} AS name,
-                    d.{description_col} AS description,
-                    d.{timestamp_col} AS timestamp,
-                    d.{metadata_col} AS metadata,
-                    (SELECT string_agg(t.{tag_col}, '|')
-                       FROM {tags_table} t
-                      WHERE t.{tag_doc_pk_col} = d.{pk_col}) AS tags
-                FROM {table} d
-                WHERE d.{pk_col} IN ({placeholders})
-            """,
-            
             # Database Probing Templates (with double quotes for PostgreSQL)
             "version_query": "SELECT current_setting('server_version') AS version",
             "table_exists_query": "SELECT (to_regclass(%s) IS NOT NULL)::int AS relation_exists",

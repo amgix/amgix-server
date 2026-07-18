@@ -7,7 +7,7 @@ from urllib.parse import urlparse, urlunparse
 from datetime import datetime
 from src.core.database.base_factory import DatabaseFactory
 from src.core.models.document import Document
-from src.core.models.vector import CollectionConfigInternal, VectorData, VectorConfigInternal, MetadataFilter
+from src.core.models.vector import CollectionConfigInternal, SearchQuery, VectorData, VectorConfigInternal, MetadataFilter
 from src.core.common import MetadataValueType, MAX_INDEXED_METADATA_VALUE_LENGTH, VectorType
 from src.core.common.enums import DocumentField
 
@@ -288,6 +288,20 @@ def validate_metadata_filter(collection_config: CollectionConfigInternal, metada
             validate_filter_recursive(filter_node.not_)
 
     validate_filter_recursive(metadata_filter)
+
+
+def resolve_skippable_fields(query: SearchQuery, required_fields: "set | frozenset" = frozenset()) -> set:
+    """
+    Fields from query.exclude that are safe to skip fetching at the DB layer for this
+    search, i.e. excluded by the caller AND not present in required_fields.
+
+    required_fields is computed once by the caller (see
+    search_join.required_fields_for_joins) from the already-parsed join specs, so
+    the join expression doesn't need to be parsed again here.
+    """
+    if not query.exclude:
+        return set()
+    return set(query.exclude) - set(required_fields)
 
 
 def needs_revectorization(

@@ -5,6 +5,7 @@ from .filter_parser import parse_filter_to_dict
 
 from ..common import (
     VectorType, VectorTypeLiteral, DocumentField, DocumentFieldLiteral,
+    SearchExcludeFieldLiteral,
     SearchFusionModeLiteral,
     DenseDistance, DenseDistanceLiteral, MAX_VECTOR_NAME_LENGTH,
     MAX_MODEL_NAME_LENGTH, MAX_DOCUMENT_TAGS_COUNT, MAX_DOCUMENT_TAG_LENGTH,
@@ -532,6 +533,15 @@ class SearchQuery(BaseModel):
         ),
     )
 
+    exclude: Optional[List[SearchExcludeFieldLiteral]] = Field(
+        None,
+        description=(
+            "Optional list of document fields to omit from search results "
+            "(and from documents attached via 'joined'). Allowed values: "
+            "name, description, content, tags, metadata."
+        ),
+    )
+
     raw_scores: bool = Field(
         default=False, description="Whether to include individual vector scores in results"
     )
@@ -570,6 +580,13 @@ class SearchQuery(BaseModel):
             raise ValueError("Score threshold must be a number")
         return v
     
+    @field_validator('exclude')
+    @classmethod
+    def dedupe_exclude(cls, v):
+        if v is None:
+            return v
+        return list(dict.fromkeys(v))
+
     @field_validator('document_tags')
     @classmethod
     def validate_document_tag_lengths(cls, v):

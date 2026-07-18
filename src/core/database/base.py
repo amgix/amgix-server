@@ -346,7 +346,8 @@ class DatabaseBase(ABC):
         self, 
         collection_name: str, 
         query: SearchQueryWithVectors,
-        collection_config: CollectionConfigInternal
+        collection_config: CollectionConfigInternal,
+        required_fields: "set | frozenset" = frozenset()
     ) -> List[SearchResult]:
         """
         Perform a hybrid search on the collection using precalculated vectors.
@@ -355,6 +356,9 @@ class DatabaseBase(ABC):
             collection_name: Name of the collection to search
             query: Search query with precalculated vectors
             collection_config: Collection configuration for distance function selection
+            required_fields: Fields from query.exclude that must still be fetched
+                because they're needed internally (e.g. for a metadata-keyed join);
+                computed once by the caller via search_join.required_fields_for_joins.
             
         Returns:
             List[SearchResult]: List of search results with document data and scores

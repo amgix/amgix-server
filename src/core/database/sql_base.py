@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from abc import abstractmethod
 from contextlib import asynccontextmanager
 from .base import DatabaseBase, AmgixNotFound
-from .common import AmgixValidationError
+from .common import AmgixValidationError, resolve_skippable_fields
 from ..models.cluster import MetricsBucket
 from ..models.document import Document, QueueDocument, QueueInfo, SearchResult, DocumentStatus, DocumentStatusResponse, VectorScore, DocumentFetchRequest, DocumentFetchResponse
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config, VectorData
@@ -24,6 +24,7 @@ from ..common import (
     get_user_collection_name, MetadataValueType, COLLECTION_INGEST_LOCK_TIMEOUT,
     MAX_HOSTNAME_LENGTH, MAX_METRIC_SOURCE_LENGTH, MAX_METRIC_KEY_LENGTH,
 )
+from ..common.enums import SearchExcludeField
 from ..common.lock_manager import LockClient
 
 
@@ -245,22 +246,6 @@ class SQLBase(DatabaseBase):
         "metadata_values_in": "{column} IN %(join_values)s",
         "sparse_documents_join": "INNER JOIN {documents_table} d ON d.`pk_id` = vd.`doc_pk_id`",
         "sparse_idf": "LN((%(total_docs)s + 1) / (idf.doc_count + 0.5))",
-
-        # Select documents by pk_id list (SQL-agnostic identifiers must be pre-quoted)
-        "select_docs_in_with_tags": """
-            SELECT 
-                d.{pk_col} AS pk_id,
-                d.{id_col} AS id,
-                d.{name_col} AS name,
-                d.{description_col} AS description,
-                d.{timestamp_col} AS timestamp,
-                d.{metadata_col} AS metadata,
-                (SELECT GROUP_CONCAT(t.{tag_col} SEPARATOR '|')
-                   FROM {tags_table} t
-                  WHERE t.{tag_doc_pk_col} = d.{pk_col}) AS tags
-            FROM {table} d
-            WHERE d.{pk_col} IN ({placeholders})
-        """,
         
         # Table Options and Feature Flags
         "table_options": "",
@@ -1889,7 +1874,13 @@ class SQLBase(DatabaseBase):
         except Exception:
             raise
     
-    async def search(self, collection_name: str, query: SearchQueryWithVectors, collection_config: CollectionConfigInternal) -> List[SearchResult]:
+    async def search(
+        self,
+        collection_name: str,
+        query: SearchQueryWithVectors,
+        collection_config: CollectionConfigInternal,
+        required_fields: "set | frozenset" = frozenset()
+    ) -> List[SearchResult]:
         """
         Perform a hybrid search on the collection using precalculated vectors.
         """
@@ -1918,7 +1909,8 @@ class SQLBase(DatabaseBase):
             query,
             search_arms,
             collection_config,
-            field_vector_ids
+            field_vector_ids,
+            required_fields
         )
 
     def _normalize_metadata_filter_value(
@@ -2016,6 +2008,7 @@ class SQLBase(DatabaseBase):
         search_arms: List[Tuple[Any, int, float, Optional[List[Tuple[int, float]]], int]],
         collection_config: CollectionConfigInternal,
         field_vector_ids: Dict[str, int],
+        required_fields: "set | frozenset" = frozenset(),
     ) -> List[SearchResult]:
         """
         Internal search method that executes vector arms in parallel and fuses the results.
@@ -2185,62 +2178,73 @@ class SQLBase(DatabaseBase):
         if not top_pk_ids:
             return []
 
-        # Second stage: fetch documents for top pk_ids only
+        # Second stage: fetch documents for top pk_ids only, skipping columns the
+        # caller excluded (and that aren't required internally, e.g. for a
+        # metadata-keyed join). id/timestamp are always fetched.
+        skippable_fields = resolve_skippable_fields(query, required_fields)
+        optional_columns = [
+            f for f in (
+                SearchExcludeField.NAME,
+                SearchExcludeField.DESCRIPTION,
+                SearchExcludeField.METADATA,
+                SearchExcludeField.CONTENT,
+            )
+            if f not in skippable_fields
+        ]
+        doc_columns = ["pk_id", "id", "timestamp"] + optional_columns
         placeholders = ", ".join(["%s"] * len(top_pk_ids))
         docs_select_sql = self.format_sql(
-            "select_docs_in_with_tags",
-            table=self.quote_identifier(docs_table),
-            tags_table=self.quote_identifier(tags_table),
-            pk_col=self.quote_identifier("pk_id"),
-            id_col=self.quote_identifier("id"),
-            name_col=self.quote_identifier("name"),
-            description_col=self.quote_identifier("description"),
-            timestamp_col=self.quote_identifier("timestamp"),
-            metadata_col=self.quote_identifier("metadata"),
-            tag_col=self.quote_identifier("tag"),
-            tag_doc_pk_col=self.quote_identifier("doc_pk_id"),
-            placeholders=placeholders
+            "select",
+            table=docs_table,
+            columns=self.quote_column_list(doc_columns),
+            where=f" WHERE {self.quote_identifier('pk_id')} IN ({placeholders})"
         )
-
         doc_rows = await self.execute_sql(docs_select_sql, tuple(top_pk_ids))
         by_pk: Dict[int, Dict[str, Any]] = {row["pk_id"]: row for row in doc_rows}
+
+        fetch_tags = SearchExcludeField.TAGS not in skippable_fields
+        tags_by_pk: Dict[int, List[str]] = {}
+        if fetch_tags:
+            tags_placeholders = ", ".join(["%s"] * len(top_pk_ids))
+            tags_sql = self.format_sql(
+                "select",
+                table=tags_table,
+                columns=self.quote_column_list(["doc_pk_id", "tag"]),
+                where=f" WHERE {self.quote_identifier('doc_pk_id')} IN ({tags_placeholders})"
+            )
+            tags_rows = await self.execute_sql(tags_sql, tuple(top_pk_ids))
+            for tag_row in tags_rows:
+                tags_by_pk.setdefault(tag_row["doc_pk_id"], []).append(tag_row["tag"])
 
         results: List[SearchResult] = []
         for pk_id, fused_score in fused_results:
             row = by_pk.get(pk_id)
             if not row:
                 continue
-            meta_raw = row.get("metadata")
-            if meta_raw:
-                metadata = json.loads(meta_raw)
-            else:
-                metadata = None
-            tags = self._parse_tags(row.get("tags"))
             ts = row["timestamp"]
             if ts is not None and getattr(ts, 'tzinfo', None) is None:
                 ts = ts.replace(tzinfo=timezone.utc)
             # Use from_dict to handle proper type conversion
             search_result_data = {
                 "id": row["id"],
-                "name": row["name"],
-                "description": row["description"],
                 "timestamp": ts,
-                "metadata": metadata,
-                "tags": tags,
                 "score": fused_score,
                 "vector_scores": raw_scores_map.get(pk_id, [])
             }
+            if SearchExcludeField.NAME in optional_columns:
+                search_result_data["name"] = row["name"]
+            if SearchExcludeField.DESCRIPTION in optional_columns:
+                search_result_data["description"] = row["description"]
+            if SearchExcludeField.CONTENT in optional_columns:
+                search_result_data["content"] = row["content"]
+            if SearchExcludeField.METADATA in optional_columns:
+                meta_raw = row.get("metadata")
+                search_result_data["metadata"] = json.loads(meta_raw) if meta_raw else None
+            if fetch_tags:
+                search_result_data["tags"] = tags_by_pk.get(pk_id, [])
             results.append(SearchResult.from_dict(search_result_data, skip_validation=True))
 
         return results
-
-
-    def _parse_tags(self, tags_raw) -> List[str]:
-        """Helper method to parse tags from raw database output."""
-        if tags_raw and isinstance(tags_raw, str):
-            return [tag.strip() for tag in tags_raw.split("|") if tag.strip()]
-        else:
-            return []
 
     async def get_collection_info_internal(self, collection_name: str) -> CollectionConfigInternal:        
         """Get internal information about a collection."""

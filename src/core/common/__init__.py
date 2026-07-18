@@ -69,6 +69,8 @@ __all__ = [
     "VectorTypeLiteral", 
     "DocumentField",
     "DocumentFieldLiteral",
+    "SearchExcludeField",
+    "SearchExcludeFieldLiteral",
     "SearchFusionMode",
     "SearchFusionModeLiteral",
     "QueuedDocumentStatus",

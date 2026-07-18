@@ -13,10 +13,12 @@ from qdrant_client.http import models as rest
 from qdrant_client.models import FormulaQuery, SumExpression, MultExpression, Prefetch
 
 from .base import DatabaseBase, AmgixNotFound
+from .common import resolve_skippable_fields
 from ..models.cluster import MetricsBucket
 from ..models.document import Document, SearchResult, QueueDocument, QueueInfo, DocumentStatus, DocumentStatusResponse, VectorScore, DocumentFetchRequest, DocumentFetchResponse
 from ..models.vector import CollectionConfigInternal, SearchQueryWithVectors, CollectionConfig, VectorConfig, MetadataFilter, internal_to_user_config, VectorData
 from ..common import APP_PREFIX, VectorType, DatabaseInfo, DatabaseFeatures, DenseDistance, QueuedDocumentStatus, QueueOperationType, QueueOperationTypeLiteral, get_user_collection_name, MetadataValueType, search_prefetch_limit
+from ..common.enums import SearchExcludeField
 from ..common.lock_manager import LockClient
 
 
@@ -688,7 +690,8 @@ class QdrantDatabase(DatabaseBase):
         self, 
         collection_name: str, 
         query: SearchQueryWithVectors,
-        collection_config: CollectionConfigInternal
+        collection_config: CollectionConfigInternal,
+        required_fields: "set | frozenset" = frozenset()
     ) -> List[SearchResult]:
         """
         Perform a hybrid search on the collection using precalculated vectors.
@@ -750,6 +753,11 @@ class QdrantDatabase(DatabaseBase):
         # Execute batch vector searches and combine with RRF fusion
         
         # Prepare batch search requests
+        skippable_fields = resolve_skippable_fields(query, required_fields)
+        payload_fields = ["id", "timestamp"] + [
+            f for f in SearchExcludeField.all() if f not in skippable_fields
+        ]
+
         batch_requests = []
         batch_vector_names: List[str] = []
         prefetch_limit = search_prefetch_limit(query.limit)
@@ -767,8 +775,6 @@ class QdrantDatabase(DatabaseBase):
             weight_map[field_vector_name] = weight
             
             # Create search request for this vector
-            # Request only payload fields needed for SearchResult (exclude content to reduce transfer)
-            payload_fields = ["id", "timestamp", "name", "description", "metadata", "tags"]
             if VectorType.is_dense(vector_data.vector_type):
                 query_request = rest.QueryRequest(
                     using=field_vector_name,

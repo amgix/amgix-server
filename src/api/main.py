@@ -38,6 +38,7 @@ from src.core.models.document import (
     QueueInfo,
     SearchResult,
     SearchResponse,
+    apply_search_exclude,
 )
 from src.core.models.vector import CollectionConfig, CollectionConfigInternal, VectorConfigInternal, SearchQuery, SearchQueryWithVectors, ModelValidationResponse
 from src.core.models.vector import VectorData
@@ -1155,6 +1156,12 @@ async def search(collection_name: CollectionName, query: SearchQuery = ...) -> S
         return_type=List[SearchResult]
     )
     query_time_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+
+    if query.exclude:
+        return JSONResponse(content={
+            "results": [apply_search_exclude(r, query.exclude) for r in results],
+            "query_time_ms": query_time_ms,
+        })
     return SearchResponse(results=results, query_time_ms=query_time_ms)
 
 

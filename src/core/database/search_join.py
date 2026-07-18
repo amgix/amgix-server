@@ -5,14 +5,36 @@ Document enrichment: left-join documents from other collections.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
+from src.core.common.enums import SearchExcludeField
 from src.core.common.functions import get_real_collection_name
 from src.core.database.base import AmgixNotFound, DatabaseBase
 from src.core.database.common import AmgixValidationError, validate_metadata_filter
 from src.core.models.document import Document
 from src.core.models.join_parser import JoinSideRef, JoinSpec, parse_joins
 from src.core.models.vector import CollectionConfigInternal, MetadataFilter
+
+
+def parse_joins_validated(join: Union[str, List[str]]) -> List[JoinSpec]:
+    """Parse a join expression, wrapping syntax errors as AmgixValidationError."""
+    try:
+        return parse_joins(join)
+    except ValueError as e:
+        raise AmgixValidationError(str(e)) from None
+
+
+def required_fields_for_joins(specs: List[JoinSpec]) -> set:
+    """
+    Fields that must be fetched for the parent document regardless of exclude,
+    because a join needs them to compute the parent-side join value.
+
+    Currently the only such dependency is a parent ref that reads a value off the
+    parent document's metadata (e.g. "collection[$.meta.foo=$$id]").
+    """
+    if any(spec.parent_ref.kind == "meta" for spec in specs):
+        return {SearchExcludeField.METADATA}
+    return set()
 
 
 def _parent_join_value(document: Document, ref: JoinSideRef) -> Any:
@@ -161,11 +183,15 @@ async def enrich_documents_with_joins(
     documents: List[Document],
     join: Union[str, List[str]],
     limit: int,
+    parsed_specs: Optional[List[JoinSpec]] = None,
 ) -> List[Document]:
-    try:
-        specs = parse_joins(join)
-    except ValueError as e:
-        raise AmgixValidationError(str(e)) from None
+    """
+    Args:
+        parsed_specs: If the caller already parsed/validated `join` (e.g. to compute
+            required_fields_for_joins before calling this), pass the specs here to
+            avoid parsing the same expression twice. If None, `join` is parsed here.
+    """
+    specs = parsed_specs if parsed_specs is not None else parse_joins_validated(join)
 
     for spec in specs:
         real_child = get_real_collection_name(spec.collection_name)
