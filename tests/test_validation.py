@@ -35,29 +35,40 @@ class TestCollectionNameValidation:
         assert isinstance(error_detail, list) and len(error_detail) > 0
     
     def test_collection_name_with_url_special_chars(self):
-        """Test collection names with URL special characters that get truncated."""
-        # These characters have special meaning in URLs and won't reach the API as intended
-        url_special_chars = [
-            "test#collection",  # URL fragment - only "test" reaches the API
-            "test?collection",  # URL query - only "test" reaches the API  
-            "test/collection",  # Path separator - only "test" reaches the API
-            "test&collection",  # Query param separator - only "test" reaches the API
-            "test=collection",  # Query param assignment - only "test" reaches the API
+        """URL parsing can truncate names (# ?) or deliver them literally (& =); / hits another route."""
+        config = {
+            "vectors": [{"name": "test", "type": "trigrams", "index_fields": ["name"]}],
+        }
+
+        # Fragment and query-string start truncate the name the server sees.
+        truncated_cases = [
+            ("test#collection", "test"),
+            ("test?collection", "test"),
         ]
-        
-        for name in url_special_chars:
-            # The API should only see the part before the special character
-            # This could cause confusion - user thinks they're creating "test#collection"
-            # but actually creating "test"
-            response = requests.post(f"{API_BASE_URL}/collections/{name}", json={
-                "vectors": [{"name": "test", "type": "trigrams", "index_fields": ["name"]}]
-            })
-            
-            # These should succeed because the API only sees the valid part
-            # But this demonstrates why our validation is important
-            if response.status_code == 200:
-                # Clean up if it was created - the same URL truncation applies
-                requests.delete(f"{API_BASE_URL}/collections/{name}")
+
+        for raw_name, expected_name in truncated_cases:
+            requests.delete(f"{API_BASE_URL}/collections/{expected_name}")
+            response = requests.post(f"{API_BASE_URL}/collections/{raw_name}", json=config)
+            assert response.status_code == 200, (
+                f"Expected create via truncated URL for {raw_name!r}: {response.status_code} {response.text}"
+            )
+            listed = requests.get(f"{API_BASE_URL}/collections")
+            assert listed.status_code == 200, listed.text
+            assert expected_name in listed.json(), (
+                f"Expected collection {expected_name!r} after POST with {raw_name!r}, got {listed.json()!r}"
+            )
+            requests.delete(f"{API_BASE_URL}/collections/{expected_name}")
+
+        # In a path segment, & and = are not URL metacharacters — the full name reaches the server.
+        for name in ("test&collection", "test=collection"):
+            response = requests.post(f"{API_BASE_URL}/collections/{name}", json=config)
+            assert response.status_code == 422, f"Should reject '{name}': {response.status_code} {response.text}"
+            error_detail = response.json()["detail"]
+            assert isinstance(error_detail, list) and len(error_detail) > 0
+
+        # Extra path segment — not a valid create-collection route.
+        response = requests.post(f"{API_BASE_URL}/collections/test/collection", json=config)
+        assert response.status_code in (404, 405), response.text
     
     def test_collection_name_with_other_special_chars(self):
         """Test collection names with other special characters that should be rejected."""
@@ -261,8 +272,7 @@ class TestSearchQueryValidation:
             "query": "test query",
             "vector_options": [{"vector_name": "test_vector", "weight": 1.0, "field": "name"}]
         })
-        # Should not fail validation (might fail for other reasons, but not validation)
-        assert response.status_code != 422
+        assert response.status_code == 200, response.text
 
 
 if __name__ == "__main__":

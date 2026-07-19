@@ -1337,71 +1337,75 @@ def test_invalid_collection():
 
 @pytest.mark.all_backends
 def test_timestamp_based_deduplication():
-    """Test that documents are only upserted if they have newer timestamps."""
-    collection_name = "test_timestamp_dedup"
-    
-    # Clean up any existing collection
-    requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
-
-
-@pytest.mark.all_backends
-def test_sparse_model_vectors():
-    """Test sparse_model vector functionality end-to-end."""
-    
-    collection_name = f"test_sparse_model_{str(uuid.uuid4())[:8]}"
-    
-    # Create collection with sparse_model vector  
+    """Documents are only re-indexed when the incoming timestamp is newer than stored."""
+    collection_name = f"test_timestamp_dedup_{uuid.uuid4().hex[:8]}"
     config = {
         "vectors": [
             {
-                "name": "sparse_model",
-                "type": "sparse_model",
-                "model": "prithivida/Splade_PP_en_v1", 
-                "top_k": 100,
-                "index_fields": ["content"]
+                "name": "trigrams",
+                "type": "trigrams",
+                "top_k": 1000,
+                "index_fields": ["name"],
             }
         ]
     }
-    
+
     try:
-        # Create collection
         response = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config)
-        if response.status_code != 200:
-            print(f"Sparse model collection creation failed: {response.status_code}")
-            print(f"Response: {response.text}")
-        assert response.status_code == 200
-        
-        # Add test documents
-        documents = [
-            create_test_document("sm_doc1", "Database Systems", "Relational databases and SQL queries"),
-            create_test_document("sm_doc2", "Cloud Computing", "AWS, Azure, and distributed systems")
-        ]
-        
-        # Insert documents - this will trigger sparse_model vector generation
-        for doc in documents:
-            response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents", json=doc)
-            assert response.status_code == 200, f"Failed to insert sparse_model document {doc['id']}: {response.text}"
-        
-        # Wait for processing
-        for doc in documents:
-            wait_for_document(collection_name, doc["id"])
-        
-        # Test search - this will trigger sparse_model vector generation for query
-        search_query = {
-            "query": "database management systems",
-            "limit": 10
-        }
-        
-        response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/search", json=search_query)
-        assert response.status_code == 200, f"Sparse model search failed: {response.text}"
-        results = parse_search_response(response.json())
-        assert len(results) > 0, "Sparse model search returned no results"
-        
-        print(f"✅ Sparse model vectors working: {len(results)} search results")
-        
+        assert response.status_code == 200, response.text
+
+        old_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        new_time = datetime(2024, 1, 2, 12, 0, 0, tzinfo=timezone.utc)
+        doc_id = "dedup_test_doc"
+
+        doc_old = create_test_document(doc_id, "Original Title", "Original content")
+        doc_old["timestamp"] = old_time.isoformat()
+        response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents", json=doc_old)
+        assert response.status_code == 200, response.text
+        wait_for_document(collection_name, doc_id)
+
+        response = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc_id}")
+        assert response.status_code == 200, response.text
+        assert response.json()["name"] == "Original Title"
+
+        doc_new = create_test_document(doc_id, "Updated Title", "Updated content")
+        doc_new["timestamp"] = new_time.isoformat()
+        response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents", json=doc_new)
+        assert response.status_code == 200, response.text
+        wait_for_document(collection_name, doc_id)
+
+        def _updated() -> bool:
+            r = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc_id}")
+            return r.status_code == 200 and r.json().get("name") == "Updated Title"
+
+        assert wait_until(_updated, timeout_s=10.0), "Timed out waiting for newer timestamp update"
+
+        doc_older = create_test_document(doc_id, "Should Not Update", "Should not be stored")
+        doc_older["timestamp"] = old_time.isoformat()
+        response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents", json=doc_older)
+        assert response.status_code == 200, response.text
+        wait_for_document(collection_name, doc_id)
+
+        response = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc_id}")
+        assert response.status_code == 200, response.text
+        assert response.json()["name"] == "Updated Title"
+
+        doc_same = create_test_document(doc_id, "Same Timestamp", "Same timestamp content")
+        doc_same["timestamp"] = new_time.isoformat()
+        response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents", json=doc_same)
+        assert response.status_code == 200, response.text
+        time.sleep(2)
+
+        def _still_updated() -> bool:
+            r = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc_id}")
+            return r.status_code == 200 and r.json().get("name") == "Updated Title"
+
+        assert wait_until(_still_updated, timeout_s=5.0), "Stale/same timestamp must not overwrite document"
     finally:
-        # Cleanup
-        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+        try:
+            requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
+        except Exception:
+            pass
 
 
 @pytest.mark.all_backends
@@ -1462,123 +1466,6 @@ def test_sparse_model_end_to_end():
     finally:
         # Cleanup
         requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
-
-    # Create collection
-    config = {
-        "vectors": [
-            {
-                "name": "trigrams",
-                "type": "trigrams", 
-                "top_k": 1000,
-                "index_fields": ["name"]
-            }
-        ]
-    }
-    response = requests.post(f"{API_BASE_URL}/collections/{collection_name}", json=config)
-    if response.status_code != 200:
-        print(f"Collection creation failed: {response.status_code}")
-        print(f"Response: {response.text}")
-    assert response.status_code == 200
-    
-    # Test timestamps - use specific times for predictable ordering
-    old_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-    new_time = datetime(2024, 1, 2, 12, 0, 0, tzinfo=timezone.utc)
-    
-    doc_id = "dedup_test_doc"
-    
-    # Step 1: Insert document with old timestamp
-    doc_old = create_test_document(doc_id, "Original Title", "Original content")
-    doc_old["timestamp"] = old_time.isoformat()
-    
-    response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents", json=doc_old)
-    if response.status_code != 200:
-        print(f"Collection creation failed: {response.status_code}")
-        print(f"Response: {response.text}")
-    assert response.status_code == 200
-    
-    # Wait for processing
-    wait_for_document(collection_name, doc_id)
-    
-    # Verify document was stored (note: content is not stored in DB, only title/description/metadata)
-    response = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc_id}")
-    if response.status_code != 200:
-        print(f"Collection retrieval failed: {response.status_code}")
-        print(f"Response: {response.text}")
-    assert response.status_code == 200
-    stored_doc = response.json()
-    assert stored_doc["name"] == "Original Title"
-    # Content is not stored in database, so we can't verify it
-    
-    # Step 2: Try to update with newer timestamp - should succeed
-    doc_new = create_test_document(doc_id, "Updated Title", "Updated content")
-    doc_new["timestamp"] = new_time.isoformat()
-    
-    response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents", json=doc_new)
-    if response.status_code != 200:
-        print(f"Collection creation failed: {response.status_code}")
-        print(f"Response: {response.text}")
-    assert response.status_code == 200
-    
-    # Wait for processing
-    wait_for_document(collection_name, doc_id)
-    
-    # Verify document was updated (poll until title changes)
-    def _updated() -> bool:
-        r = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc_id}")
-        if r.status_code != 200:
-            return False
-        return r.json().get("name") == "Updated Title"
-    ok = wait_until(_updated, timeout_s=10.0)
-    assert ok, "Timed out waiting for title to update to 'Updated Title'"
-    # Content is not stored in database, so we can't verify it
-    
-    # Step 3: Try to update with older timestamp - should be ignored
-    doc_older = create_test_document(doc_id, "Should Not Update", "Should not be stored")
-    doc_older["timestamp"] = old_time.isoformat()
-    
-    response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents", json=doc_older)
-    if response.status_code != 200:
-        print(f"Collection creation failed: {response.status_code}")
-        print(f"Response: {response.text}")
-    assert response.status_code == 200  # API accepts it, but encoder should ignore
-    
-    # Wait for processing
-    wait_for_document(collection_name, doc_id)
-    
-    # Verify document was NOT updated (still has new title)
-    response = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc_id}")
-    if response.status_code != 200:
-        print(f"Collection retrieval failed: {response.status_code}")
-        print(f"Response: {response.text}")
-    assert response.status_code == 200
-    stored_doc = response.json()
-    assert stored_doc["name"] == "Updated Title"  # Should still be updated version
-    
-    # Step 4: Try to update with same timestamp - should be ignored
-    doc_same = create_test_document(doc_id, "Same Timestamp", "Same timestamp content")
-    doc_same["timestamp"] = new_time.isoformat()  # Same as current
-    
-    response = requests.post(f"{API_BASE_URL}/collections/{collection_name}/documents", json=doc_same)
-    if response.status_code != 200:
-        print(f"Collection creation failed: {response.status_code}")
-        print(f"Response: {response.text}")
-    assert response.status_code == 200  # API accepts it, but encoder should ignore
-    
-    # Wait for processing
-    time.sleep(2)
-    
-    # Verify document was NOT updated (still has previous title), poll a bit to be sure
-    def _still_updated() -> bool:
-        r = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc_id}")
-        return r.status_code == 200 and r.json().get("name") == "Updated Title"
-    ok = wait_until(_still_updated, timeout_s=5.0)
-    assert ok
-    
-    # Cleanup
-    try:
-        requests.delete(f"{API_BASE_URL}/collections/{collection_name}")
-    except Exception as e:
-        print(f"Warning: Failed to cleanup collection {collection_name}: {e}")
 
 
 @pytest.mark.dense_vectors_only
