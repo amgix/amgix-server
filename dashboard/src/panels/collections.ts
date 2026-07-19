@@ -16,6 +16,7 @@ import {
 import $ from 'jquery'
 
 import { hideDashboardError, showDashboardError } from '../error-bar'
+import { dashboardSkipReauthOn401 } from '../api-key'
 import {
   createPollFailureStreakNotifier,
   DASHBOARD_LOAD_RETRY_MS,
@@ -821,7 +822,7 @@ export class CollectionsPanel extends DashboardPanel {
           }
           setActionsBusy(true)
           try {
-            await api.emptyCollection({ collectionName: name })
+            await api.emptyCollection({ collectionName: name }, dashboardSkipReauthOn401())
             await this.selectCollection(api, name, $nav, $detail)
           } catch (err) {
             showDashboardError(await buildErrorMessage('Could not empty the collection.', err))
@@ -844,7 +845,7 @@ export class CollectionsPanel extends DashboardPanel {
           }
           setActionsBusy(true)
           try {
-            await api.deleteCollectionQueue({ collectionName: name })
+            await api.deleteCollectionQueue({ collectionName: name }, dashboardSkipReauthOn401())
             await this.selectCollection(api, name, $nav, $detail)
           } catch (err) {
             showDashboardError(await buildErrorMessage('Could not clear the queue.', err))
@@ -867,7 +868,7 @@ export class CollectionsPanel extends DashboardPanel {
           }
           setActionsBusy(true)
           try {
-            await api.deleteCollection({ collectionName: name })
+            await api.deleteCollection({ collectionName: name }, dashboardSkipReauthOn401())
             await this.loadCollectionsNav(api, $nav, $detail, null)
           } catch (err) {
             showDashboardError(await buildErrorMessage('Could not delete the collection.', err))

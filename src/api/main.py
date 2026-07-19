@@ -20,6 +20,7 @@ import zlib
 
 from src.api import api_metrics as api_metrics_module
 from src.api.api_metrics import ApiMetricsMiddleware, init_api_metrics_service
+from src.api.auth import ApiKeyAuthMiddleware, log_auth_startup
 from src.api.prometheus_metrics import metrics_to_prometheus_text
 from src.core.common.bunny_talk import BunnyTalk
 from src.core.common.lock_manager import LockService, LockClient
@@ -180,6 +181,7 @@ async def lifespan(app: FastAPI):
     global _database, _bunny_talk, _rabbitmq_broker_version
 
     logger.info(f"Starting {APP_NAME} API v{AMGIX_VERSION}")
+    log_auth_startup(logger)
 
     # Initialize BunnyTalk for RPC calls
     _bunny_talk = await BunnyTalk.create(logger, AMGIX_AMQP_URL)
@@ -1187,6 +1189,7 @@ v1_api.include_router(shared_router)
 app.include_router(v1_api, tags=["Amgix"])    # /v1/collections, /v1/collections/{name}/documents, etc.
 
 app.add_middleware(ApiMetricsMiddleware)
+app.add_middleware(ApiKeyAuthMiddleware)
 
 app.mount(
     "/dashboard",

@@ -17,23 +17,34 @@ import $ from 'jquery'
 import { MDCTopAppBar } from '@material/top-app-bar/component'
 import { AmgixApi, Configuration } from '@amgix/amgix-client'
 
+import {
+  ApiKeyRequiredError,
+  createApiKeyMiddleware,
+  ensureApiKeyAccess,
+  initDashboardApiKeyButton,
+} from './api-key-gate'
+import { amgixApiBasePath } from './api-key'
 import { initDashboardErrorBar } from './error-bar'
-import { initDashboardNav } from './panel-nav'
+import { initDashboardNav, refreshActivePanel } from './panel-nav'
 import { initDashboardThemeToggle } from './theme'
-
-function amgixApiBasePath(): string {
-  if (import.meta.env.DEV) {
-    // Same origin as the Vite dev server; `vite.config` proxies `/v1` → API (avoids CORS).
-    return ''
-  }
-  return window.location.origin
-}
 
 export const amgixConfiguration = new Configuration({
   basePath: amgixApiBasePath(),
+  middleware: [createApiKeyMiddleware()],
 })
 
 export const amgixApi = new AmgixApi(amgixConfiguration)
+
+async function bootstrapDashboard(): Promise<void> {
+  try {
+    await ensureApiKeyAccess()
+  } catch (err) {
+    if (!(err instanceof ApiKeyRequiredError)) {
+      throw err
+    }
+  }
+  initDashboardNav(amgixApi)
+}
 
 $(() => {
   $('.dashboard-logo-slot').attr('src', logoUrl)
@@ -42,6 +53,12 @@ $(() => {
     MDCTopAppBar.attachTo(barEl)
   }
   initDashboardErrorBar()
-  initDashboardNav(amgixApi)
   initDashboardThemeToggle($('#theme-toggle'))
+  initDashboardApiKeyButton($('#api-key-toggle'))
+
+  $(document).on('amgix-dashboard-api-key-changed', () => {
+    refreshActivePanel()
+  })
+
+  void bootstrapDashboard()
 })

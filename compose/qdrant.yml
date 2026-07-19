@@ -61,6 +61,7 @@ services:
       - AMGIX_AMQP_URL=amqp://guest:guest@amgix-rabbitmq/
       # - AMGIX_LOG_LEVEL=INFO  # Optional: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: INFO)
       # - AMGIX_QDRANT_TOKEN=amgix
+      # - AMGIX_READ_KEY=amgix
 
   index:
     <<: *encoder-image

@@ -27,6 +27,7 @@ import type { ZoomPluginOptions } from 'chartjs-plugin-zoom/types/options'
 import $ from 'jquery'
 
 import { hideDashboardError, showDashboardError } from '../error-bar'
+import { amgixFetch } from '../api-key'
 import { formatDashboardRouteHash, parseDashboardRouteHash, type HomeMetricsTabId } from '../route-hash'
 import {
   createPollFailureStreakNotifier,
@@ -461,7 +462,7 @@ function clusterApiErrPerSecColumnHelpText(): string {
 type HomeReadinessKey = 'database' | 'rabbitmq' | 'index' | 'query'
 
 async function fetchReadiness(): Promise<ReadyResponse> {
-  const res = await fetch('/v1/health/ready')
+  const res = await amgixFetch('/v1/health/ready')
   if (!res.ok) {
     throw new Error(`Readiness request failed (HTTP ${res.status})`)
   }

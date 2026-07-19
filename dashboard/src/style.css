@@ -114,7 +114,8 @@ body {
 }
 
 #dashboard-top-bar .dashboard-nav button,
-#dashboard-top-bar .dashboard-theme-toggle {
+#dashboard-top-bar .dashboard-theme-toggle,
+#dashboard-top-bar .dashboard-api-key-toggle {
   color: var(--top-bar-button);
 }
 
@@ -202,7 +203,8 @@ body {
 
 #dashboard-top-bar .dashboard-nav button:hover,
 #dashboard-top-bar .dashboard-nav .dashboard-nav-link:hover,
-#dashboard-top-bar .dashboard-theme-toggle:hover {
+#dashboard-top-bar .dashboard-theme-toggle:hover,
+#dashboard-top-bar .dashboard-api-key-toggle:hover {
   /* background-color: #ffffff44; */
   color: #ddddff;
 }
@@ -225,6 +227,77 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+.dashboard-api-key-toggle {
+  font-family: var(--sans);
+  font-size: 0.875rem;
+  font-weight: 500;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dashboard-api-key-toggle--active {
+  color: #a7f3d0;
+}
+
+.dashboard-api-key-dialog {
+  width: min(92vw, 28rem);
+  max-width: min(92vw, 28rem);
+}
+
+.dashboard-api-key-message {
+  margin: 0;
+  padding: 0 1rem 0.75rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--text) 82%, transparent);
+}
+
+.dashboard-api-key-input {
+  display: block;
+  box-sizing: border-box;
+  width: calc(100% - 2rem);
+  margin: 0 1rem 0.75rem;
+  padding: 0.65rem 0.75rem;
+  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, monospace;
+  font-size: 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.dashboard-api-key-error {
+  margin: 0 1rem 0.75rem;
+  font-size: 0.875rem;
+  color: #dc2626;
+}
+
+:root[data-theme='dark'] .dashboard-api-key-error {
+  color: #fca5a5;
+}
+
+.dashboard-api-key-cancel {
+  font-family: var(--sans);
+  font-size: 0.875rem;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.dashboard-api-key-cancel:hover {
+  background: color-mix(in srgb, var(--text) 6%, var(--bg));
 }
 
 .dashboard-main {

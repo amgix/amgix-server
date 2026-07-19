@@ -88,6 +88,12 @@ export function showPanel(id: PanelId): void {
   }
 }
 
+export function refreshActivePanel(): void {
+  if (activePanel != null && dashboardApi) {
+    panels[activePanel].refresh(dashboardApi)
+  }
+}
+
 export function initDashboardNav(api: AmgixApi): void {
   dashboardApi = api
   $('[data-panel-link]').on('click', function () {
