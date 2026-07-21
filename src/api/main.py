@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 import uuid
 
 from fastapi import FastAPI, HTTPException, Path, Query, Request, APIRouter
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from typing import Annotated
@@ -228,6 +229,64 @@ app = FastAPI(
     description=f"Amgix ({APP_NAME}) - Open-Source Hybrid Search System",
     lifespan=lifespan)
 
+
+# Paths that require no API key (must mirror auth._PUBLIC_GET_PATHS).
+_PUBLIC_OPENAPI_PATHS = frozenset(
+    {
+        "/v1/version",
+        "/v1/health/check",
+        "/v1/health/ready",
+    }
+)
+
+
+def _build_openapi_schema() -> dict:
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+
+    components = schema.setdefault("components", {})
+    security_schemes = components.setdefault("securitySchemes", {})
+    security_schemes["ApiKeyHeader"] = {
+        "type": "apiKey",
+        "in": "header",
+        "name": "api-key",
+    }
+    security_schemes["BearerAuth"] = {
+        "type": "http",
+        "scheme": "bearer",
+    }
+
+    # Auth is optional at the server level (enabled only when AMGIX_*_KEY env
+    # vars are set), but the spec always documents both supported schemes so a
+    # single generated client works against auth-enabled and auth-disabled
+    # deployments alike. Either scheme satisfies a request.
+    schema["security"] = [
+        {"ApiKeyHeader": []},
+        {"BearerAuth": []},
+    ]
+
+    for path in _PUBLIC_OPENAPI_PATHS:
+        path_item = schema.get("paths", {}).get(path)
+        if not path_item:
+            continue
+        for operation in path_item.values():
+            if isinstance(operation, dict):
+                operation["security"] = []
+
+    return schema
+
+
+def _custom_openapi():
+    if app.openapi_schema is None:
+        app.openapi_schema = _build_openapi_schema()
+    return app.openapi_schema
+
+
+app.openapi = _custom_openapi
 
 
 @app.exception_handler(Exception)
