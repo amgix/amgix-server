@@ -63,7 +63,7 @@ jobs:
         run: docker run --rm -v ${{ github.workspace }}:/work alpine sh -c "chown -R $(id -u):$(id -g) /work || true"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set version
         run: |
@@ -80,17 +80,17 @@ jobs:
           echo "Image tag: $REF, build-arg AMGIX_VERSION=$VERSION_NO_V"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # Small images: api, encoder-noembed, one-noembed
       - name: Build and push amgix-api
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: build/Dockerfile-api
@@ -103,7 +103,7 @@ jobs:
             AMGIX_VERSION=${{ env.AMGIX_VERSION }}
 
       - name: Build and push amgix-encoder (NoEmbed)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: build/Dockerfile-encoder
@@ -117,7 +117,7 @@ jobs:
             AMGIX_BUILD_ST=
 
       - name: Build and push amgix-one (NoEmbed)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: build/one/Dockerfile-one
@@ -141,7 +141,7 @@ jobs:
         run: docker run --rm -v ${{ github.workspace }}:/work alpine sh -c "chown -R $(id -u):$(id -g) /work || true"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set version
         run: |
@@ -158,16 +158,16 @@ jobs:
           echo "Image tag: $REF, build-arg AMGIX_VERSION=$VERSION_NO_V"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push amgix-encoder (GPU)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: build/Dockerfile-encoder
@@ -191,7 +191,7 @@ jobs:
         run: docker run --rm -v ${{ github.workspace }}:/work alpine sh -c "chown -R $(id -u):$(id -g) /work || true"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set version
         run: |
@@ -208,16 +208,16 @@ jobs:
           echo "Image tag: $REF, build-arg AMGIX_VERSION=$VERSION_NO_V"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push amgix-encoder (CPU)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: build/Dockerfile-encoder
@@ -241,7 +241,7 @@ jobs:
         run: docker run --rm -v ${{ github.workspace }}:/work alpine sh -c "chown -R $(id -u):$(id -g) /work || true"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set version
         run: |
@@ -258,16 +258,16 @@ jobs:
           echo "Image tag: $REF, build-arg AMGIX_VERSION=$VERSION_NO_V"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push amgix-one (CPU)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: build/one/Dockerfile-one
@@ -291,7 +291,7 @@ jobs:
         run: docker run --rm -v ${{ github.workspace }}:/work alpine sh -c "chown -R $(id -u):$(id -g) /work || true"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set version
         run: |
@@ -308,16 +308,16 @@ jobs:
           echo "Image tag: $REF, build-arg AMGIX_VERSION=$VERSION_NO_V"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push amgix-one (GPU)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: build/one/Dockerfile-one
@@ -336,8 +336,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/checkout@v7
+      - uses: softprops/action-gh-release@v3
         with:
           draft: true
           generate_release_notes: true
