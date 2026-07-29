@@ -7,6 +7,7 @@ from ..common import VectorType, WMTR_DEFAULT_TRIGRAM_WEIGHT
 from ..common.embed_router import EmbedRouter
 from .dense_custom import CustomDenseVector
 from .sparse_custom import CustomSparseVector
+from .exceptions import VectorizationException
 
 
 class Vectorizer:
@@ -56,7 +57,8 @@ class Vectorizer:
             Document: Document with pre-calculated vectors
             
         Raises:
-            ValueError: If a vector type is not supported or configuration is invalid
+            ValueError: Invalid input / config (permanent validation failure)
+            VectorizationException: Runtime generation failure (model/router errors)
         """
         vectors_per_doc: List[List[VectorData]] = [[] for _ in range(len(documents))]
         token_lengths_per_doc: List[Dict[str, int]] = [{} for _ in range(len(documents))]
@@ -170,12 +172,12 @@ class Vectorizer:
                             ))
                             if config.type in VectorType.sparse_types():
                                 token_lengths_per_doc[doc_idx][field_vector_name] = token_length
+            except ValueError:
+                raise
             except Exception as e:
-                # Preserve helpful error context by vector config
-                if config.type in (VectorType.DENSE_CUSTOM, VectorType.SPARSE_CUSTOM):
-                    # For custom types, errors include field-level messages above
-                    raise
-                raise ValueError(f"Failed to generate vector '{config.name}' for fields {config.index_fields}: {str(e)}") from e
+                raise VectorizationException(
+                    f"Failed to generate vector '{config.name}' for fields {config.index_fields}: {e}"
+                ) from e
 
         for i, doc in enumerate(documents):
             doc.vectors = vectors_per_doc[i]
@@ -205,7 +207,8 @@ class Vectorizer:
             SearchQueryWithVectors: Search query with pre-calculated vectors
             
         Raises:
-            ValueError: If a vector type is not supported or configuration is invalid
+            ValueError: Invalid input / config (permanent validation failure)
+            VectorizationException: Runtime generation failure (model/router errors)
         """
         # Validate that search query is not empty
         if not query.query:
@@ -309,12 +312,17 @@ class Vectorizer:
                 vector_data_list = results[i]
                 vectors.extend(vector_data_list)
                 
-        except Exception as e:
+        except Exception:
             # Find which task failed and provide better error context
             for task in tasks:
                 if task.done() and task.exception():
                     vector_name = vector_name_to_task[task]
-                    raise ValueError(f"Failed to generate vector '{vector_name}': {str(task.exception())}") from task.exception()
+                    exc = task.exception()
+                    if isinstance(exc, ValueError):
+                        raise exc
+                    raise VectorizationException(
+                        f"Failed to generate vector '{vector_name}': {exc}"
+                    ) from exc
             # If we can't identify the specific task, re-raise the original error
             raise
         

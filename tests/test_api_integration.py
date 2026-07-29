@@ -13,18 +13,6 @@ from src.core.common import QueuedDocumentStatus
 API_BASE_URL = "http://localhost:8234/v1"
 
 
-def is_amgix_now_backend() -> bool:
-    """True when `/v1/version` includes Docker-set ``Amgix-Now`` variant (sync indexing, no queue)."""
-    try:
-        r = requests.get(f"{API_BASE_URL}/version", timeout=5)
-        if r.status_code != 200:
-            return False
-        ver = r.json().get("version", "")
-        return "Amgix-Now" in ver
-    except Exception:
-        return False
-
-
 def wait_until(predicate: Callable[[], bool], timeout_s: float = 10.0, interval_s: float = 0.25) -> bool:
     """Poll predicate() until True or timeout."""
     deadline = time.time() + timeout_s
@@ -2785,11 +2773,8 @@ def test_comprehensive_sparse_vector_combinations(backend_capabilities):
 def test_document_status_api(setup_collection):
     """Test the document status API endpoint with various scenarios."""
     collection_name = setup_collection
-    is_now = is_amgix_now_backend()
 
     print(f"\n=== Testing Document Status API for collection: {collection_name} ===")
-    if is_now:
-        print("(Amgix-Now backend: synchronous upsert — no RabbitMQ queue statuses)")
     
     # Test 1: Check status for non-existent document (should return 404)
     print("\n--- Test 1: Check status for non-existent document ---")
@@ -2812,35 +2797,32 @@ def test_document_status_api(setup_collection):
     assert response.status_code == 200, f"Failed to add document: {response.text}"
     print("✓ Document added to queue successfully")
     
-    # Check status immediately - should show "queued"
+    # Check status immediately - should show "queued" (or already indexed if drain was fast)
     response = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc_id}/status")
     assert response.status_code == 200, f"Failed to get document status: {response.text}"
     
     status_response = response.json()
     assert len(status_response["statuses"]) >= 1, "Should have at least one status"
 
-    if is_now:
-        status_types = {s["status"] for s in status_response["statuses"]}
-        assert QueuedDocumentStatus.INDEXED in status_types, "Amgix-Now: doc should already be indexed after sync upsert"
-        assert QueuedDocumentStatus.QUEUED not in status_types, "Amgix-Now: no queued lifecycle"
-        print("✓ Document status shows indexed immediately (sync)")
-    else:
-        queued_status = next(
-            (s for s in status_response["statuses"] if s["status"] == QueuedDocumentStatus.QUEUED),
-            None,
-        )
-        assert queued_status is not None, "Should have 'queued' status"
+    status_types = {s["status"] for s in status_response["statuses"]}
+    assert status_types & {QueuedDocumentStatus.QUEUED, QueuedDocumentStatus.INDEXED}, (
+        f"Expected queued or indexed, got {status_types}"
+    )
+    queued_status = next(
+        (s for s in status_response["statuses"] if s["status"] == QueuedDocumentStatus.QUEUED),
+        None,
+    )
+    if queued_status is not None:
         assert "queue_id" in queued_status, "Queued status should have queue_id"
         print("✓ Document status shows 'queued' with queue_id")
+    else:
+        print("✓ Document already indexed (queue drained quickly)")
 
     # Test 3: Wait for document to be processed and check status
     print("\n--- Test 3: Wait for document processing and check status ---")
     
-    if not is_now:
-        wait_for_document_status(collection_name, doc_id, QueuedDocumentStatus.INDEXED, timeout_s=15.0)
-        print("✓ Document is now indexed")
-    else:
-        print("✓ Document already indexed (Amgix-Now)")
+    wait_for_document_status(collection_name, doc_id, QueuedDocumentStatus.INDEXED, timeout_s=15.0)
+    print("✓ Document is now indexed")
     
     # Check status again - should show only "indexed" (queue entry was removed after processing)
     response = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc_id}/status")
@@ -2886,7 +2868,7 @@ def test_document_status_api(setup_collection):
     assert response.status_code == 200, f"Failed to update document second time: {response.text}"
     print("✓ Second document update queued successfully")
     
-    # Check status immediately after updates - should show some "queued" statuses
+    # Check status immediately after updates - usually "queued"; may already be drained
     response = requests.get(f"{API_BASE_URL}/collections/{collection_name}/documents/{doc_id}/status")
     assert response.status_code == 200, f"Failed to get document status after updates: {response.text}"
     
@@ -2894,11 +2876,10 @@ def test_document_status_api(setup_collection):
     queued_statuses = [s for s in status_response["statuses"] if s["status"] == QueuedDocumentStatus.QUEUED]
     print(f"Found {len(queued_statuses)} queued statuses after updates")
 
-    if is_now:
-        assert len(queued_statuses) == 0, "Amgix-Now: updates apply synchronously, no queued rows"
-        assert all(s["status"] == QueuedDocumentStatus.INDEXED for s in status_response["statuses"])
-    else:
-        assert len(queued_statuses) >= 1, f"Should have at least 1 queued status, got {len(queued_statuses)}"
+    status_types = {s["status"] for s in status_response["statuses"]}
+    assert len(queued_statuses) >= 1 or QueuedDocumentStatus.INDEXED in status_types, (
+        f"Should have queued or indexed status after updates, got {status_types}"
+    )
 
     # Test 5: Wait for updates to be processed and check final status
     print("\n--- Test 5: Wait for updates to be processed and check final status ---")

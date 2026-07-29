@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Tuple
 from collections import defaultdict, deque
 
 from src.core.vector.vectorizer import Vectorizer
+from src.core.vector.exceptions import VectorizationException
 from src.core.common.constants import APP_NAME, APP_PREFIX, RPC_TIMEOUT_SECONDS
 from src.core.common import CACHE_BASE_DIR, HF_CACHE_DIR, CUDA_CACHE_DIR, get_user_collection_name
 
@@ -47,12 +48,6 @@ _MAX_RETRY_SLEEP_SECONDS = 20.0
 
 _MICRO_BATCH_MAX_SIZE = 10
 _MICRO_BATCH_FLUSH_INTERVAL = 0.25  # seconds
-
-class VectorizationException(Exception):
-    """Exception raised when vectorization fails."""
-    pass
-
-
 
 
 class EncoderService(EncoderBase):

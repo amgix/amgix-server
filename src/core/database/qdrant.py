@@ -185,6 +185,20 @@ class QdrantDatabase(DatabaseBase):
                     field_name="doc_timestamp",
                     field_schema=rest.PayloadSchemaType.DATETIME
                 )
+
+            if "created_at" not in payload_schema:
+                await self.client.create_payload_index(
+                    collection_name=self.queue_collection,
+                    field_name="created_at",
+                    field_schema=rest.PayloadSchemaType.DATETIME
+                )
+
+            if "try_count" not in payload_schema:
+                await self.client.create_payload_index(
+                    collection_name=self.queue_collection,
+                    field_name="try_count",
+                    field_schema=rest.PayloadSchemaType.INTEGER
+                )
         except Exception as e:
             if "already exists" in str(e).lower():
                 self.logger.info(f"System queue collection already exists")
