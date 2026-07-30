@@ -522,8 +522,12 @@ class EncoderService(EncoderBase):
                 docs = await self.database.get_documents(collection_name, [document_id], suppress_not_found=True)
                 doc_with_vectors = docs[0] if docs else None
 
+                # Always cancel superseded pending upserts under the lock — including when the
+                # live point is missing (async upsert may still be queued and would otherwise resurrect).
+                await self.database.delete_upserts_from_queue(collection_name, document_id, request_timestamp)
+
                 if doc_with_vectors is None:
-                    self.logger.warning(f"Document {document_id} not found in {collection_name}, skipping delete")
+                    self.logger.warning(f"Document {document_id} not found in {collection_name}, skipping live delete (queue upserts cancelled)")
                     return
 
                 if request_timestamp <= doc_with_vectors.timestamp:
@@ -534,7 +538,6 @@ class EncoderService(EncoderBase):
                     return
 
                 await self.database.delete_document(collection_name, document_id)
-                await self.database.delete_upserts_from_queue(collection_name, document_id, request_timestamp)
                 self.index_metrics.record(MetricKey.INDEX_QUEUE_DOCS_DELETED)
 
                 # Send stats update with negative values
