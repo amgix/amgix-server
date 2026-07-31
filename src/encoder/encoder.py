@@ -27,7 +27,7 @@ from src.core.models.document import Document, SearchResult, SearchOutcome, Queu
 from src.core.common.bunny_talk import BunnyTalk, trace_chain_var, trace_id_var
 from src.core.common.lock_manager import LockService, LockClient
 from src.core.database.base import AmgixNotFound
-from src.core.database.common import validate_metadata_filter, needs_revectorization
+from src.core.database.common import validate_metadata_filter, needs_revectorization, set_content_hash
 from src.core.database.search_join import enrich_documents_with_joins, parse_joins_validated, required_fields_for_joins
 from src.core.database.search_group import required_fields_for_group, validate_group_field
 from src.core.database.search_facet import required_fields_for_facets, validate_facets
@@ -320,6 +320,8 @@ class EncoderService(EncoderBase):
                     documents_to_patch = []
                     is_new_flags = []
                     for queue_doc in documents_to_process:
+                        if not collection_config.store_content:
+                            set_content_hash(queue_doc.document)
                         existing_doc = existing_docs_map.get(queue_doc.doc_id)
                         if needs_revectorization(
                             queue_doc.document, existing_doc, collection_config, collection_config.store_content
@@ -578,6 +580,9 @@ class EncoderService(EncoderBase):
                 if document.timestamp <= existing_document.timestamp:
                     # Skip upsert - existing document is newer or same timestamp
                     raise ValueError(f"Document {document.id} already exists with timestamp {existing_document.timestamp} >= new timestamp {document.timestamp}")
+
+            if not collection_config.store_content:
+                set_content_hash(document)
 
             if existing_document is not None and not needs_revectorization(
                 document, existing_document, collection_config, collection_config.store_content

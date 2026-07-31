@@ -860,7 +860,8 @@ class SQLBase(DatabaseBase):
                 self.format_sql("column_text", name="name", null_constraint=""),
                 self.format_sql("column_text", name="description", null_constraint=""),
                 self.format_sql("column_longtext", name="metadata", null_constraint=""),
-                self.format_sql("column_longtext", name="content", null_constraint="")
+                self.format_sql("column_longtext", name="content", null_constraint=""),
+                self.format_sql("column_varchar", name="content_hash", size=32, null_constraint=""),
             ]
             
             # Add timestamp columns first (needed for indexes)
@@ -1204,13 +1205,14 @@ class SQLBase(DatabaseBase):
                 metadata_json = None
             
             # Build columns and values for dense vectors
-            columns = ["id", "timestamp", "name", "description", "metadata"]
+            columns = ["id", "timestamp", "name", "description", "metadata", "content_hash"]
             values = [
                 document_with_vectors.id,
                 document_with_vectors.timestamp,
                 document_with_vectors.name,
                 document_with_vectors.description,
-                metadata_json
+                metadata_json,
+                document_with_vectors.content_hash,
             ]
             
             # Add indexed metadata columns and values
@@ -1285,12 +1287,13 @@ class SQLBase(DatabaseBase):
                 metadata_json = None
             
             # Build columns and values for dense vectors
-            set_columns = ["timestamp", "name", "description", "metadata"]
+            set_columns = ["timestamp", "name", "description", "metadata", "content_hash"]
             set_values = [
                 document_with_vectors.timestamp,
                 document_with_vectors.name,
                 document_with_vectors.description,
-                metadata_json
+                metadata_json,
+                document_with_vectors.content_hash,
             ]
             
             # Add indexed metadata columns and values
@@ -1553,7 +1556,7 @@ class SQLBase(DatabaseBase):
         try:
             # Get all documents in one query
             placeholders = ', '.join(['%s'] * len(document_ids))
-            columns = ["pk_id", "id", "timestamp", "name", "description", "metadata", "content"]
+            columns = ["pk_id", "id", "timestamp", "name", "description", "metadata", "content", "content_hash"]
             if with_vectors:
                 columns.extend(self._dense_field_vector_columns(collection_config))
             sql = self.format_sql("select", 
@@ -1623,6 +1626,7 @@ class SQLBase(DatabaseBase):
                     "name": row.get("name"),
                     "description": row.get("description"),
                     "content": row.get("content"),
+                    "content_hash": row.get("content_hash"),
                     "metadata": metadata,
                 }
                 
@@ -1660,7 +1664,7 @@ class SQLBase(DatabaseBase):
         tags_table = self.get_table_name(collection_name, self.TableType.TAGS)
         meta_col = self.quote_identifier(f"meta_{metadata_key}")
 
-        doc_columns = ["pk_id", "id", "timestamp", "name", "description", "metadata", "content"]
+        doc_columns = ["pk_id", "id", "timestamp", "name", "description", "metadata", "content", "content_hash"]
         select_cols = ", ".join(f"d.{self.quote_identifier(c)}" for c in doc_columns)
 
         conditions = [self.format_sql("metadata_values_in", column=f"d.{meta_col}")]
@@ -1709,6 +1713,7 @@ class SQLBase(DatabaseBase):
                 "name": row.get("name"),
                 "description": row.get("description"),
                 "content": row.get("content"),
+                "content_hash": row.get("content_hash"),
                 "metadata": row.get("metadata"),
                 "tags": tags_by_pk.get(row["pk_id"]),
             }, store_content=True)
@@ -1726,7 +1731,7 @@ class SQLBase(DatabaseBase):
         d_id = self.quote_identifier("id")
         d_pk = self.quote_identifier("pk_id")
 
-        doc_columns = ["pk_id", "id", "timestamp", "name", "description", "metadata", "content"]
+        doc_columns = ["pk_id", "id", "timestamp", "name", "description", "metadata", "content", "content_hash"]
         if request.with_vectors:
             doc_columns.extend(self._dense_field_vector_columns(collection_config))
         select_cols = ", ".join(f"d.{self.quote_identifier(c)}" for c in doc_columns)
@@ -1815,6 +1820,7 @@ class SQLBase(DatabaseBase):
                 "name": row.get("name"),
                 "description": row.get("description"),
                 "content": row.get("content"),
+                "content_hash": row.get("content_hash"),
                 "metadata": row.get("metadata"),
                 "tags": tags_by_pk.get(row["pk_id"]),
             }, store_content=True)

@@ -49,6 +49,10 @@ class Document(BaseModel):
     name: Optional[str] = Field(None, max_length=MAX_DOCUMENT_NAME_LENGTH, description=f"Document name (max {MAX_DOCUMENT_NAME_LENGTH} characters)")
     description: Optional[str] = Field(None, max_length=MAX_DOCUMENT_DESCRIPTION_LENGTH, description=f"Brief description of the document (max {MAX_DOCUMENT_DESCRIPTION_LENGTH} characters)")
     content: Optional[str] = Field(None, max_length=MAX_DOCUMENT_CONTENT_LENGTH, description=f"Main content of the document (max {MAX_DOCUMENT_CONTENT_LENGTH} characters)")
+    content_hash: Optional[str] = Field(
+        default=None,
+        description="Hash of content for revectorization when store_content=false (server-managed)",
+    )
     metadata: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Dictionary of metadata key-value pairs. Datetime values require explicit {value, type} form; objects may be plain dicts."

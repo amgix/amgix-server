@@ -5,6 +5,7 @@ Common database utilities for getting connected database instances.
 from typing import Any, Optional, Dict, Tuple
 from urllib.parse import urlparse, urlunparse
 from datetime import datetime
+import mmh3
 from src.core.database.base_factory import DatabaseFactory
 from src.core.models.document import Document
 from src.core.models.vector import CollectionConfigInternal, SearchQuery, VectorData, VectorConfigInternal, MetadataFilter
@@ -307,6 +308,12 @@ def resolve_skippable_fields(query: SearchQuery, required_fields: "set | frozens
     return set(query.exclude) - set(required_fields)
 
 
+def set_content_hash(document: Document) -> None:
+    """Set document.content_hash from UTF-8 content (mmh3 128-bit hex). Overwrites any client value."""
+    content = document.content or ""
+    document.content_hash = format(mmh3.hash128(content.encode("utf-8"), signed=False), "032x")
+
+
 def needs_revectorization(
     incoming: Document,
     existing: Optional[Document],
@@ -323,9 +330,11 @@ def needs_revectorization(
     for vector_config in collection_config.vectors:
         for field in vector_config.index_fields:
             indexed_fields.add(field)
-    if DocumentField.CONTENT in indexed_fields and not store_content:
-        return True
     for field in indexed_fields:
+        if field == DocumentField.CONTENT and not store_content:
+            if incoming.content_hash != existing.content_hash:
+                return True
+            continue
         if getattr(incoming, field) != getattr(existing, field):
             return True
     return False
