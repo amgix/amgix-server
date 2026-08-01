@@ -71,7 +71,7 @@ POST /v1/collections/products/search
 ```json
 POST /v1/collections/products/search
 {
-  "query": "motor energy transfer loop"
+  "query": "motor energy loop"
 }
 ```
 *Even without keyword overlap, Amgix's semantic vector understands the concept and returns the Belt (`Synchronous timing belt for power transmission`).*
