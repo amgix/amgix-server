@@ -2066,6 +2066,7 @@ class SQLBase(DatabaseBase):
             fused_results = self.rrf_fuse(
                 id_lists=id_lists_values,
                 weights=weights,
+                scored_lists=scored_lists,
                 limit=query.limit,
                 score_threshold=query.score_threshold,
                 k=2
@@ -2458,6 +2459,7 @@ class SQLBase(DatabaseBase):
             fused_results = self.rrf_fuse(
                 id_lists=accumulated_id_lists,
                 weights=weights,
+                scored_lists=accumulated_scored_lists,
                 limit=pool_size,
                 score_threshold=query.score_threshold,
                 k=2

@@ -3,7 +3,6 @@ import copy
 from enum import Enum
 from typing import Dict, List, Any, Optional, Union, Callable, Hashable, Tuple
 from datetime import datetime
-from heapq import nlargest
 import uuid
 import asyncio
 
@@ -94,26 +93,34 @@ class DatabaseBase(ABC):
     def rrf_fuse(
         id_lists: List[List[Hashable]],
         weights: List[float],
+        scored_lists: List[List[Tuple[Hashable, float]]],
         limit: int = 10,
         score_threshold: Optional[float] = None,
         k: int = 2,
     ) -> List[Tuple[Hashable, float]]:
         """
-        Reciprocal Rank Fusion (RRF) combining multiple ranked lists using only ranks.
+        Reciprocal Rank Fusion (RRF) combining multiple ranked lists using ranks.
+
+        Tie-break (does not affect returned score): higher unweighted raw-score sum,
+        then lower fuse-key id.
 
         Args:
             id_lists: One ranked list of ids per vector/prefetch (highest-score first).
             weights: Weight per list; must be same length as id_lists.
+            scored_lists: Parallel to id_lists — (id, raw_score) per arm for tie-break.
             limit: Max number of fused items to return.
             score_threshold: Optional minimum fused score to keep.
             k: RRF constant. Default 2.
 
         Returns:
-            List of (item_id, fused_rrf_score), sorted by fused score desc.
+            List of (item_id, fused_rrf_score), sorted by fused score desc,
+            then raw-score sum desc, then id asc.
         """
 
         fused_scores: Dict[Hashable, float] = {}
         fused_scores_get = fused_scores.get
+        raw_sums: Dict[Hashable, float] = {}
+        raw_sums_get = raw_sums.get
 
         for list_idx, ids in enumerate(id_lists):
             weight = weights[list_idx]
@@ -121,16 +128,19 @@ class DatabaseBase(ABC):
             for rank_idx, item_id in enumerate(ids, start=1):
                 fused_scores[item_id] = fused_scores_get(item_id, 0.0) + weight / (k + rank_idx)
 
-        # Build iterator of fused items, optionally apply threshold
-        items_iter = (
-            (item_id, fused_scores[item_id])
-            for item_id in fused_scores
-        )
-        if score_threshold is not None:
-            items_iter = (t for t in items_iter if t[1] >= score_threshold)
+        for arm in scored_lists:
+            for item_id, score in arm:
+                raw_sums[item_id] = raw_sums_get(item_id, 0.0) + score
 
-        # Efficiently take top-k by fused score without sorting everything
-        return nlargest(limit, items_iter, key=lambda t: t[1])
+        items = [
+            (item_id, fused_scores[item_id], raw_sums_get(item_id, 0.0))
+            for item_id in fused_scores
+        ]
+        if score_threshold is not None:
+            items = [t for t in items if t[1] >= score_threshold]
+
+        items.sort(key=lambda t: (-t[1], -t[2], t[0]))
+        return [(item_id, score) for item_id, score, _ in items[:limit]]
 
     @staticmethod
     def linear_weighted_score_fuse(
@@ -143,6 +153,7 @@ class DatabaseBase(ABC):
         Fuse retrievers by min-max normalizing raw scores within each list, then summing weight * norm_score.
 
         Missing retriever scores for an id count as 0. Ties (min == max) within a list assign normalized 1.0.
+        Equal fused scores are broken by lower fuse-key id (determinism only).
         """
         normalized_maps: List[Dict[Hashable, float]] = []
         for arm in scored_lists:
@@ -164,10 +175,11 @@ class DatabaseBase(ABC):
             for item_id, nscore in normalized_maps[list_idx].items():
                 candidates[item_id] = candidates.get(item_id, 0.0) + w * nscore
 
-        items_iter = ((i, candidates[i]) for i in candidates)
+        items = [(i, candidates[i]) for i in candidates]
         if score_threshold is not None:
-            items_iter = (t for t in items_iter if t[1] >= score_threshold)
-        return nlargest(limit, items_iter, key=lambda t: t[1])
+            items = [t for t in items if t[1] >= score_threshold]
+        items.sort(key=lambda t: (-t[1], t[0]))
+        return items[:limit]
 
     @abstractmethod
     async def create_collection(self, collection_name: str, config: CollectionConfigInternal) -> bool:
