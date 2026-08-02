@@ -7,6 +7,8 @@
 
 **Amgix is an open-source system that handles ingestion, embedding, and hybrid retrieval behind one REST API.** You do not need to stitch together queues, a vector database, and ranking or fusion logic in your application.
 
+Visit our documentation for the list of [supported features](https://docs.amgix.io/features/).
+
 <br clear="right">
 
 ## How It Works
@@ -100,6 +102,6 @@ Amgix was built to solve these headaches. Instead of stitching together your own
 
 Visit [Documentation](https://docs.amgix.io/)
 
-Clients: [Python](https://github.com/amgix/amgix-client-python/), [Typescript](https://github.com/amgix/amgix-client-typescript/)
+Clients: [Python](https://github.com/amgix/amgix-client-python/), [Typescript](https://github.com/amgix/amgix-client-typescript/), [Rust](https://github.com/amgix/amgix-client-rust/), [C#](https://github.com/amgix/amgix-client-csharp/)
 
 Site: [amgix.io](https://amgix.io/)
