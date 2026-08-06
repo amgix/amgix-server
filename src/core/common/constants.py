@@ -77,7 +77,6 @@ WMTR_DEFAULT_TRIGRAM_WEIGHT = 1.0  # Fixed WMTR trigram multiplier for document 
 MAX_TOP_K_VALUE = 10000  # Maximum value for top_k parameter
 MAX_VECTOR_DIMENSIONS = 8192  # Maximum vector dimensions
 DEFAULT_TOP_K = 128  # Default top_k for sparse vectors
-TOKEN_HASH_RANGE = 4294967291  # Large prime number close to 2^32 to reduce hash collisions
 
 # Batch processing
 DEFAULT_SQL_BATCH_SIZE = 100  # Default batch size for SQL operations
