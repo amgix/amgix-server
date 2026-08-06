@@ -999,7 +999,7 @@ class SQLBase(DatabaseBase):
 
             columns = [
                 self.format_sql("column_smallint", name="field_vector_id", null_constraint=" NOT NULL"),
-                self.format_sql("column_bigint", name="token_id", null_constraint=" NOT NULL"),
+                self.format_sql("column_int", name="token_id", null_constraint=" NOT NULL"),
                 self.format_sql("column_bigint", name="doc_pk_id", null_constraint=" NOT NULL"),
                 self.format_sql("column_float", name="weight", null_constraint=" NOT NULL"),
             ]
@@ -1082,7 +1082,7 @@ class SQLBase(DatabaseBase):
             # Prepare columns for IDF table: field_vector_id, token_id, doc_count
             idf_columns = [
                 self.format_sql("column_smallint", name="field_vector_id", null_constraint=" NOT NULL"),
-                self.format_sql("column_bigint", name="token_id", null_constraint=" NOT NULL"),
+                self.format_sql("column_int", name="token_id", null_constraint=" NOT NULL"),
                 self.format_sql("column_int", name="doc_count", null_constraint=" NOT NULL")
             ]
 
@@ -2190,7 +2190,7 @@ class SQLBase(DatabaseBase):
             prefetch_limit = max(prefetch_limit, MIN_FACET_PREFETCH, mult * query.limit)
         temp_cols = [
             self.format_sql("column_smallint", name="field_vector_id", null_constraint=" NOT NULL"),
-            self.format_sql("column_bigint", name="token_id", null_constraint=" NOT NULL"),
+            self.format_sql("column_int", name="token_id", null_constraint=" NOT NULL"),
             self.format_sql("column_float", name="weight", null_constraint=" NOT NULL"),
             self.format_sql("index_primary_multi", name=query_vectors_table, columns=self.quote_column_list(["field_vector_id", "token_id"]))
         ]

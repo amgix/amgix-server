@@ -112,7 +112,7 @@ class PostgreSQLDatabase(SQLBase):
             "query_vector_batch_select_first": """
                 SELECT
                     CAST(%s AS SMALLINT) AS field_vector_id,
-                    CAST(%s AS BIGINT) AS token_id,
+                    CAST(%s AS INTEGER) AS token_id,
                     CAST(%s AS REAL) AS weight,
                     CAST(%s AS INTEGER) AS requires_idf
             """,
